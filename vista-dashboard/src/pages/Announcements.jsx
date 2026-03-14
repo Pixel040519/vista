@@ -1,0 +1,1 @@
+export { Announcements as default } from './pages'

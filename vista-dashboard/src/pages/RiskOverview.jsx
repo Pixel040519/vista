@@ -1,0 +1,1 @@
+export { RiskOverview as default } from './pages'

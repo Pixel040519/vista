@@ -1,0 +1,1 @@
+export { Behavior as default } from './pages'
