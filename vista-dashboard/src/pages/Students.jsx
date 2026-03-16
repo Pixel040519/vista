@@ -10,17 +10,18 @@ import { useAuth } from '../context/AuthContext'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
+import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
 
 // ── School constants ──────────────────────────────────────────
-const GRADE_LEVELS = ['Pre-Nursery','Nursery', 'Pre-Kinder','Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
+const GRADE_LEVELS = ['Pre-Nursery','Pre-Kinder','Nursery','Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
 
-// Sections loaded dynamically from API per grade level ********
+// Sections loaded dynamically from API per grade level
 
 const RELATIONSHIPS = ['Mother','Father','Guardian','Grandmother','Grandfather','Aunt','Uncle','Sibling','Other']
 const GENDER_STYLE  = { Male:'bg-blue-50 text-blue-700', Female:'bg-pink-50 text-pink-700', Other:'bg-purple-50 text-purple-700' }
 
 const emptyGuardian = () => ({
-  full_name:'', relationship:'Mother', email:'', phone:'',
+  surname:'', first_name:'', middle_name:'', relationship:'Mother', email:'', phone:'',
   is_authorized_pickup:true, create_account:false, password:''
 })
 
@@ -39,9 +40,19 @@ function GuardianRow({ g, index, onChange, onRemove }) {
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Full Name *</label>
-          <input className="input text-sm py-2" placeholder="Maria Santos"
-            value={g.full_name} onChange={e => set('full_name', e.target.value)} required/>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Surname *</label>
+          <input className="input text-sm py-2" placeholder="Santos"
+            value={g.surname} onChange={e => set('surname', e.target.value)} onBlur={e => set('surname', titleCase(e.target.value))} required/>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">First Name *</label>
+          <input className="input text-sm py-2" placeholder="Maria"
+            value={g.first_name} onChange={e => set('first_name', e.target.value)} onBlur={e => set('first_name', titleCase(e.target.value))} required/>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Middle Name</label>
+          <input className="input text-sm py-2" placeholder="Optional"
+            value={g.middle_name} onChange={e => set('middle_name', e.target.value)} onBlur={e => set('middle_name', titleCase(e.target.value))}/>
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">Relationship *</label>
@@ -56,9 +67,9 @@ function GuardianRow({ g, index, onChange, onRemove }) {
             value={g.email} onChange={e => set('email', e.target.value)}/>
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Phone</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Phone *</label>
           <input className="input text-sm py-2" placeholder="09xxxxxxxxx"
-            value={g.phone} onChange={e => set('phone', e.target.value)}/>
+            value={g.phone} onChange={e => set('phone', e.target.value)} required/>
         </div>
       </div>
       <div className="flex flex-wrap gap-4 pt-1">
@@ -96,7 +107,9 @@ function GuardianRow({ g, index, onChange, onRemove }) {
 function StudentForm({ initial, onSubmit, onClose, mode }) {
   const [form, setForm] = useState({
     lrn:               initial?.lrn ?? '',
-    full_name:         initial?.full_name ?? '',
+    surname:           initial?.surname ?? '',
+    first_name:        initial?.first_name ?? '',
+    middle_name:       initial?.middle_name ?? '',
     date_of_birth:     initial?.date_of_birth
                          ? format(new Date(initial.date_of_birth), 'yyyy-MM-dd') : '',
     gender:            initial?.gender ?? 'Male',
@@ -105,8 +118,9 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
     profile_photo_url: initial?.profile_photo_url ?? '',
     guardians:         mode === 'create' ? [emptyGuardian()] : [],
   })
-  const [saving, setSaving] = useState(false)
-  const [tab, setTab]       = useState('info')
+  const [saving, setSaving]       = useState(false)
+  const [tab, setTab]             = useState('info')
+  const [skipGuardians, setSkipGuardians] = useState(false)
 
   const [sections, setSections] = useState([])
 
@@ -134,6 +148,8 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
     try {
       const payload = { ...form }
       if (mode === 'edit') delete payload.guardians
+      if (mode === 'edit') delete payload.lrn   // LRN is immutable after creation
+      if (skipGuardians) payload.guardians = []
       if (!payload.profile_photo_url) delete payload.profile_photo_url
       await onSubmit(payload)
     } finally { setSaving(false) }
@@ -171,10 +187,20 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">Surname *</label>
+              <input className="input" placeholder="Dela Cruz"
+                value={form.surname} onChange={e => set('surname', e.target.value)} onBlur={e => set('surname', titleCase(e.target.value))} required/>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">First Name *</label>
+              <input className="input" placeholder="Juan Miguel"
+                value={form.first_name} onChange={e => set('first_name', e.target.value)} onBlur={e => set('first_name', titleCase(e.target.value))} required/>
+            </div>
             <div className="col-span-2">
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">Full Name *</label>
-              <input className="input" placeholder="Juan Miguel Dela Cruz"
-                value={form.full_name} onChange={e => set('full_name', e.target.value)} required/>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">Middle Name <span className="text-slate-400 font-normal">(optional)</span></label>
+              <input className="input" placeholder="Santos"
+                value={form.middle_name} onChange={e => set('middle_name', e.target.value)} onBlur={e => set('middle_name', titleCase(e.target.value))}/>
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">Date of Birth *</label>
@@ -211,6 +237,17 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
 
       {tab === 'guardians' && mode === 'create' && (
         <div className="space-y-3">
+          {/* Skip guardians checkbox */}
+          <label className="flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all border-slate-200 hover:border-teal-300 bg-slate-50">
+            <input type="checkbox" className="rounded w-4 h-4 accent-teal-500"
+              checked={skipGuardians} onChange={e => setSkipGuardians(e.target.checked)}/>
+            <div>
+              <p className="text-sm font-medium text-slate-700">Add guardians / parents later</p>
+              <p className="text-xs text-slate-400 mt-0.5">You can link guardians from the student list after saving.</p>
+            </div>
+          </label>
+
+          <div className={skipGuardians ? 'opacity-40 pointer-events-none select-none' : ''}>
           <div className="flex items-center justify-between">
             <p className="text-sm text-slate-500">Add parents or guardians for this student.</p>
             <button type="button" onClick={addG}
@@ -232,7 +269,8 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
               ))}
             </div>
           )}
-        </div>
+          </div>
+          </div>
       )}
 
       <div className="flex gap-3 pt-2 border-t border-slate-100">
@@ -262,6 +300,7 @@ function GuardianForm({ initial, mode, onSubmit, onCancel }) {
   }
 
   const isAdd = mode === 'add'
+  const nameDisplay = formatName(form)
 
   return (
     <form onSubmit={handleSubmit}
@@ -275,9 +314,19 @@ function GuardianForm({ initial, mode, onSubmit, onCancel }) {
       </p>
       <div className="grid grid-cols-2 gap-2">
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Full Name *</label>
-          <input className="input text-sm py-2" value={form.full_name}
-            onChange={e => set('full_name', e.target.value)} required />
+          <label className="block text-xs font-medium text-slate-600 mb-1">Surname *</label>
+          <input className="input text-sm py-2" value={form.surname}
+            onChange={e => set('surname', e.target.value)} onBlur={e => set('surname', titleCase(e.target.value))} required />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">First Name *</label>
+          <input className="input text-sm py-2" value={form.first_name}
+            onChange={e => set('first_name', e.target.value)} onBlur={e => set('first_name', titleCase(e.target.value))} required />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Middle Name</label>
+          <input className="input text-sm py-2" placeholder="Optional" value={form.middle_name}
+            onChange={e => set('middle_name', e.target.value)} onBlur={e => set('middle_name', titleCase(e.target.value))} />
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">Relationship *</label>
@@ -292,9 +341,9 @@ function GuardianForm({ initial, mode, onSubmit, onCancel }) {
             value={form.email} onChange={e => set('email', e.target.value)} />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Phone</label>
-          <input className="input text-sm py-2" placeholder="Optional"
-            value={form.phone} onChange={e => set('phone', e.target.value)} />
+          <label className="block text-xs font-medium text-slate-600 mb-1">Phone *</label>
+          <input className="input text-sm py-2" placeholder="09xxxxxxxxx"
+            value={form.phone} onChange={e => set('phone', e.target.value)} required />
         </div>
       </div>
       <div className="flex flex-wrap gap-4">
@@ -387,7 +436,7 @@ function GuardianManager({ studentId, guardians, onRefresh }) {
                 {mode === g.id ? (
                   <GuardianForm
                     mode="edit"
-                    initial={{ full_name: g.full_name, relationship: g.relationship,
+                    initial={{ surname: g.surname, first_name: g.first_name, middle_name: g.middle_name || '', relationship: g.relationship,
                       email: g.email || '', phone: g.phone || '',
                       is_authorized_pickup: g.is_authorized_pickup }}
                     onSubmit={(form) => handleEdit(g.id, form)}
@@ -397,10 +446,10 @@ function GuardianManager({ studentId, guardians, onRefresh }) {
                   <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-sm font-bold text-teal-700 flex-shrink-0">
-                        {g.full_name[0]}
+                        {nameInitial(g)}
                       </div>
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-slate-800">{g.full_name}</p>
+                        <p className="text-sm font-medium text-slate-800">{formatName(g)}</p>
                         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                           <span className="text-xs text-slate-500">{g.relationship}</span>
                           {g.email && <span className="flex items-center gap-1 text-xs text-slate-400 truncate"><Mail size={10}/>{g.email}</span>}
@@ -421,7 +470,7 @@ function GuardianManager({ studentId, guardians, onRefresh }) {
                         className="p-1.5 rounded-lg text-slate-400 hover:text-amber-500 hover:bg-amber-50 transition-colors">
                         <Pencil size={13}/>
                       </button>
-                      <button onClick={() => handleRemove(g.id, g.full_name)} title="Remove"
+                      <button onClick={() => handleRemove(g.id, formatName(g))} title="Remove"
                         className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
                         <Trash2 size={13}/>
                       </button>
@@ -454,10 +503,10 @@ function DeleteConfirm({ student, onConfirm, onClose }) {
     <div className="space-y-4">
       <div className="p-4 bg-slate-50 rounded-xl flex items-center gap-3">
         <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center font-bold text-red-600">
-          {student.full_name[0]}
+          {nameInitial(student)}
         </div>
         <div>
-          <p className="font-semibold text-slate-800">{student.full_name}</p>
+          <p className="font-semibold text-slate-800">{formatName(student)}</p>
           <p className="text-xs text-slate-500 font-mono">LRN: {student.lrn}</p>
         </div>
       </div>
@@ -501,7 +550,7 @@ export default function Students() {
   const [students, setStudents]     = useState([])
   const [pagination, setPagination] = useState({ total:0, page:1, totalPages:1 })
   const [loading, setLoading]       = useState(true)
-  const [filterSections, setFilterSections] = useState([]) // sections for active grade filter
+  const [filterSections, setFilterSections] = useState([])
 
   const [showCreate, setShowCreate]       = useState(false)
   const [editTarget, setEditTarget]       = useState(null)
@@ -509,6 +558,7 @@ export default function Students() {
   const [deleteTarget, setDeleteTarget]   = useState(null)
 
   // Load sections for the filter bar when grade changes
+  // NOTE: do NOT reset sectionFilter here — that wipes the URL param on mount
   useEffect(() => {
     if (!gradeFilter) { setFilterSections([]); return }
     curriculumApi.getSections({ grade_level: gradeFilter })
@@ -540,7 +590,7 @@ export default function Students() {
 
   const handleCreate = async (data) => {
     await studentApi.create(data)
-    toast.success(`${data.full_name} added successfully!`)
+    toast.success(`${formatName(data)} added successfully!`)
     setShowCreate(false); fetchStudents()
   }
 
@@ -605,6 +655,7 @@ export default function Students() {
             </select>
           </div>
         )}
+
       </div>
 
       {/* Table */}
@@ -637,10 +688,10 @@ export default function Students() {
                           <div className="w-9 h-9 rounded-full bg-teal-100 flex items-center justify-center flex-shrink-0">
                             {s.profile_photo_url
                               ? <img src={s.profile_photo_url} className="w-full h-full rounded-full object-cover" alt=""/>
-                              : <span className="text-teal-700 font-semibold text-sm">{s.full_name[0]}</span>
+                              : <span className="text-teal-700 font-semibold text-sm">{nameInitial(s)}</span>
                             }
                           </div>
-                          <p className="font-medium text-slate-800">{s.full_name}</p>
+                          <p className="font-medium text-slate-800">{formatName(s)}</p>
                         </div>
                       </td>
                       <td>
@@ -661,7 +712,7 @@ export default function Students() {
                       </td>
                       {isAdmin && (
                         <td>
-                          <div className="flex items-center gap-1 justify-end">
+                          <div className="flex items-center gap-1 justify-start">
                             <button onClick={() => setEditTarget(s)} title="Edit student info"
                               className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors">
                               <Pencil size={15}/>
@@ -729,10 +780,10 @@ export default function Students() {
           <div className="space-y-4">
             <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl">
               <div className="w-9 h-9 rounded-full bg-teal-100 flex items-center justify-center font-bold text-teal-700">
-                {editGuardians.student.full_name[0]}
+                {nameInitial(editGuardians.student)}
               </div>
               <div>
-                <p className="font-semibold text-slate-800 text-sm">{editGuardians.student.full_name}</p>
+                <p className="font-semibold text-slate-800 text-sm">{formatName(editGuardians.student)}</p>
                 <p className="text-xs text-slate-500 font-mono">
                   LRN: {editGuardians.student.lrn} · {editGuardians.student.grade_level} {editGuardians.student.section}
                 </p>

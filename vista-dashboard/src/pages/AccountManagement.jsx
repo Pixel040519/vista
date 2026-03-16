@@ -7,10 +7,11 @@ import { accountApi, curriculumApi } from '../api/client'
 import { LoadingSpinner, EmptyState, Modal } from '../components/UI'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
+import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
 
 // ── School Data ───────────────────────────────────────────────
 const GRADE_LEVELS = [
-  'Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder',
+  'Pre-Nursery', 'Pre-Kinder', 'Nursery', 'Kinder',
   'Grade 1', 'Grade 2', 'Grade 3',
   'Grade 4', 'Grade 5', 'Grade 6',
 ]
@@ -95,7 +96,9 @@ const emptyRow = () => ({ grade_level: '', section: '', subject: '' })
 // ── Teacher Form (shared by create + edit) ────────────────────
 function TeacherForm({ initial, onSubmit, onClose, mode }) {
   const [form, setForm] = useState({
-    full_name:   initial?.full_name  || '',
+    surname:     initial?.surname     || '',
+    first_name:  initial?.first_name   || '',
+    middle_name: initial?.middle_name  || '',
     email:       initial?.email      || '',
     phone:       initial?.phone      || '',
     password:    '',
@@ -128,18 +131,13 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
       a => a.grade_level && a.section && a.subject
     )
 
-    // setSaving(true)
-    // try {
-    //   await onSubmit({ ...form, assignments: validAssignments })
-    // } finally {
-    //   setSaving(false)
-    // }
-
     setSaving(true)
     try {
       // Strip email on edit — backend updateSchema does not accept it
       const payload = { ...form, assignments: validAssignments }
       if (mode === 'edit') delete payload.email
+      // strip generated field — backend computes it
+      delete payload.full_name
       // Strip empty password on edit so it doesn't trigger min-length validation
       if (mode === 'edit' && !payload.password) delete payload.password
       await onSubmit(payload)
@@ -156,10 +154,20 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
           Account Information
         </p>
         <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Surname *</label>
+            <input className="input" placeholder="Dela Cruz" value={form.surname}
+              onChange={e => setField('surname', e.target.value)} onBlur={e => setField('surname', titleCase(e.target.value))} required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">First Name *</label>
+            <input className="input" placeholder="Juan" value={form.first_name}
+              onChange={e => setField('first_name', e.target.value)} onBlur={e => setField('first_name', titleCase(e.target.value))} required />
+          </div>
           <div className="col-span-2">
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Full Name *</label>
-            <input className="input" placeholder="Juan Dela Cruz" value={form.full_name}
-              onChange={e => setField('full_name', e.target.value)} required />
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Middle Name <span className="text-slate-400 font-normal">(optional)</span></label>
+            <input className="input" placeholder="Santos" value={form.middle_name}
+              onChange={e => setField('middle_name', e.target.value)} onBlur={e => setField('middle_name', titleCase(e.target.value))} />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Email Address *</label>
@@ -171,9 +179,9 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
             )}
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Phone</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Phone *</label>
             <input className="input" placeholder="09xxxxxxxxx" value={form.phone}
-              onChange={e => setField('phone', e.target.value)} />
+              onChange={e => setField('phone', e.target.value)} required />
           </div>
           <div className="col-span-2">
             <label className="block text-sm font-medium text-slate-700 mb-1.5">
@@ -294,10 +302,10 @@ function DeleteConfirm({ teacher, onConfirm, onClose }) {
     <div className="space-y-4">
       <div className="p-4 bg-slate-50 rounded-xl flex items-center gap-3">
         <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 font-bold">
-          {teacher.full_name[0]}
+          {nameInitial(teacher)}
         </div>
         <div>
-          <p className="font-semibold text-slate-800">{teacher.full_name}</p>
+          <p className="font-semibold text-slate-800">{formatName(teacher)}</p>
           <p className="text-xs text-slate-500">{teacher.email}</p>
         </div>
       </div>
@@ -381,7 +389,7 @@ export default function AccountManagement() {
   // ── Create ─────────────────────────────────────────────────
   const handleCreate = async (data) => {
     await accountApi.createTeacher(data)
-    toast.success(`${data.full_name}'s account created!`)
+    toast.success(`${formatName(data)}'s account created!`)
     setShowCreate(false)
     fetch_()
   }
@@ -397,7 +405,7 @@ export default function AccountManagement() {
   // ── Reactivate ─────────────────────────────────────────────
   const handleReactivate = async (teacher) => {
     await accountApi.updateTeacher(teacher.id, { is_active: true })
-    toast.success(`${teacher.full_name}'s account reactivated.`)
+    toast.success(`${formatName(teacher)}'s account reactivated.`)
     fetch_()
   }
 
@@ -405,10 +413,10 @@ export default function AccountManagement() {
   const handleDelete = async (mode) => {
     if (mode === 'permanent') {
       await accountApi.deletePermanent(deleteTarget.id)
-      toast.success(`${deleteTarget.full_name} permanently deleted.`)
+      toast.success(`${formatName(deleteTarget)} permanently deleted.`)
     } else {
       await accountApi.deactivate(deleteTarget.id)
-      toast.success(`${deleteTarget.full_name}'s account deactivated.`)
+      toast.success(`${formatName(deleteTarget)}'s account deactivated.`)
     }
     setDeleteTarget(null)
     fetch_()
@@ -493,10 +501,10 @@ export default function AccountManagement() {
                           'w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0',
                           t.is_active ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-400'
                         )}>
-                          {t.full_name[0]}
+                          {nameInitial(t)}
                         </div>
                         <div>
-                          <p className="font-medium text-slate-800">{t.full_name}</p>
+                          <p className="font-medium text-slate-800">{formatName(t)}</p>
                           <p className="text-xs text-slate-400">{t.email}</p>
                         </div>
                       </div>
@@ -533,7 +541,7 @@ export default function AccountManagement() {
 
                     {/* Actions */}
                     <td>
-                      <div className="flex items-center gap-1 justify-start">
+                      <div className="flex items-center gap-1 justify-end">
                         <button
                           onClick={() => setEditTarget(t)}
                           className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors"

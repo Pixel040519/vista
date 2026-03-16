@@ -1,6 +1,7 @@
 // ============================================================
 // ATTENDANCE PAGE
 // ============================================================
+import { formatName, nameInitial } from '../utils/nameHelper'
 import { useState, useEffect } from 'react'
 import { attendanceApi, studentApi } from '../api/client'
 import { LoadingSpinner, EmptyState } from '../components/UI'
@@ -24,8 +25,8 @@ export function Attendance() {
   }, [])
 
   const filtered = students.filter(s =>
-    s.full_name.toLowerCase().includes(search.toLowerCase()) ||
-    s.student_id.toLowerCase().includes(search.toLowerCase())
+    formatName(s).toLowerCase().includes(search.toLowerCase()) ||
+    (s.lrn || '').toLowerCase().includes(search.toLowerCase())
   )
 
   const setStatus = (id, status) => setRecords(p => ({ ...p, [id]: status }))
@@ -89,11 +90,11 @@ export function Attendance() {
                   <td>
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-sm font-bold text-teal-700">
-                        {s.full_name[0]}
+                        {nameInitial(s)}
                       </div>
                       <div>
-                        <p className="font-medium text-slate-800">{s.full_name}</p>
-                        <p className="text-xs font-mono text-slate-400">{s.student_id}</p>
+                        <p className="font-medium text-slate-800">{formatName(s)}</p>
+                        <p className="text-xs font-mono text-slate-400">{s.lrn}</p>
                       </div>
                     </div>
                   </td>
@@ -170,7 +171,7 @@ export function Grades() {
         <select className="input" value={studentId} onChange={e => fetchGrades(e.target.value)}>
           <option value="">— Choose a student —</option>
           {students.map(s => (
-            <option key={s.id} value={s.id}>{s.full_name} ({s.student_id})</option>
+            <option key={s.id} value={s.id}>{formatName(s)} ({s.lrn})</option>
           ))}
         </select>
       </div>
@@ -288,7 +289,7 @@ export function Behavior() {
         <select className="input" value={studentId} onChange={e => fetchLogs(e.target.value)}>
           <option value="">— Choose a student —</option>
           {students.map(s => (
-            <option key={s.id} value={s.id}>{s.full_name} ({s.grade_level})</option>
+            <option key={s.id} value={s.id}>{formatName(s)} ({s.grade_level})</option>
           ))}
         </select>
       </div>

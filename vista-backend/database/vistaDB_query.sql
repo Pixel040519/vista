@@ -428,3 +428,69 @@ INSERT INTO sections (grade_level, name) VALUES
   ('Pre-Kinder',  'Tulip'),
   ('Pre-Kinder',  'Iris')
 ON CONFLICT (grade_level, name) DO NOTHING;
+
+
+-- ============================================================
+-- VISTA Migration: Split full_name → surname, first_name, middle_name
+-- Drops and recreates relevant data. Run once:
+-- psql vista_db < database/migration_name_split.sql
+-- ============================================================
+
+-- ── users table ───────────────────────────────────────────────
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS surname     VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS first_name  VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS middle_name VARCHAR(100);
+
+-- Back-fill: treat existing full_name as first_name temporarily
+UPDATE users SET first_name = full_name WHERE first_name IS NULL;
+
+-- Make surname + first_name required going forward
+ALTER TABLE users ALTER COLUMN surname    SET DEFAULT '',
+                  ALTER COLUMN first_name SET DEFAULT '';
+
+-- Add generated full_name column (always computed, never stored manually)
+-- We keep full_name as a generated column for backward-compat with joins
+ALTER TABLE users DROP COLUMN IF EXISTS full_name;
+ALTER TABLE users ADD COLUMN full_name VARCHAR(255)
+  GENERATED ALWAYS AS (
+    surname || ', ' || first_name ||
+    CASE WHEN middle_name IS NOT NULL AND middle_name <> ''
+         THEN ' ' || middle_name ELSE '' END
+  ) STORED;
+
+-- ── students table ────────────────────────────────────────────
+ALTER TABLE students
+  ADD COLUMN IF NOT EXISTS surname     VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS first_name  VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS middle_name VARCHAR(100);
+
+UPDATE students SET first_name = full_name WHERE first_name IS NULL;
+
+ALTER TABLE students DROP COLUMN IF EXISTS full_name;
+ALTER TABLE students ADD COLUMN full_name VARCHAR(255)
+  GENERATED ALWAYS AS (
+    surname || ', ' || first_name ||
+    CASE WHEN middle_name IS NOT NULL AND middle_name <> ''
+         THEN ' ' || middle_name ELSE '' END
+  ) STORED;
+
+-- ── parent_student table (guardian contact info) ──────────────
+ALTER TABLE parent_student
+  ADD COLUMN IF NOT EXISTS surname     VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS first_name  VARCHAR(100),
+  ADD COLUMN IF NOT EXISTS middle_name VARCHAR(100);
+
+UPDATE parent_student SET first_name = full_name WHERE first_name IS NULL;
+
+ALTER TABLE parent_student DROP COLUMN IF EXISTS full_name;
+ALTER TABLE parent_student ADD COLUMN full_name VARCHAR(255)
+  GENERATED ALWAYS AS (
+    COALESCE(surname, '') || CASE WHEN surname IS NOT NULL AND surname <> '' THEN ', ' ELSE '' END ||
+    COALESCE(first_name, '') ||
+    CASE WHEN middle_name IS NOT NULL AND middle_name <> ''
+         THEN ' ' || middle_name ELSE '' END
+  ) STORED;
+
+-- ── Re-seed admin account (old data wiped) ────────────────────
+-- Run seed-admin.js again after this migration if needed.

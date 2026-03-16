@@ -5,6 +5,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi } from '../api/client'
 import { RiskBadge, SentimentBadge, LoadingSpinner, GradeChip } from '../components/UI'
 import { format } from 'date-fns'
+import { formatName, nameInitial } from '../utils/nameHelper'
 import toast from 'react-hot-toast'
 
 const TABS = ['Overview', 'Grades', 'Attendance', 'Behavior', 'AI Insights']
@@ -85,10 +86,10 @@ export default function StudentDetail() {
         <div className="flex-1 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-4">
             <div className="w-14 h-14 rounded-2xl bg-teal-100 flex items-center justify-center">
-              <span className="text-teal-700 font-bold text-xl">{student.full_name[0]}</span>
+              <span className="text-teal-700 font-bold text-xl">{nameInitial(student)}</span>
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-900">{student.full_name}</h1>
+              <h1 className="text-xl font-bold text-slate-900">{formatName(student)}</h1>
               <div className="flex items-center gap-3 mt-1 flex-wrap">
                 <span className="font-mono text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-lg">LRN: {student.lrn}</span>
                 <span className="text-xs text-slate-500">{student.grade_level} {student.section && `· ${student.section}`}</span>
@@ -143,7 +144,9 @@ export default function StudentDetail() {
           <div className="card p-5 space-y-4">
             <h3 className="text-sm font-semibold text-slate-800">Student Information</h3>
             {[
-              ['Full Name', student.full_name],
+              ['Surname', student.surname],
+              ['First Name', student.first_name],
+              ['Middle Name', student.middle_name || '—'],
               ['LRN', student.lrn],
               ['Date of Birth', student.date_of_birth ? format(new Date(student.date_of_birth), 'MMM d, yyyy') : '—'],
               ['Gender', student.gender],
@@ -193,11 +196,11 @@ export default function StudentDetail() {
                   <div key={g.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100">
                     <div className="flex items-center gap-2.5">
                       <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-sm font-bold text-teal-700 flex-shrink-0">
-                        {g.full_name[0]}
+                        {nameInitial(g)}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <p className="text-sm font-semibold text-slate-800">{g.full_name}</p>
+                          <p className="text-sm font-semibold text-slate-800">{formatName(g)}</p>
                           <span className="text-xs px-1.5 py-0.5 rounded-md bg-slate-200 text-slate-600 font-medium">{g.relationship}</span>
                           {g.is_authorized_pickup && (
                             <span className="text-xs px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700 font-medium">✓ Pickup</span>

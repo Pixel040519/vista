@@ -22,11 +22,13 @@ const pool = new Pool({
 
 // ── Change these before running ───────────────────────────────
 const ADMIN = {
-  email:     'admin@vista.edu.ph',
-  password:  'Admin@2025',
-  full_name: 'VISTA Administrator',
-  role:      'admin',
-  phone:     '09000000000',
+  email:       'admin@vista.edu.ph',
+  password:    'Admin@2025',
+  surname:     'Administrator',
+  first_name:  'Vista',
+  middle_name: '',
+  role:        'admin',
+  phone:       '09000000000',
 }
 // ─────────────────────────────────────────────────────────────
 
@@ -50,13 +52,13 @@ async function seedAdmin() {
     // Hash password
     const salt          = await bcrypt.genSalt(12)
     const password_hash = await bcrypt.hash(ADMIN.password, salt)
-
+    
     // Insert
     const result = await client.query(
-      `INSERT INTO users (email, password_hash, full_name, role, phone)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, email, full_name, role, created_at`,
-      [ADMIN.email, password_hash, ADMIN.full_name, ADMIN.role, ADMIN.phone]
+      `INSERT INTO users (email, password_hash, surname, first_name, middle_name, role, phone)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, email, full_name, surname, first_name, role, created_at`,
+      [ADMIN.email, password_hash, ADMIN.surname, ADMIN.first_name, ADMIN.middle_name||null, ADMIN.role, ADMIN.phone]
     )
 
     const user = result.rows[0]

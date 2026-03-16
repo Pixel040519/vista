@@ -6,6 +6,7 @@ import {
   LogOut, GraduationCap, ChevronRight
 } from 'lucide-react'
 import clsx from 'clsx'
+import { formatName, nameInitial } from '../../utils/nameHelper'
 
 const navGroups = [
   {
@@ -98,11 +99,11 @@ export default function Sidebar() {
         <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl">
           <div className="w-8 h-8 rounded-full bg-teal-500/20 border border-teal-500/30 flex items-center justify-center flex-shrink-0">
             <span className="text-teal-400 text-sm font-bold">
-              {user?.full_name?.[0]?.toUpperCase() || 'U'}
+              {user ? nameInitial(user) : 'U'}
             </span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-white text-sm font-medium truncate">{user?.full_name}</p>
+            <p className="text-white text-sm font-medium truncate">{user ? formatName(user) : ''}</p>
             <p className="text-slate-500 text-xs capitalize">{user?.role}</p>
           </div>
           <button
