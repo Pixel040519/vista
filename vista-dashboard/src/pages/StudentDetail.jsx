@@ -1,12 +1,22 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ClipboardCheck, Heart, QrCode, Brain, TrendingUp, TrendingDown } from 'lucide-react'
+import { ArrowLeft, BookOpen, ClipboardCheck, Heart, QrCode, Brain, TrendingUp, TrendingDown, MapPin } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi } from '../api/client'
 import { RiskBadge, SentimentBadge, LoadingSpinner, GradeChip } from '../components/UI'
 import { format } from 'date-fns'
 import { formatName, nameInitial } from '../utils/nameHelper'
 import toast from 'react-hot-toast'
+
+const calcAge = (dob) => {
+  if (!dob) return null
+  const birth = new Date(dob)
+  const today = new Date()
+  let age = today.getFullYear() - birth.getFullYear()
+  const m = today.getMonth() - birth.getMonth()
+  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--
+  return age >= 0 ? age : null
+}
 
 const TABS = ['Overview', 'Grades', 'Attendance', 'Behavior', 'AI Insights']
 
@@ -139,6 +149,7 @@ export default function StudentDetail() {
 
       {/* Tab content */}
       {tab === 'Overview' && (
+        <div className="space-y-5">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {/* Info card */}
           <div className="card p-5 space-y-4">
@@ -149,6 +160,7 @@ export default function StudentDetail() {
               ['Middle Name', student.middle_name || '—'],
               ['LRN', student.lrn],
               ['Date of Birth', student.date_of_birth ? format(new Date(student.date_of_birth), 'MMM d, yyyy') : '—'],
+              ['Age', calcAge(student.date_of_birth) !== null ? `${calcAge(student.date_of_birth)} years old` : '—'],
               ['Gender', student.gender],
               ['Grade Level', student.grade_level],
               ['Section', student.section || '—'],
@@ -161,8 +173,9 @@ export default function StudentDetail() {
           </div>
 
           {/* Attendance summary */}
-          <div className="card p-5">
-            <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
+          <div className="card relative overflow-hidden">
+            <div className="absolute inset-0 p-5 flex flex-col overflow-y-auto">
+            <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2 flex-shrink-0">
               <ClipboardCheck size={15} className="text-teal-500" /> Attendance Summary
             </h3>
             <div className="space-y-3">
@@ -178,11 +191,13 @@ export default function StudentDetail() {
                 </div>
               ))}
             </div>
+            </div>
           </div>
 
           {/* Guardians */}
-          <div className="card p-5">
-            <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
+          <div className="card relative overflow-hidden">
+            <div className="absolute inset-0 p-5 flex flex-col overflow-hidden">
+            <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2 flex-shrink-0">
               <span>Linked Parents / Guardians</span>
               <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
                 {(student.guardians || []).length}
@@ -191,7 +206,7 @@ export default function StudentDetail() {
             {(student.guardians || []).length === 0 ? (
               <p className="text-sm text-slate-400">No guardians linked yet.</p>
             ) : (
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+              <div className="space-y-2 overflow-y-auto flex-1 pr-1">
                 {student.guardians.map(g => (
                   <div key={g.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100">
                     <div className="flex items-center gap-2.5">
@@ -209,6 +224,7 @@ export default function StudentDetail() {
                         <div className="mt-1 space-y-0.5">
                           {g.email && <p className="text-xs text-slate-400 truncate">✉ {g.email}</p>}
                           {g.phone && <p className="text-xs text-slate-400">📞 {g.phone}</p>}
+                          {g.home_address && <p className="text-xs text-slate-400">📍 {g.home_address}</p>}
                         </div>
                       </div>
                     </div>
@@ -216,8 +232,22 @@ export default function StudentDetail() {
                 ))}
               </div>
             )}
+            </div>
           </div>
         </div>
+
+        {/* Home Address card — full width */}
+        <div className="card p-5">
+          <h3 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+            <MapPin size={15} className="text-teal-500" /> Home Address
+          </h3>
+          {student.home_address ? (
+            <p className="text-sm text-slate-700 leading-relaxed">{student.home_address}</p>
+          ) : (
+            <p className="text-sm text-slate-400 italic">No home address recorded.</p>
+          )}
+        </div>
+      </div>
       )}
 
       {tab === 'Grades' && (
@@ -344,7 +374,7 @@ export default function StudentDetail() {
               </div>
               <div className="bg-slate-50 rounded-xl p-3 text-sm text-slate-600 mb-4">{risk.recommendation}</div>
               {risk.factors?.length > 0 && (
-                <div className="space-y-2">
+                <div className="space-y-2 overflow-y-auto flex-1">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Contributing Factors</p>
                   {risk.factors.map((f, i) => (
                     <div key={i} className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">

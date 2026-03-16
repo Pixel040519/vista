@@ -494,3 +494,29 @@ ALTER TABLE parent_student ADD COLUMN full_name VARCHAR(255)
 
 -- ── Re-seed admin account (old data wiped) ────────────────────
 -- Run seed-admin.js again after this migration if needed.
+
+
+
+
+-- ============================================================
+-- VISTA Migration: Add address fields
+-- Run once: psql vista_db < database/migration_address.sql
+-- ============================================================
+
+-- Students: add home_address
+ALTER TABLE students
+  ADD COLUMN IF NOT EXISTS home_address TEXT;
+
+-- Guardians: add home_address
+ALTER TABLE parent_student
+  ADD COLUMN IF NOT EXISTS home_address TEXT;
+
+
+
+-- ============================================================
+-- VISTA Migration: Add home_address to users table
+-- Run once: psql vista_db < database/migration_user_address.sql
+-- ============================================================
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS home_address TEXT;

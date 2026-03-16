@@ -5,7 +5,7 @@ import {
   UserPlus, X, Users, ShieldCheck, Phone, Mail, Eye, EyeOff
 } from 'lucide-react'
 import { studentApi, curriculumApi } from '../api/client'
-import { LoadingSpinner, EmptyState, Modal } from '../components/UI'
+import { LoadingSpinner, EmptyState, Modal, PhoneInput } from '../components/UI'
 import { useAuth } from '../context/AuthContext'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -22,7 +22,7 @@ const GENDER_STYLE  = { Male:'bg-blue-50 text-blue-700', Female:'bg-pink-50 text
 
 const emptyGuardian = () => ({
   surname:'', first_name:'', middle_name:'', relationship:'Mother', email:'', phone:'',
-  is_authorized_pickup:true, create_account:false, password:''
+  is_authorized_pickup:true, create_account:false, password:'', home_address:''
 })
 
 // ── Guardian Row ──────────────────────────────────────────────
@@ -68,8 +68,16 @@ function GuardianRow({ g, index, onChange, onRemove }) {
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">Phone *</label>
-          <input className="input text-sm py-2" placeholder="09xxxxxxxxx"
-            value={g.phone} onChange={e => set('phone', e.target.value)} required/>
+          <PhoneInput className="input text-sm py-2 pr-10"
+            value={g.phone} onChange={v => set('phone', v)} required/>
+        </div>
+        <div className="col-span-2">
+          <label className="block text-xs font-medium text-slate-600 mb-1">Home Address *</label>
+          <textarea className="input text-sm resize-none min-h-14" placeholder="House No., Street, Barangay, Municipality/City, Province"
+            value={g.home_address}
+            onChange={e => set('home_address', e.target.value)}
+            onBlur={e => set('home_address', e.target.value.trim())}
+            required/>
         </div>
       </div>
       <div className="flex flex-wrap gap-4 pt-1">
@@ -103,6 +111,17 @@ function GuardianRow({ g, index, onChange, onRemove }) {
   )
 }
 
+// ── Age calculator helper ─────────────────────────────────────
+const calcAge = (dob) => {
+  if (!dob) return ''
+  const birth = new Date(dob)
+  const today = new Date()
+  let age = today.getFullYear() - birth.getFullYear()
+  const m = today.getMonth() - birth.getMonth()
+  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--
+  return age >= 0 ? String(age) : ''
+}
+
 // ── Student Form (shared by create + edit) ────────────────────
 function StudentForm({ initial, onSubmit, onClose, mode }) {
   const [form, setForm] = useState({
@@ -116,6 +135,9 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
     grade_level:       initial?.grade_level ?? '',
     section:           initial?.section ?? '',
     profile_photo_url: initial?.profile_photo_url ?? '',
+    home_address:      initial?.home_address      ?? '',
+    age:               initial?.date_of_birth
+                         ? calcAge(initial.date_of_birth) : '',
     guardians:         mode === 'create' ? [emptyGuardian()] : [],
   })
   const [saving, setSaving]       = useState(false)
@@ -135,6 +157,7 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
   const set = (k, v) => setForm(p => {
     const n = { ...p, [k]: v }
     if (k === 'grade_level') n.section = ''
+    if (k === 'date_of_birth') n.age = calcAge(v)
     return n
   })
 
@@ -148,17 +171,18 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
     try {
       const payload = { ...form }
       if (mode === 'edit') delete payload.guardians
-      if (mode === 'edit') delete payload.lrn   // LRN is immutable after creation
       if (skipGuardians) payload.guardians = []
+      delete payload.age   // computed field, not stored in DB
       if (!payload.profile_photo_url) delete payload.profile_photo_url
       await onSubmit(payload)
     } finally { setSaving(false) }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="flex flex-col h-full min-h-0">
+      {/* ── Sticky tab bar — never scrolls away ── */}
       {mode === 'create' && (
-        <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
+        <div className="flex gap-1 bg-slate-100 p-1 rounded-xl mb-4 flex-shrink-0">
           {[['info','Student Info'],['guardians','Guardians / Parents']].map(([v,l]) => (
             <button key={v} type="button" onClick={() => setTab(v)}
               className={clsx('flex-1 py-2 rounded-lg text-sm font-medium transition-all',
@@ -168,6 +192,8 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
           ))}
         </div>
       )}
+      {/* ── Scrollable content area ── */}
+      <div className="overflow-y-auto flex-1 min-h-0 space-y-3 pr-1 pb-2">
 
       {(tab === 'info' || mode === 'edit') && (
         <div className="space-y-3">
@@ -180,10 +206,9 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
               maxLength={12}
               value={form.lrn}
               onChange={e => set('lrn', e.target.value.replace(/\D/g,''))}
-              disabled={mode === 'edit'}
               required/>
             <p className="text-xs text-slate-400 mt-1">
-              {mode === 'edit' ? 'LRN cannot be changed.' : 'Must be exactly 12 digits. Numbers only.'}
+              Must be exactly 12 digits. Numbers only.
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -212,6 +237,21 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
               <select className="input" value={form.gender} onChange={e => set('gender', e.target.value)}>
                 <option>Male</option><option>Female</option><option>Other</option>
               </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">Age</label>
+              <div className="input bg-slate-50 text-slate-600 cursor-default select-none flex items-center gap-2">
+                <span className="font-medium">{form.age ? `${form.age} years old` : '—'}</span>
+                {!form.age && <span className="text-xs text-slate-400">Fill date of birth to calculate</span>}
+              </div>
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">Home Address *</label>
+              <textarea className="input resize-none min-h-16" placeholder="House No., Street, Barangay, Municipality/City, Province"
+                value={form.home_address}
+                onChange={e => set('home_address', e.target.value)}
+                onBlur={e => set('home_address', e.target.value.trim())}
+                required/>
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">Grade Level *</label>
@@ -247,33 +287,37 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
             </div>
           </label>
 
-          <div className={skipGuardians ? 'opacity-40 pointer-events-none select-none' : ''}>
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-slate-500">Add parents or guardians for this student.</p>
-            <button type="button" onClick={addG}
-              className="flex items-center gap-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors">
-              <Plus size={13}/> Add Guardian
-            </button>
-          </div>
-          {form.guardians.length === 0 ? (
-            <div className="text-center py-8 text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">
-              No guardians added.
-              <button type="button" onClick={addG} className="block mx-auto mt-2 text-teal-600 font-medium hover:text-teal-700">
-                + Add Guardian
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
-              {form.guardians.map((g,i) => (
-                <GuardianRow key={i} g={g} index={i} onChange={updateG} onRemove={removeG}/>
-              ))}
+          {!skipGuardians && (
+            <div>
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-slate-500">Add parents or guardians for this student.</p>
+                <button type="button" onClick={addG}
+                  className="flex items-center gap-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors">
+                  <Plus size={13}/> Add Guardian
+                </button>
+              </div>
+              {form.guardians.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">
+                  No guardians added.
+                  <button type="button" onClick={addG} className="block mx-auto mt-2 text-teal-600 font-medium hover:text-teal-700">
+                    + Add Guardian
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                  {form.guardians.map((g,i) => (
+                    <GuardianRow key={i} g={g} index={i} onChange={updateG} onRemove={removeG}/>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           </div>
-          </div>
       )}
 
-      <div className="flex gap-3 pt-2 border-t border-slate-100">
+      </div>{/* end scrollable area */}
+      {/* ── Sticky action buttons — never scrolls away ── */}
+      <div className="flex gap-3 pt-4 mt-2 border-t border-slate-100 flex-shrink-0">
         <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
         <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
           {saving
@@ -342,8 +386,16 @@ function GuardianForm({ initial, mode, onSubmit, onCancel }) {
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">Phone *</label>
-          <input className="input text-sm py-2" placeholder="09xxxxxxxxx"
-            value={form.phone} onChange={e => set('phone', e.target.value)} required />
+          <PhoneInput className="input text-sm py-2 pr-10"
+            value={form.phone} onChange={v => set('phone', v)} required />
+        </div>
+        <div className="col-span-2">
+          <label className="block text-xs font-medium text-slate-600 mb-1">Home Address *</label>
+          <textarea className="input text-sm resize-none min-h-14" placeholder="House No., Street, Barangay, Municipality/City, Province"
+            value={form.home_address}
+            onChange={e => set('home_address', e.target.value)}
+            onBlur={e => set('home_address', e.target.value.trim())}
+            required/>
         </div>
       </div>
       <div className="flex flex-wrap gap-4">
@@ -436,7 +488,7 @@ function GuardianManager({ studentId, guardians, onRefresh }) {
                 {mode === g.id ? (
                   <GuardianForm
                     mode="edit"
-                    initial={{ surname: g.surname, first_name: g.first_name, middle_name: g.middle_name || '', relationship: g.relationship,
+                    initial={{ surname: g.surname, first_name: g.first_name, middle_name: g.middle_name || '', relationship: g.relationship, home_address: g.home_address || '',
                       email: g.email || '', phone: g.phone || '',
                       is_authorized_pickup: g.is_authorized_pickup }}
                     onSubmit={(form) => handleEdit(g.id, form)}
@@ -737,6 +789,7 @@ export default function Students() {
                       )}
                       <td>
                         <Link to={`/students/${s.id}`}
+                          title="View student details"
                           className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors inline-flex">
                           <ChevronRight size={16}/>
                         </Link>
@@ -767,11 +820,11 @@ export default function Students() {
       </div>
 
       {/* ── Modals ──────────────────────────────────────────── */}
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Add New Student" size="lg">
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Add New Student" size="lg" selfScroll>
         <StudentForm mode="create" onSubmit={handleCreate} onClose={() => setShowCreate(false)}/>
       </Modal>
 
-      <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title="Edit Student Information" size="lg">
+      <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title="Edit Student Information" size="lg" selfScroll>
         {editTarget && <StudentForm mode="edit" initial={editTarget} onSubmit={handleEdit} onClose={() => setEditTarget(null)}/>}
       </Modal>
 

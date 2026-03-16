@@ -4,7 +4,7 @@ import {
   ShieldCheck, Eye, EyeOff, X, BookOpen, ChevronDown
 } from 'lucide-react'
 import { accountApi, curriculumApi } from '../api/client'
-import { LoadingSpinner, EmptyState, Modal } from '../components/UI'
+import { LoadingSpinner, EmptyState, Modal, PhoneInput } from '../components/UI'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
@@ -101,6 +101,7 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
     middle_name: initial?.middle_name  || '',
     email:       initial?.email      || '',
     phone:       initial?.phone      || '',
+    home_address: initial?.home_address || '',
     password:    '',
     assignments: initial?.assignments?.length
       ? initial.assignments.map(a => ({
@@ -180,8 +181,17 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Phone *</label>
-            <input className="input" placeholder="09xxxxxxxxx" value={form.phone}
-              onChange={e => setField('phone', e.target.value)} required />
+            <PhoneInput className="input pr-10" value={form.phone}
+              onChange={v => setField('phone', v)} required />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Home Address *</label>
+            <textarea className="input resize-none min-h-16"
+              placeholder="House No., Street, Barangay, Municipality/City, Province"
+              value={form.home_address}
+              onChange={e => setField('home_address', e.target.value)}
+              onBlur={e => setField('home_address', e.target.value.trim())}
+              required/>
           </div>
           <div className="col-span-2">
             <label className="block text-sm font-medium text-slate-700 mb-1.5">

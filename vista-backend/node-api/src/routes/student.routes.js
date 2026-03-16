@@ -27,6 +27,7 @@ const studentSchema = Joi.object({
   grade_level:       Joi.string().required(),
   section:           Joi.string().optional().allow(''),
   profile_photo_url: Joi.string().uri().optional().allow(''),
+  home_address:      Joi.string().trim().min(1).required(),
   guardians: Joi.array().items(Joi.object({
     ...guardianNameShape,
     relationship:         Joi.string().required(),
@@ -35,10 +36,13 @@ const studentSchema = Joi.object({
     is_authorized_pickup: Joi.boolean().default(true),
     create_account:       Joi.boolean().default(false),
     password:             Joi.string().min(8).optional().allow(''),
+    home_address:         Joi.string().trim().min(1).required(),
   })).optional()
 })
 
 const updateStudentSchema = Joi.object({
+  lrn:               Joi.string().length(12).pattern(/^\d+$/).optional()
+    .messages({ 'string.length': 'LRN must be exactly 12 digits', 'string.pattern.base': 'LRN must contain digits only' }),
   surname:           Joi.string().min(1).optional(),
   first_name:        Joi.string().min(1).optional(),
   middle_name:       Joi.string().optional().allow(''),
@@ -47,6 +51,7 @@ const updateStudentSchema = Joi.object({
   grade_level:       Joi.string().optional(),
   section:           Joi.string().optional().allow(''),
   profile_photo_url: Joi.string().uri().optional().allow(''),
+  home_address:      Joi.string().optional().allow(''),
 })
 
 const guardianSchema = Joi.object({
@@ -57,6 +62,7 @@ const guardianSchema = Joi.object({
   is_authorized_pickup: Joi.boolean().default(true),
   create_account:       Joi.boolean().default(false),
   password:             Joi.string().min(8).optional().allow(''),
+  home_address:         Joi.string().trim().min(1).required(),
 })
 
 const updateGuardianSchema = Joi.object({
@@ -67,6 +73,7 @@ const updateGuardianSchema = Joi.object({
   email:                Joi.string().email().optional().allow(''),
   phone:                Joi.string().optional().allow(''),
   is_authorized_pickup: Joi.boolean().optional(),
+  home_address:         Joi.string().optional().allow(''),
 })
 
 // ── Helper: get student with guardians ───────────────────────
@@ -83,7 +90,8 @@ const getStudentWithGuardians = async (id) => {
          'phone',                ps.phone,
          'relationship',         ps.relationship,
          'is_authorized_pickup', ps.is_authorized_pickup,
-         'has_account',          (ps.parent_id IS NOT NULL)
+         'has_account',          (ps.parent_id IS NOT NULL),
+         'home_address',         ps.home_address
        ) ORDER BY ps.created_at ASC) FILTER (WHERE ps.id IS NOT NULL), '[]') AS guardians
      FROM students s
      LEFT JOIN parent_student ps ON ps.student_id=s.id
@@ -150,7 +158,7 @@ router.get('/', async (req, res, next) => {
     const [rows, count] = await Promise.all([
       query(
         `SELECT s.id, s.lrn, s.surname, s.first_name, s.middle_name, s.full_name,
-                s.date_of_birth, s.gender, s.grade_level, s.section, s.profile_photo_url, s.created_at
+                s.date_of_birth, s.gender, s.grade_level, s.section, s.profile_photo_url, s.home_address, s.created_at
          FROM students s ${join} ${where}
          ORDER BY s.surname, s.first_name
          LIMIT $${params.length-1} OFFSET $${params.length}`, params),
@@ -176,7 +184,7 @@ router.get('/:id', async (req, res, next) => {
 // POST /api/students
 router.post('/', authorize('admin'), async (req, res, next) => {
   try {
-    const { error, value } = studentSchema.validate(req.body)
+    const { error, value } = studentSchema.validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
 
     const { guardians=[], ...data } = value
@@ -187,10 +195,10 @@ router.post('/', authorize('admin'), async (req, res, next) => {
 
     const student = await withTransaction(async (client) => {
       const sRes = await client.query(
-        `INSERT INTO students (lrn, surname, first_name, middle_name, date_of_birth, gender, grade_level, section, profile_photo_url)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        `INSERT INTO students (lrn, surname, first_name, middle_name, date_of_birth, gender, grade_level, section, profile_photo_url, home_address)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
         [data.lrn, surname, first_name, middle_name||null, data.date_of_birth,
-         data.gender, data.grade_level, data.section||null, data.profile_photo_url||null]
+         data.gender, data.grade_level, data.section||null, data.profile_photo_url||null, data.home_address||null]
       )
       for (const g of guardians) await insertGuardian(client, sRes.rows[0].id, g)
       return await getStudentWithGuardians(sRes.rows[0].id)
@@ -209,7 +217,16 @@ router.put('/:id', authorize('admin'), async (req, res, next) => {
     const normed = normaliseName(value)
     const sets=[]; const params=[]
 
-    for (const f of ['surname','first_name','middle_name','date_of_birth','gender','grade_level','section','profile_photo_url']) {
+    // Check duplicate LRN excluding this student
+    if (normed.lrn) {
+      const dup = await query(
+        'SELECT id FROM students WHERE lrn=$1 AND id<>$2 AND is_active=TRUE',
+        [normed.lrn, req.params.id]
+      )
+      if (dup.rows.length) throw new AppError('A student with this LRN already exists.', 409)
+    }
+
+    for (const f of ['lrn','surname','first_name','middle_name','date_of_birth','gender','grade_level','section','profile_photo_url','home_address']) {
       if (normed[f] !== undefined) { params.push(normed[f] ?? null); sets.push(`${f}=$${params.length}`) }
     }
     if (!sets.length) throw new AppError('No fields to update.', 400)
@@ -253,7 +270,7 @@ router.put('/:id/guardians/:guardianId', authorize('admin'), async (req, res, ne
 
     const normed = normaliseName(value)
     const sets=[]; const params=[]
-    for (const f of ['surname','first_name','middle_name','email','phone','relationship','is_authorized_pickup']) {
+    for (const f of ['surname','first_name','middle_name','email','phone','relationship','is_authorized_pickup','home_address']) {
       if (normed[f] !== undefined) { params.push(normed[f] ?? null); sets.push(`${f}=$${params.length}`) }
     }
     if (!sets.length) throw new AppError('Nothing to update.', 400)
@@ -271,7 +288,28 @@ router.put('/:id/guardians/:guardianId', authorize('admin'), async (req, res, ne
 // DELETE /api/students/:id/guardians/:guardianId
 router.delete('/:id/guardians/:guardianId', authorize('admin'), async (req, res, next) => {
   try {
-    await query('DELETE FROM parent_student WHERE id=$1 AND student_id=$2', [req.params.guardianId, req.params.id])
+    // Get the parent_id (portal account) before deleting the row
+    const row = await query(
+      'SELECT parent_id FROM parent_student WHERE id=$1 AND student_id=$2',
+      [req.params.guardianId, req.params.id]
+    )
+    if (!row.rows.length) throw new AppError('Guardian not found.', 404)
+
+    const parentId = row.rows[0].parent_id
+
+    // Remove the guardian link
+    await query('DELETE FROM parent_student WHERE id=$1', [req.params.guardianId])
+
+    // If they had a portal account, delete it only if not linked to any other student
+    if (parentId) {
+      const stillLinked = await query(
+        'SELECT COUNT(*) FROM parent_student WHERE parent_id=$1', [parentId]
+      )
+      if (parseInt(stillLinked.rows[0].count) === 0) {
+        await query('DELETE FROM users WHERE id=$1 AND role=$2', [parentId, 'parent'])
+      }
+    }
+
     res.json({ message: 'Guardian removed.' })
   } catch (err) { next(err) }
 })

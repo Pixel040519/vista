@@ -22,6 +22,7 @@ const createSchema = Joi.object({
   first_name:  Joi.string().min(1).required(),
   middle_name: Joi.string().optional().allow(''),
   phone:       Joi.string().min(7).required(),
+  home_address: Joi.string().trim().min(1).required(),
   assignments: Joi.array().items(assignmentShape).optional(),
 })
 
@@ -30,6 +31,7 @@ const updateSchema = Joi.object({
   first_name:  Joi.string().min(1).optional(),
   middle_name: Joi.string().optional().allow(''),
   phone:       Joi.string().optional().allow(''),
+  home_address: Joi.string().trim().optional().allow(''),
   password:    Joi.string().min(8).optional().allow(''),
   is_active:   Joi.boolean().optional(),
   assignments: Joi.array().items(assignmentShape).optional(),
@@ -62,7 +64,7 @@ router.get('/teachers', async (req, res, next) => {
     }
 
     const result = await query(
-      `SELECT u.id, u.email, u.surname, u.first_name, u.middle_name, u.full_name,
+      `SELECT u.id, u.email, u.surname, u.first_name, u.middle_name, u.full_name, u.home_address,
               u.phone, u.is_active, u.created_at,
          COALESCE(json_agg(json_build_object(
            'id',ta.id,'grade_level',ta.grade_level,'section',ta.section,
@@ -109,10 +111,10 @@ router.post('/teachers', async (req, res, next) => {
       const hash = await bcrypt.hash(password, await bcrypt.genSalt(12))
 
       const uRes = await client.query(
-        `INSERT INTO users (email, password_hash, surname, first_name, middle_name, role, phone)
-         VALUES ($1,$2,$3,$4,$5,'teacher',$6)
-         RETURNING id, email, surname, first_name, middle_name, full_name, phone, is_active, created_at`,
-        [email, hash, surname, first_name, middle_name || null, phone || null]
+        `INSERT INTO users (email, password_hash, surname, first_name, middle_name, role, phone, home_address)
+         VALUES ($1,$2,$3,$4,$5,'teacher',$6,$7)
+         RETURNING id, email, surname, first_name, middle_name, full_name, phone, home_address, is_active, created_at`,
+        [email, hash, surname, first_name, middle_name || null, phone || null, value.home_address || null]
       )
       const user = uRes.rows[0]
 
@@ -146,7 +148,8 @@ router.put('/teachers/:id', async (req, res, next) => {
       if (normed.surname)               { params.push(normed.surname);     sets.push(`surname=$${params.length}`) }
       if (normed.first_name)            { params.push(normed.first_name);  sets.push(`first_name=$${params.length}`) }
       if (normed.middle_name !== undefined) { params.push(normed.middle_name || null); sets.push(`middle_name=$${params.length}`) }
-      if (phone      !== undefined)     { params.push(phone);      sets.push(`phone=$${params.length}`) }
+      if (phone        !== undefined)   { params.push(phone);                    sets.push(`phone=$${params.length}`) }
+      if (value.home_address !== undefined) { params.push(value.home_address||null); sets.push(`home_address=$${params.length}`) }
       if (is_active  !== undefined)     { params.push(is_active);  sets.push(`is_active=$${params.length}`) }
       if (password) {
         params.push(await bcrypt.hash(password, await bcrypt.genSalt(12)))

@@ -99,21 +99,29 @@ export function EmptyState({ icon: Icon, title, description, action }) {
 }
 
 // ── Modal ─────────────────────────────────────────────────────
-export function Modal({ open, onClose, title, children, size = 'md' }) {
+export function Modal({ open, onClose, title, children, size = 'md', selfScroll = false }) {
   if (!open) return null
   const widths = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' }
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className={clsx('relative w-full card shadow-2xl animate-slide-up', widths[size])}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+      <div className={clsx(
+        'relative w-full card shadow-2xl animate-slide-up flex flex-col max-h-[84vh]',
+        widths[size]
+      )}>
+        {/* Fixed header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
           <h3 className="text-base font-semibold text-slate-900">{title}</h3>
           <button
             onClick={onClose}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors text-xl leading-none"
-          >×</button>
+          >x</button>
         </div>
-        <div className="px-6 py-5">{children}</div>
+        {/* Body — selfScroll lets children manage their own overflow */}
+        <div className={clsx(
+          'px-6 py-5 flex flex-col flex-1 min-h-0',
+          selfScroll ? 'overflow-hidden' : 'overflow-y-auto'
+        )}>{children}</div>
       </div>
     </div>
   )
@@ -131,5 +139,96 @@ export function GradeChip({ grade }) {
     <span className={clsx('inline-block px-2 py-0.5 rounded-lg text-xs font-semibold font-mono', cls)}>
       {g.toFixed(1)}
     </span>
+  )
+}
+
+// ── PhoneInput — PH format: +63 9XX XXXXXXX ─────────────────
+const PH_PREFIX = '+63 9'
+
+export function PhoneInput({ value = '', onChange, required, className = '', ...props }) {
+  // Extract user-typed digits from stored value
+  const getDigits = (val) => {
+    if (!val) return ''
+    const after = val.startsWith(PH_PREFIX) ? val.slice(PH_PREFIX.length) : val.replace(/^\+?63\s*9?/, '')
+    return after.replace(/\D/g, '').slice(0, 9)
+  }
+
+  // Format digits into display value
+  const format = (digits) => {
+    if (!digits) return ''
+    const a = digits.slice(0, 2)
+    const b = digits.slice(2, 9)
+    return PH_PREFIX + a + (b ? ' ' + b : '')
+  }
+
+  const handleChange = (e) => {
+    const raw = e.target.value
+    // If user cleared everything, allow empty
+    if (!raw || raw === '') { onChange(''); return }
+    // Always ensure prefix is intact
+    const base = raw.startsWith(PH_PREFIX) ? raw : PH_PREFIX
+    const after = raw.startsWith(PH_PREFIX) ? raw.slice(PH_PREFIX.length) : ''
+    const digits = after.replace(/\D/g, '').slice(0, 9)
+    onChange(format(digits))
+  }
+
+  const handleKeyDown = (e) => {
+    const input = e.target
+    const pos = input.selectionStart
+    // Block backspace / delete inside the prefix
+    if (e.key === 'Backspace' && pos <= PH_PREFIX.length) {
+      e.preventDefault()
+    }
+    if (e.key === 'Delete' && pos < PH_PREFIX.length) {
+      e.preventDefault()
+    }
+    // Block non-digit, non-navigation keys after prefix
+    const nav = ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Tab','Home','End','Backspace','Delete']
+    if (!nav.includes(e.key) && !/^\d$/.test(e.key) && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault()
+    }
+  }
+
+  const handleFocus = (e) => {
+    // Place cursor after prefix when field is empty
+    setTimeout(() => {
+      const end = e.target.value.length || PH_PREFIX.length
+      e.target.setSelectionRange(end, end)
+    }, 0)
+  }
+
+  const handleClick = (e) => {
+    // Prevent cursor going inside prefix
+    if (e.target.selectionStart < PH_PREFIX.length) {
+      e.target.setSelectionRange(PH_PREFIX.length, PH_PREFIX.length)
+    }
+  }
+
+  const isComplete = getDigits(value).length === 9
+  const displayValue = value || PH_PREFIX
+
+  return (
+    <div className="relative">
+      <input
+        {...props}
+        type="tel"
+        inputMode="numeric"
+        className={className}
+        value={displayValue}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        onFocus={handleFocus}
+        onClick={handleClick}
+        maxLength={15}
+        required={required}
+        // Native validation: must have full 9 digits after prefix
+        pattern="\+63 9\d{2} \d{7}"
+        title="+63 9XX XXXXXXX — Enter 9 digits after +63 9"
+      />
+      {/* Digit counter */}
+      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-mono text-slate-300 pointer-events-none select-none">
+        {getDigits(value).length}/9
+      </span>
+    </div>
   )
 }
