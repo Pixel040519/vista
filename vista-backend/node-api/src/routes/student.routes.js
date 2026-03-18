@@ -33,10 +33,11 @@ const studentSchema = Joi.object({
     relationship:         Joi.string().required(),
     email:                Joi.string().email().optional().allow(''),
     phone:                Joi.string().optional().allow(''),
-    is_authorized_pickup: Joi.boolean().default(true),
-    create_account:       Joi.boolean().default(false),
-    password:             Joi.string().min(8).optional().allow(''),
-    home_address:         Joi.string().trim().min(1).required(),
+    is_authorized_pickup:  Joi.boolean().default(true),
+    is_emergency_contact:  Joi.boolean().default(false),
+    create_account:        Joi.boolean().default(false),
+    password:              Joi.string().min(8).optional().allow(''),
+    home_address:          Joi.string().trim().min(1).required(),
   })).optional()
 })
 
@@ -59,21 +60,23 @@ const guardianSchema = Joi.object({
   relationship:         Joi.string().required(),
   email:                Joi.string().email().optional().allow(''),
   phone:                Joi.string().optional().allow(''),
-  is_authorized_pickup: Joi.boolean().default(true),
-  create_account:       Joi.boolean().default(false),
-  password:             Joi.string().min(8).optional().allow(''),
-  home_address:         Joi.string().trim().min(1).required(),
+  is_authorized_pickup:  Joi.boolean().default(true),
+  is_emergency_contact:  Joi.boolean().default(false),
+  create_account:        Joi.boolean().default(false),
+  password:              Joi.string().min(8).optional().allow(''),
+  home_address:          Joi.string().trim().min(1).required(),
 })
 
 const updateGuardianSchema = Joi.object({
-  surname:              Joi.string().min(1).optional(),
-  first_name:           Joi.string().min(1).optional(),
-  middle_name:          Joi.string().optional().allow(''),
-  relationship:         Joi.string().optional(),
-  email:                Joi.string().email().optional().allow(''),
-  phone:                Joi.string().optional().allow(''),
-  is_authorized_pickup: Joi.boolean().optional(),
-  home_address:         Joi.string().optional().allow(''),
+  surname:               Joi.string().min(1).optional(),
+  first_name:            Joi.string().min(1).optional(),
+  middle_name:           Joi.string().optional().allow(''),
+  relationship:          Joi.string().optional(),
+  email:                 Joi.string().email().optional().allow(''),
+  phone:                 Joi.string().optional().allow(''),
+  is_authorized_pickup:  Joi.boolean().optional(),
+  is_emergency_contact:  Joi.boolean().optional(),
+  home_address:          Joi.string().optional().allow(''),
 })
 
 // ── Helper: get student with guardians ───────────────────────
@@ -90,9 +93,10 @@ const getStudentWithGuardians = async (id) => {
          'phone',                ps.phone,
          'relationship',         ps.relationship,
          'is_authorized_pickup', ps.is_authorized_pickup,
+         'is_emergency_contact', ps.is_emergency_contact,
          'has_account',          (ps.parent_id IS NOT NULL),
          'home_address',         ps.home_address
-       ) ORDER BY ps.created_at ASC) FILTER (WHERE ps.id IS NOT NULL), '[]') AS guardians
+       ) ORDER BY ps.is_emergency_contact DESC, ps.created_at ASC) FILTER (WHERE ps.id IS NOT NULL), '[]') AS guardians
      FROM students s
      LEFT JOIN parent_student ps ON ps.student_id=s.id
      WHERE s.id=$1 AND s.is_active=TRUE
@@ -125,10 +129,11 @@ const insertGuardian = async (client, studentId, g) => {
 
   await client.query(
     `INSERT INTO parent_student
-       (parent_id, student_id, surname, first_name, middle_name, email, phone, relationship, is_authorized_pickup)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+       (parent_id, student_id, surname, first_name, middle_name, email, phone, relationship, is_authorized_pickup, is_emergency_contact, home_address)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [parentId, studentId, surname, first_name, middle_name || null,
-     g.email || null, g.phone || null, g.relationship, g.is_authorized_pickup ?? true]
+     g.email || null, g.phone || null, g.relationship,
+     g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, g.home_address || null]
   )
 }
 
@@ -255,7 +260,7 @@ router.delete('/:id', authorize('admin'), async (req, res, next) => {
 // POST /api/students/:id/guardians
 router.post('/:id/guardians', authorize('admin'), async (req, res, next) => {
   try {
-    const { error, value } = guardianSchema.validate(req.body)
+    const { error, value } = guardianSchema.validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
     await withTransaction(async (client) => { await insertGuardian(client, req.params.id, value) })
     res.json({ message: 'Guardian added.', student: await getStudentWithGuardians(req.params.id) })
@@ -265,12 +270,12 @@ router.post('/:id/guardians', authorize('admin'), async (req, res, next) => {
 // PUT /api/students/:id/guardians/:guardianId
 router.put('/:id/guardians/:guardianId', authorize('admin'), async (req, res, next) => {
   try {
-    const { error, value } = updateGuardianSchema.validate(req.body)
+    const { error, value } = updateGuardianSchema.validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
 
     const normed = normaliseName(value)
     const sets=[]; const params=[]
-    for (const f of ['surname','first_name','middle_name','email','phone','relationship','is_authorized_pickup','home_address']) {
+    for (const f of ['surname','first_name','middle_name','email','phone','relationship','is_authorized_pickup','is_emergency_contact','home_address']) {
       if (normed[f] !== undefined) { params.push(normed[f] ?? null); sets.push(`${f}=$${params.length}`) }
     }
     if (!sets.length) throw new AppError('Nothing to update.', 400)

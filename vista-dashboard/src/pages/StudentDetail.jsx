@@ -217,6 +217,9 @@ export default function StudentDetail() {
                         <div className="flex items-center gap-2 flex-wrap">
                           <p className="text-sm font-semibold text-slate-800">{formatName(g)}</p>
                           <span className="text-xs px-1.5 py-0.5 rounded-md bg-slate-200 text-slate-600 font-medium">{g.relationship}</span>
+                          {g.is_emergency_contact && (
+                            <span className="text-xs px-1.5 py-0.5 rounded-md bg-red-100 text-red-700 font-semibold">🚨 Emergency</span>
+                          )}
                           {g.is_authorized_pickup && (
                             <span className="text-xs px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700 font-medium">✓ Pickup</span>
                           )}

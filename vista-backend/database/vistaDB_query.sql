@@ -520,3 +520,12 @@ ALTER TABLE parent_student
 
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS home_address TEXT;
+
+
+  -- ============================================================
+-- VISTA Migration: Add is_emergency_contact to parent_student
+-- Run once: psql vista_db < database/migration_emergency_contact.sql
+-- ============================================================
+
+ALTER TABLE parent_student
+  ADD COLUMN IF NOT EXISTS is_emergency_contact BOOLEAN NOT NULL DEFAULT FALSE;

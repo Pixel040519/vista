@@ -22,7 +22,7 @@ const GENDER_STYLE  = { Male:'bg-blue-50 text-blue-700', Female:'bg-pink-50 text
 
 const emptyGuardian = () => ({
   surname:'', first_name:'', middle_name:'', relationship:'Mother', email:'', phone:'',
-  is_authorized_pickup:true, create_account:false, password:'', home_address:''
+  is_authorized_pickup:true, is_emergency_contact:false, create_account:false, password:'', home_address:''
 })
 
 // ── Guardian Row ──────────────────────────────────────────────
@@ -85,6 +85,11 @@ function GuardianRow({ g, index, onChange, onRemove }) {
           <input type="checkbox" className="rounded" checked={g.is_authorized_pickup}
             onChange={e => set('is_authorized_pickup', e.target.checked)}/>
           <span className="text-xs text-slate-600 font-medium">Authorized for pickup</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" className="rounded" checked={g.is_emergency_contact}
+            onChange={e => set('is_emergency_contact', e.target.checked)}/>
+          <span className="text-xs text-slate-600 font-medium">Emergency contact</span>
         </label>
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" className="rounded" checked={g.create_account}
@@ -380,9 +385,20 @@ function GuardianForm({ initial, mode, onSubmit, onCancel }) {
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Email</label>
-          <input className="input text-sm py-2" type="email" placeholder="Optional"
-            value={form.email} onChange={e => set('email', e.target.value)} />
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            Email{form.create_account && !form.has_account ? ' *' : ''}
+          </label>
+          <input className="input text-sm py-2" type="email"
+            placeholder={form.create_account && !form.has_account ? 'Required for portal account' : 'Optional'}
+            value={form.email}
+            onChange={e => set('email', e.target.value)}
+            required={form.create_account && !form.has_account}
+            readOnly={form.has_account}
+            disabled={form.has_account}
+          />
+          {form.has_account && (
+            <p className="text-xs text-slate-400 mt-1">Email cannot be changed once a portal account exists.</p>
+          )}
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">Phone *</label>
@@ -404,21 +420,41 @@ function GuardianForm({ initial, mode, onSubmit, onCancel }) {
             onChange={e => set('is_authorized_pickup', e.target.checked)} />
           <span className="text-xs text-slate-600 font-medium">Authorized for pickup</span>
         </label>
-        {isAdd && (
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={form.is_emergency_contact ?? false}
+            onChange={e => set('is_emergency_contact', e.target.checked)} />
+          <span className="text-xs text-slate-600 font-medium">Emergency contact</span>
+        </label>
+
+        {/* Portal account — add mode: checkbox to create; edit mode: show status */}
+        {isAdd ? (
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={form.create_account}
               onChange={e => set('create_account', e.target.checked)} />
             <span className="text-xs text-slate-600 font-medium">Create parent portal account</span>
           </label>
+        ) : form.has_account ? (
+          <span className="flex items-center gap-1.5 text-xs text-blue-600 font-medium bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200">
+            ✓ Has parent portal account
+          </span>
+        ) : (
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.create_account ?? false}
+              onChange={e => set('create_account', e.target.checked)} />
+            <span className="text-xs text-slate-600 font-medium">Create parent portal account</span>
+          </label>
         )}
       </div>
-      {isAdd && form.create_account && (
+
+      {/* Password field when creating portal account */}
+      {form.create_account && !form.has_account && (
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">Account Password *</label>
           <div className="relative">
             <input className="input text-sm py-2 pr-9"
               type={showPw ? 'text' : 'password'} placeholder="Min. 8 characters"
-              value={form.password} onChange={e => set('password', e.target.value)} />
+              value={form.password} onChange={e => set('password', e.target.value)}
+              required />
             <button type="button" onClick={() => setShowPw(!showPw)}
               className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400">
               {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
@@ -487,10 +523,12 @@ function GuardianManager({ studentId, guardians, onRefresh }) {
               <div key={g.id}>
                 {mode === g.id ? (
                   <GuardianForm
+                    key={`edit-${g.id}-${g.is_emergency_contact}-${g.is_authorized_pickup}`}
                     mode="edit"
                     initial={{ surname: g.surname, first_name: g.first_name, middle_name: g.middle_name || '', relationship: g.relationship, home_address: g.home_address || '',
                       email: g.email || '', phone: g.phone || '',
-                      is_authorized_pickup: g.is_authorized_pickup }}
+                      is_authorized_pickup: g.is_authorized_pickup, is_emergency_contact: g.is_emergency_contact ?? false,
+                      has_account: g.has_account ?? false, create_account: false, password: '' }}
                     onSubmit={(form) => handleEdit(g.id, form)}
                     onCancel={closeForm}
                   />
@@ -510,6 +548,9 @@ function GuardianManager({ studentId, guardians, onRefresh }) {
                             <span className="flex items-center gap-1 text-xs text-emerald-600 font-medium">
                               <ShieldCheck size={10}/> Pickup
                             </span>
+                          )}
+                          {g.is_emergency_contact && (
+                            <span className="text-xs text-red-600 font-semibold">🚨 Emergency</span>
                           )}
                           {g.has_account && (
                             <span className="text-xs text-blue-500 font-medium">● Portal</span>
