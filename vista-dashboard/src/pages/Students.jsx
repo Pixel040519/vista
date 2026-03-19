@@ -22,13 +22,57 @@ const GENDER_STYLE  = { Male:'bg-blue-50 text-blue-700', Female:'bg-pink-50 text
 
 const emptyGuardian = () => ({
   surname:'', first_name:'', middle_name:'', relationship:'Mother', email:'', phone:'',
-  is_authorized_pickup:true, is_emergency_contact:false, create_account:false, password:'', home_address:''
+  is_authorized_pickup:true, is_emergency_contact:false, create_account:false, password:'', home_address:'', link_parent_id:null
 })
 
 // ── Guardian Row ──────────────────────────────────────────────
 function GuardianRow({ g, index, onChange, onRemove }) {
-  const [showPw, setShowPw] = useState(false)
+  const [showPw, setShowPw]         = useState(false)
+  const [mode, setMode]             = useState('new')   // 'new' | 'link'
+  const [searchQ, setSearchQ]       = useState('')
+  const [searchResults, setResults] = useState([])
+  const [searching, setSearching]   = useState(false)
+
   const set = (k, v) => onChange(index, { ...g, [k]: v })
+
+  const handleSearch = async (q) => {
+    setSearchQ(q)
+    if (!q.trim()) { setResults([]); return }
+    setSearching(true)
+    try {
+      const res = await studentApi.searchParents(q)
+      setResults(res.data.parents || [])
+    } catch {} finally { setSearching(false) }
+  }
+
+  const selectParent = (p) => {
+    onChange(index, {
+      ...g,
+      surname:     p.surname     || '',
+      first_name:  p.first_name  || '',
+      middle_name: p.middle_name || '',
+      email:       p.email       || '',
+      phone:       p.phone       || '',
+      home_address: p.home_address || '',
+      // link to existing account — no need to create a new one
+      link_parent_id:  p.id,
+      create_account:  false,
+      password:        '',
+    })
+    setSearchQ(p.full_name || '')
+    setResults([])
+  }
+
+  const switchMode = (m) => {
+    setMode(m)
+    setSearchQ('')
+    setResults([])
+    // Reset link fields when switching back to new
+    if (m === 'new') {
+      onChange(index, { ...g, link_parent_id: null })
+    }
+  }
+
   return (
     <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
       <div className="flex items-center justify-between">
@@ -38,21 +82,104 @@ function GuardianRow({ g, index, onChange, onRemove }) {
           <X size={14}/>
         </button>
       </div>
-      <div className="grid grid-cols-2 gap-2">
+
+      {/* Mode switcher */}
+      <div className="flex gap-1 bg-white border border-slate-200 p-1 rounded-lg">
+        {[['new','New Guardian'],['link','Link Existing Guardian']].map(([m,l]) => (
+          <button key={m} type="button" onClick={() => switchMode(m)}
+            className={clsx('flex-1 py-1.5 rounded-md text-xs font-medium transition-all',
+              mode === m ? 'bg-teal-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {/* Link existing parent search */}
+      {mode === 'link' && (
+        <div className="space-y-2">
+          {/* Only show search when no guardian is linked yet */}
+          {!g.link_parent_id && (
+            <>
+              <div className="relative">
+                <input className="input text-sm py-2 pr-8"
+                  placeholder="Search by name or email..."
+                  value={searchQ}
+                  onChange={e => handleSearch(e.target.value)}
+                  autoComplete="off"/>
+                {searching && (
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400">⏳</span>
+                )}
+              </div>
+
+              {searchResults.length > 0 && (
+                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                  {searchResults.map(p => (
+                    <button key={p.id} type="button" onClick={() => selectParent(p)}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-teal-50 transition-colors text-left border-b border-slate-100 last:border-0">
+                      <div className="w-7 h-7 rounded-full bg-teal-100 flex items-center justify-center text-xs font-bold text-teal-700 flex-shrink-0">
+                        {p.surname?.[0] || '?'}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-slate-800 truncate">{p.full_name}</p>
+                        <p className="text-xs text-slate-400 truncate">{p.email} · {p.linked_students} student{p.linked_students !== '1' ? 's' : ''} linked</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {searchQ && !searching && searchResults.length === 0 && (
+                <p className="text-xs text-slate-400 text-center py-2">No existing guardians found for "{searchQ}"</p>
+              )}
+            </>
+          )}
+
+          {/* Show selected guardian with X to clear */}
+          {g.link_parent_id && (
+            <div className="flex items-center justify-between gap-2 p-2.5 bg-teal-50 border border-teal-200 rounded-lg">
+              <span className="text-xs text-teal-700 font-medium">✓ Linked: {formatName(g)}</span>
+              <button type="button"
+                onClick={() => {
+                  onChange(index, { ...g,
+                    link_parent_id: null, surname: '', first_name: '', middle_name: '',
+                    email: '', phone: '', home_address: ''
+                  })
+                  setSearchQ('')
+                  setResults([])
+                }}
+                className="p-1 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
+                title="Remove selected guardian">
+                <X size={13}/>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {(mode === 'new' || g.link_parent_id) && (
+      <div className={clsx('grid grid-cols-2 gap-2', g.link_parent_id && 'opacity-75')}>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Surname *</label>
-          <input className="input text-sm py-2" placeholder="Santos"
-            value={g.surname} onChange={e => set('surname', e.target.value)} onBlur={e => set('surname', titleCase(e.target.value))} required/>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Surname {!g.link_parent_id && '*'}</label>
+          <input className={clsx('input text-sm py-2', g.link_parent_id && 'bg-slate-100 cursor-not-allowed')}
+            placeholder="Santos" value={g.surname}
+            onChange={e => !g.link_parent_id && set('surname', e.target.value)}
+            onBlur={e => !g.link_parent_id && set('surname', titleCase(e.target.value))}
+            readOnly={!!g.link_parent_id} required={!g.link_parent_id}/>
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">First Name *</label>
-          <input className="input text-sm py-2" placeholder="Maria"
-            value={g.first_name} onChange={e => set('first_name', e.target.value)} onBlur={e => set('first_name', titleCase(e.target.value))} required/>
+          <label className="block text-xs font-medium text-slate-600 mb-1">First Name {!g.link_parent_id && '*'}</label>
+          <input className={clsx('input text-sm py-2', g.link_parent_id && 'bg-slate-100 cursor-not-allowed')}
+            placeholder="Maria" value={g.first_name}
+            onChange={e => !g.link_parent_id && set('first_name', e.target.value)}
+            onBlur={e => !g.link_parent_id && set('first_name', titleCase(e.target.value))}
+            readOnly={!!g.link_parent_id} required={!g.link_parent_id}/>
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">Middle Name</label>
-          <input className="input text-sm py-2" placeholder="Optional"
-            value={g.middle_name} onChange={e => set('middle_name', e.target.value)} onBlur={e => set('middle_name', titleCase(e.target.value))}/>
+          <input className={clsx('input text-sm py-2', g.link_parent_id && 'bg-slate-100 cursor-not-allowed')}
+            placeholder="Optional" value={g.middle_name}
+            onChange={e => !g.link_parent_id && set('middle_name', e.target.value)}
+            onBlur={e => !g.link_parent_id && set('middle_name', titleCase(e.target.value))}
+            readOnly={!!g.link_parent_id}/>
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">Relationship *</label>
@@ -62,24 +189,40 @@ function GuardianRow({ g, index, onChange, onRemove }) {
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Email</label>
-          <input className="input text-sm py-2" type="email" placeholder="parent@email.com"
-            value={g.email} onChange={e => set('email', e.target.value)}/>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            Email{g.create_account && !g.link_parent_id ? ' *' : ''}
+          </label>
+          <input className={clsx('input text-sm py-2', g.link_parent_id && 'bg-slate-100 cursor-not-allowed')}
+            type="email"
+            placeholder={g.create_account && !g.link_parent_id ? 'Required for portal account' : 'parent@email.com'}
+            value={g.email}
+            onChange={e => !g.link_parent_id && set('email', e.target.value)}
+            required={g.create_account && !g.link_parent_id}
+            readOnly={!!g.link_parent_id}/>
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Phone *</label>
-          <PhoneInput className="input text-sm py-2 pr-10"
-            value={g.phone} onChange={v => set('phone', v)} required/>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Phone {!g.link_parent_id && '*'}</label>
+          <PhoneInput className={clsx('input text-sm py-2 pr-10', g.link_parent_id && 'bg-slate-100 cursor-not-allowed')}
+            value={g.phone} onChange={v => !g.link_parent_id && set('phone', v)}
+            required={!g.link_parent_id}/>
         </div>
         <div className="col-span-2">
-          <label className="block text-xs font-medium text-slate-600 mb-1">Home Address *</label>
-          <textarea className="input text-sm resize-none min-h-14" placeholder="House No., Street, Barangay, Municipality/City, Province"
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            Home Address {!g.link_parent_id && '*'}
+            {g.link_parent_id && !g.home_address && (
+              <span className="text-amber-500 font-normal ml-1">(not on file for this parent)</span>
+            )}
+          </label>
+          <textarea className={clsx('input text-sm resize-none min-h-14', g.link_parent_id && !g.home_address ? '' : g.link_parent_id ? 'bg-slate-100 cursor-not-allowed' : '')}
+            placeholder="House No., Street, Barangay, Municipality/City, Province"
             value={g.home_address}
             onChange={e => set('home_address', e.target.value)}
             onBlur={e => set('home_address', e.target.value.trim())}
+            readOnly={!!(g.link_parent_id && g.home_address)}
             required/>
         </div>
       </div>
+      )}{/* end link_parent_id / new mode fields */}
       <div className="flex flex-wrap gap-4 pt-1">
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" className="rounded" checked={g.is_authorized_pickup}
@@ -91,13 +234,20 @@ function GuardianRow({ g, index, onChange, onRemove }) {
             onChange={e => set('is_emergency_contact', e.target.checked)}/>
           <span className="text-xs text-slate-600 font-medium">Emergency contact</span>
         </label>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" className="rounded" checked={g.create_account}
-            onChange={e => set('create_account', e.target.checked)}/>
-          <span className="text-xs text-slate-600 font-medium">Create parent portal account</span>
-        </label>
+        {!g.link_parent_id && (
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" className="rounded" checked={g.create_account}
+              onChange={e => set('create_account', e.target.checked)}/>
+            <span className="text-xs text-slate-600 font-medium">Create parent portal account</span>
+          </label>
+        )}
+        {g.link_parent_id && (
+          <span className="flex items-center gap-1.5 text-xs text-blue-600 font-medium bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200">
+            ✓ Has parent portal account
+          </span>
+        )}
       </div>
-      {g.create_account && (
+      {g.create_account && !g.link_parent_id && (
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">Account Password *</label>
           <div className="relative">

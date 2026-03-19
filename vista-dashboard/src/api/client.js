@@ -20,26 +20,40 @@ api.interceptors.response.use(
   async err => {
     const original = err.config
 
-    // Auto-refresh on 401
+    // Auto-refresh on 401 — but only if we're not already on the login page
+    // and not retrying, to avoid infinite redirect loops
     if (err.response?.status === 401 && !original._retry) {
       original._retry = true
+
+      // Don't redirect if the failed request WAS the login or refresh call itself
+      const isAuthCall = original.url?.includes('/auth/login') ||
+                         original.url?.includes('/auth/refresh')
+      if (isAuthCall) return Promise.reject(err)
+
       const refreshToken = localStorage.getItem('refreshToken')
       if (refreshToken) {
         try {
           const { data } = await axios.post('/api/auth/refresh', { refreshToken })
           localStorage.setItem('accessToken', data.accessToken)
           original.headers.Authorization = `Bearer ${data.accessToken}`
-          return api(original)
+          return api(original)    // Retry original request with new token
         } catch {
+          // Refresh failed — session truly expired, log out cleanly
           localStorage.clear()
-          window.location.href = '/login'
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login'
+          }
         }
       } else {
-        window.location.href = '/login'
+        // No refresh token at all — only redirect if not already on login
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login'
+        }
       }
     }
 
     const msg = err.response?.data?.error || 'Something went wrong.'
+    // Only show toast for non-401 errors (401 is handled silently above)
     if (err.response?.status !== 401) toast.error(msg)
     return Promise.reject(err)
   }
@@ -61,6 +75,7 @@ export const studentApi = {
   update:         (id, d)  => api.put(`/students/${id}`, d),
   remove:         (id)     => api.delete(`/students/${id}`),
   generateQR:     (id, m)  => api.post(`/students/${id}/generate-qr`, { expiresInMinutes: m }),
+  searchParents:  (q)       => api.get('/students/parents/search', { params: { q } }),
   addGuardian:    (id, d)   => api.post(`/students/${id}/guardians`, d),
   updateGuardian: (id, gid, d) => api.put(`/students/${id}/guardians/${gid}`, d),
   removeGuardian: (id, gid) => api.delete(`/students/${id}/guardians/${gid}`),

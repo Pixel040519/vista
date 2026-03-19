@@ -37,7 +37,8 @@ const studentSchema = Joi.object({
     is_emergency_contact:  Joi.boolean().default(false),
     create_account:        Joi.boolean().default(false),
     password:              Joi.string().min(8).optional().allow(''),
-    home_address:          Joi.string().trim().min(1).required(),
+    home_address:          Joi.string().trim().optional().allow(''),
+    link_parent_id:        Joi.string().uuid().optional().allow(null),
   })).optional()
 })
 
@@ -111,6 +112,29 @@ const insertGuardian = async (client, studentId, g) => {
   const { surname, first_name, middle_name } = normaliseName(g)
   let parentId = null
 
+  // Priority 1: link to existing parent account directly
+  if (g.link_parent_id) {
+    parentId = g.link_parent_id
+    // Pull contact info from the existing user account
+    const existing = await client.query(
+      'SELECT surname, first_name, middle_name, email, phone, home_address FROM users WHERE id=$1',
+      [g.link_parent_id]
+    )
+    if (existing.rows.length) {
+      const u = existing.rows[0]
+      await client.query(
+        `INSERT INTO parent_student
+           (parent_id, student_id, surname, first_name, middle_name, email, phone, relationship, is_authorized_pickup, is_emergency_contact, home_address)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT DO NOTHING`,
+        [parentId, studentId, u.surname, u.first_name, u.middle_name,
+         u.email, u.phone, g.relationship,
+         g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, u.home_address || g.home_address || null]
+      )
+      return
+    }
+  }
+
   if (g.create_account && g.email && g.password) {
     const bcrypt = require('bcryptjs')
     const hash   = await bcrypt.hash(g.password, await bcrypt.genSalt(12))
@@ -118,9 +142,9 @@ const insertGuardian = async (client, studentId, g) => {
     parentId = exist.rows.length
       ? exist.rows[0].id
       : (await client.query(
-          `INSERT INTO users (email, password_hash, surname, first_name, middle_name, role, phone)
-           VALUES ($1,$2,$3,$4,$5,'parent',$6) RETURNING id`,
-          [g.email, hash, surname, first_name, middle_name || null, g.phone || null]
+          `INSERT INTO users (email, password_hash, surname, first_name, middle_name, role, phone, home_address)
+           VALUES ($1,$2,$3,$4,$5,'parent',$6,$7) RETURNING id`,
+          [g.email, hash, surname, first_name, middle_name || null, g.phone || null, g.home_address || null]
         )).rows[0].id
   } else if (g.email) {
     const found = await client.query('SELECT id FROM users WHERE email=$1 AND role=$2', [g.email,'parent'])
@@ -136,6 +160,30 @@ const insertGuardian = async (client, studentId, g) => {
      g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, g.home_address || null]
   )
 }
+
+// GET /api/students/parents/search?q=juan — search existing parent accounts
+router.get('/parents/search', authorize('admin'), async (req, res, next) => {
+  try {
+    const { q = '' } = req.query
+    if (!q.trim()) return res.json({ parents: [] })
+
+    const result = await query(
+      `SELECT u.id, u.surname, u.first_name, u.middle_name, u.full_name,
+              u.email, u.phone,
+              COALESCE(u.home_address, MAX(ps.home_address)) AS home_address,
+              COUNT(ps.student_id) AS linked_students
+       FROM users u
+       LEFT JOIN parent_student ps ON ps.parent_id = u.id
+       WHERE u.role = 'parent'
+         AND (u.full_name ILIKE $1 OR u.email ILIKE $1 OR u.surname ILIKE $1 OR u.first_name ILIKE $1)
+       GROUP BY u.id
+       ORDER BY u.surname, u.first_name
+       LIMIT 10`,
+      [`%${q.trim()}%`]
+    )
+    res.json({ parents: result.rows })
+  } catch (err) { next(err) }
+})
 
 // GET /api/students
 router.get('/', async (req, res, next) => {
