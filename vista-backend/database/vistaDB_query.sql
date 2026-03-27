@@ -529,3 +529,72 @@ ALTER TABLE users
 
 ALTER TABLE parent_student
   ADD COLUMN IF NOT EXISTS is_emergency_contact BOOLEAN NOT NULL DEFAULT FALSE;
+
+
+
+-- ============================================================
+-- VISTA Migration: School Years table
+-- Run once: psql vista_db < database/migration_school_years.sql
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS school_years (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    label       VARCHAR(20)  NOT NULL UNIQUE,  -- e.g. "2024-2025"
+    is_active   BOOLEAN      NOT NULL DEFAULT FALSE,
+    is_upcoming BOOLEAN      NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMP    DEFAULT NOW(),
+    updated_at  TIMESTAMP    DEFAULT NOW()
+);
+
+-- Seed the active school year
+INSERT INTO school_years (label, is_active)
+VALUES ('2024-2025', TRUE)
+ON CONFLICT (label) DO NOTHING;
+
+
+
+
+-- ============================================================
+-- VISTA Migration: School year context for subjects & sections
+-- Run once: psql vista_db < database/migration_sy_curriculum.sql
+-- ============================================================
+
+-- Add dates to school_years
+ALTER TABLE school_years
+  ADD COLUMN IF NOT EXISTS start_date  DATE,
+  ADD COLUMN IF NOT EXISTS end_date    DATE,
+  ADD COLUMN IF NOT EXISTS is_upcoming BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Add school_year_id to subjects
+ALTER TABLE subjects
+  ADD COLUMN IF NOT EXISTS school_year_id UUID REFERENCES school_years(id) ON DELETE CASCADE;
+
+-- Add school_year_id to sections
+ALTER TABLE sections
+  ADD COLUMN IF NOT EXISTS school_year_id UUID REFERENCES school_years(id) ON DELETE CASCADE;
+
+-- Back-fill existing subjects/sections to the current school year
+UPDATE subjects
+SET school_year_id = (SELECT id FROM school_years WHERE is_active = TRUE LIMIT 1)
+WHERE school_year_id IS NULL;
+
+UPDATE sections
+SET school_year_id = (SELECT id FROM school_years WHERE is_active = TRUE LIMIT 1)
+WHERE school_year_id IS NULL;
+
+-- Make school_year_id required going forward
+ALTER TABLE subjects ALTER COLUMN school_year_id SET NOT NULL;
+ALTER TABLE sections ALTER COLUMN school_year_id SET NOT NULL;
+
+-- Drop old unique constraints and add new ones including school_year_id
+ALTER TABLE subjects DROP CONSTRAINT IF EXISTS subjects_grade_name_unique;
+ALTER TABLE subjects ADD CONSTRAINT subjects_sy_grade_name_unique
+  UNIQUE(school_year_id, grade_level, name);
+
+ALTER TABLE sections DROP CONSTRAINT IF EXISTS sections_grade_level_name_key;
+ALTER TABLE sections ADD CONSTRAINT sections_sy_grade_name_unique
+  UNIQUE(school_year_id, grade_level, name);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_subjects_sy ON subjects(school_year_id);
+CREATE INDEX IF NOT EXISTS idx_sections_sy ON sections(school_year_id);

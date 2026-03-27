@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+vista-backend/fastapi-ai/venv/
+
+# Environment
+.env
+*.env.local
+
+# Build output
+vista-dashboard/dist/
+
+# Claude Code
+CLAUDE.md
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*

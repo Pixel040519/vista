@@ -137,16 +137,21 @@ export const accountApi = {
 
 // ── Curriculum (Subjects & Sections) ─────────────────────────
 export const curriculumApi = {
-  // Subjects
-  getSubjects:        (params) => api.get('/curriculum/subjects', { params }),
-  getSubjectsGrouped: ()       => api.get('/curriculum/subjects/grouped'),
-  createSubject:      (data)   => api.post('/curriculum/subjects', data),
-  updateSubject:      (id, d)  => api.put(`/curriculum/subjects/${id}`, d),
-  deleteSubject:      (id)     => api.delete(`/curriculum/subjects/${id}`),
-  // Sections
-  getSections:        (params) => api.get('/curriculum/sections', { params }),
-  getSectionsGrouped: ()       => api.get('/curriculum/sections/grouped'),
-  createSection:      (data)   => api.post('/curriculum/sections', data),
-  updateSection:      (id, d)  => api.put(`/curriculum/sections/${id}`, d),
-  deleteSection:      (id)     => api.delete(`/curriculum/sections/${id}`),
+  // School Years
+  getSchoolYears:     ()          => api.get('/curriculum/school-years'),
+  createSchoolYear:   (data)      => api.post('/curriculum/school-years', data),
+  updateSchoolYear:   (id, d)     => api.put(`/curriculum/school-years/${id}`, d),
+  deleteSchoolYear:   (id)        => api.delete(`/curriculum/school-years/${id}`),
+  // Subjects (sy_id filters by school year)
+  getSubjects:        (params)    => api.get('/curriculum/subjects', { params }),
+  getSubjectsGrouped: (sy_id)     => api.get('/curriculum/subjects/grouped', { params: { sy_id } }),
+  createSubject:      (data)      => api.post('/curriculum/subjects', data),
+  updateSubject:      (id, d)     => api.put(`/curriculum/subjects/${id}`, d),
+  deleteSubject:      (id)        => api.delete(`/curriculum/subjects/${id}`),
+  // Sections (sy_id filters by school year)
+  getSections:        (params)    => api.get('/curriculum/sections', { params }),
+  getSectionsGrouped: (sy_id)     => api.get('/curriculum/sections/grouped', { params: { sy_id } }),
+  createSection:      (data)      => api.post('/curriculum/sections', data),
+  updateSection:      (id, d)     => api.put(`/curriculum/sections/${id}`, d),
+  deleteSection:      (id)        => api.delete(`/curriculum/sections/${id}`),
 }
