@@ -214,6 +214,7 @@ export default function Dashboard() {
                   <p className="text-xs text-slate-400 mt-0.5">No high-risk alerts at this time</p>
                 </div>
               ) : (
+                <div className="overflow-x-auto">
                 <table className="table-base">
                   <thead>
                     <tr>
@@ -241,6 +242,7 @@ export default function Dashboard() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
             </div>
           </div>

@@ -38,7 +38,7 @@ const MOCK_AUTH = {
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <AuthContext.Provider value={MOCK_AUTH}>
-      <BrowserRouter>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Toaster position="top-right" toastOptions={{
           style: { fontFamily: 'DM Sans, sans-serif', fontSize: '14px', borderRadius: '12px' }
         }} />

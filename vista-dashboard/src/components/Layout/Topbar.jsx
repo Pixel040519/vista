@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
-import { Bell, Search } from 'lucide-react'
+import { Bell, Menu } from 'lucide-react'
 import { notificationApi } from '../../api/client'
 import { format } from 'date-fns'
 
@@ -17,7 +17,7 @@ const routeLabels = {
   '/curriculum': 'Curriculum Management',
 }
 
-export default function Topbar() {
+export default function Topbar({ onMenuToggle }) {
   const location = useLocation()
   const [notifications, setNotifications] = useState([])
   const [showNotifs, setShowNotifs] = useState(false)
@@ -33,11 +33,19 @@ export default function Topbar() {
   }, [])
 
   return (
-    <header className="h-16 bg-white border-b border-slate-100 flex items-center justify-between px-6 sticky top-0 z-20">
-      {/* Page title */}
-      <div>
-        <h2 className="text-slate-900 font-semibold text-base">{label}</h2>
-        <p className="text-slate-400 text-xs">{format(new Date(), 'EEEE, MMMM d, yyyy')}</p>
+    <header className="h-16 bg-white border-b border-slate-100 flex items-center justify-between px-4 sm:px-6 sticky top-0 z-20">
+      {/* Left side: hamburger + page title */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onMenuToggle}
+          className="lg:hidden p-2 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors"
+        >
+          <Menu size={20} />
+        </button>
+        <div>
+          <h2 className="text-slate-900 font-semibold text-base">{label}</h2>
+          <p className="text-slate-400 text-xs hidden sm:block">{format(new Date(), 'EEEE, MMMM d, yyyy')}</p>
+        </div>
       </div>
 
       {/* Right side */}
@@ -55,7 +63,7 @@ export default function Topbar() {
           </button>
 
           {showNotifs && (
-            <div className="absolute right-0 top-full mt-2 w-80 card shadow-xl z-50 overflow-hidden">
+            <div className="absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-80 max-w-sm card shadow-xl z-50 overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-slate-800">Notifications</h3>
                 {unread > 0 && (

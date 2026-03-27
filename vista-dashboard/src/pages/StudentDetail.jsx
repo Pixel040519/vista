@@ -94,9 +94,9 @@ export default function StudentDetail() {
           <ArrowLeft size={18} />
         </button>
         <div className="flex-1 flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-teal-100 flex items-center justify-center">
-              <span className="text-teal-700 font-bold text-xl">{nameInitial(student)}</span>
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-2xl bg-teal-100 flex items-center justify-center flex-shrink-0">
+              <span className="text-teal-700 font-bold text-lg sm:text-xl">{nameInitial(student)}</span>
             </div>
             <div>
               <h1 className="text-xl font-bold text-slate-900">{formatName(student)}</h1>
@@ -120,8 +120,8 @@ export default function StudentDetail() {
 
       {/* QR code display */}
       {qr && (
-        <div className="card p-5 flex items-center gap-5">
-          <img src={qr.qrImage} alt="SecurePass QR" className="w-28 h-28 rounded-xl" />
+        <div className="card p-5 flex flex-col sm:flex-row items-center gap-5">
+          <img src={qr.qrImage} alt="SecurePass QR" className="w-28 h-28 rounded-xl flex-shrink-0" />
           <div>
             <p className="font-semibold text-slate-800">SecurePass QR Generated</p>
             <p className="text-sm text-slate-500 mt-1">Show this to the guardian during dismissal.</p>
@@ -133,12 +133,12 @@ export default function StudentDetail() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit flex-wrap">
+      <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
         {TABS.map(t => (
           <button
             key={t}
             onClick={() => handleTabChange(t)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
               tab === t ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
@@ -155,10 +155,10 @@ export default function StudentDetail() {
           <div className="card p-5 space-y-4">
             <h3 className="text-sm font-semibold text-slate-800">Student Information</h3>
             {[
+              ['LRN', student.lrn],
               ['Surname', student.surname],
               ['First Name', student.first_name],
               ['Middle Name', student.middle_name || '—'],
-              ['LRN', student.lrn],
               ['Date of Birth', student.date_of_birth ? format(new Date(student.date_of_birth), 'MMM d, yyyy') : '—'],
               ['Age', calcAge(student.date_of_birth) !== null ? `${calcAge(student.date_of_birth)} years old` : '—'],
               ['Gender', student.gender],
@@ -258,6 +258,7 @@ export default function StudentDetail() {
           {grades.length === 0 ? (
             <div className="p-8 text-center text-sm text-slate-400">No grade records found.</div>
           ) : (
+            <div className="overflow-x-auto">
             <table className="table-base">
               <thead>
                 <tr>
@@ -286,6 +287,7 @@ export default function StudentDetail() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       )}
@@ -295,6 +297,7 @@ export default function StudentDetail() {
           {attendance.length === 0 ? (
             <div className="p-8 text-center text-sm text-slate-400">No attendance records found.</div>
           ) : (
+            <div className="overflow-x-auto">
             <table className="table-base">
               <thead><tr><th>Date</th><th>Status</th><th>Remarks</th><th>Recorded By</th></tr></thead>
               <tbody>
@@ -315,6 +318,7 @@ export default function StudentDetail() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       )}

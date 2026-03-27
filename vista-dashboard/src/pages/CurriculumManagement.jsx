@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Plus, Pencil, Trash2, BookOpen, LayoutGrid,
   ChevronDown, ChevronRight, X, Check, CalendarDays,
-  ChevronDown as ChevDown, Copy
+  ChevronDown as ChevDown, Copy, SlidersHorizontal
 } from 'lucide-react'
 import { curriculumApi } from '../api/client'
 import { LoadingSpinner, Modal } from '../components/UI'
+import GradingConfigModal from '../components/GradingConfigModal'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
@@ -46,7 +47,7 @@ const GRADE_COLORS = {
 }
 
 // ── Inline editable item ──────────────────────────────────────
-function EditableItem({ item, onSave, onDelete, type }) {
+function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
   const [editing, setEditing]   = useState(false)
   const [name, setName]         = useState(item.name)
   const [desc, setDesc]         = useState(item.description || '')
@@ -106,12 +107,24 @@ function EditableItem({ item, onSave, onDelete, type }) {
   return (
     <div className="group flex items-center justify-between px-3 py-2 rounded-lg hover:bg-white hover:shadow-sm transition-all border border-transparent hover:border-slate-200">
       <div className="min-w-0">
-        <p className="text-sm font-medium text-slate-700 truncate">{item.name}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-sm font-medium text-slate-700 truncate">{item.name}</p>
+          {type === 'subject' && item.has_grading && (
+            <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-teal-400" title="Grading structure configured" />
+          )}
+        </div>
         {type === 'subject' && item.description && (
           <p className="text-xs text-slate-400 truncate mt-0.5">{item.description}</p>
         )}
       </div>
       <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-2">
+        {type === 'subject' && onGradingConfig && (
+          <button onClick={() => onGradingConfig(item)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-teal-500 hover:bg-teal-50 transition-colors"
+            title="Configure grading structure">
+            <SlidersHorizontal size={12}/>
+          </button>
+        )}
         <button onClick={() => setEditing(true)}
           className="p-1.5 rounded-lg text-slate-400 hover:text-amber-500 hover:bg-amber-50 transition-colors">
           <Pencil size={12}/>
@@ -170,7 +183,7 @@ function AddItemForm({ gradeLevel, type, syId, onAdd, onClose }) {
 }
 
 // ── Grade Level Card ──────────────────────────────────────────
-function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete }) {
+function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradingConfig }) {
   const [open, setOpen]     = useState(true)
   const [adding, setAdding] = useState(false)
   const colors = GRADE_COLORS[grade] || GRADE_COLORS['Grade 1']
@@ -203,7 +216,7 @@ function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete }) {
             </p>
           )}
           {items.map(item => (
-            <EditableItem key={item.id} item={item} type={type} onSave={onSave} onDelete={onDelete}/>
+            <EditableItem key={item.id} item={item} type={type} onSave={onSave} onDelete={onDelete} onGradingConfig={onGradingConfig}/>
           ))}
           {adding && (
             <AddItemForm gradeLevel={grade} type={type} syId={syId} onAdd={onAdd} onClose={() => setAdding(false)}/>
@@ -449,6 +462,7 @@ export default function CurriculumManagement() {
   const [loadingContent, setLoadingContent] = useState(false)
   const [showCreate, setShowCreate]     = useState(false)
   const [editSY, setEditSY]             = useState(null)
+  const [gradingSubject, setGradingSubject] = useState(null)
 
   // ── Load school years ──────────────────────────────────────
   const fetchSchoolYears = useCallback(async () => {
@@ -639,8 +653,8 @@ export default function CurriculumManagement() {
       {/* Hint */}
       <p className="text-xs text-slate-400">
         Click the <span className="font-semibold text-slate-500">✏️</span> icon to edit an item inline,
+        the <span className="font-semibold text-slate-500">sliders</span> icon to configure grading weights,
         or click <span className="font-semibold text-slate-500">+ Add</span> on any grade card to add a new one.
-        Changes take effect immediately.
       </p>
 
       {/* Content */}
@@ -661,7 +675,8 @@ export default function CurriculumManagement() {
               {GRADE_LEVELS.map(grade => (
                 <GradeCard key={grade} grade={grade}
                   items={subjects[grade] || []} type="subject" syId={selectedSY.id}
-                  onAdd={handleAddSubject} onSave={handleUpdateSubject} onDelete={handleDeleteSubject}/>
+                  onAdd={handleAddSubject} onSave={handleUpdateSubject} onDelete={handleDeleteSubject}
+                  onGradingConfig={setGradingSubject}/>
               ))}
             </div>
           )}
@@ -699,6 +714,14 @@ export default function CurriculumManagement() {
           />
         )}
       </Modal>
+
+      {/* ── Grading Structure Modal ───────────────────── */}
+      <GradingConfigModal
+        open={!!gradingSubject}
+        onClose={() => setGradingSubject(null)}
+        subject={gradingSubject}
+        onSaved={fetchContent}
+      />
     </div>
   )
 }

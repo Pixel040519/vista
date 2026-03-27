@@ -59,7 +59,7 @@ export function Attendance() {
           <h1 className="page-title">Attendance</h1>
           <p className="page-subtitle">Mark and track daily attendance</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <input type="date" className="input w-auto" value={date} onChange={e => setDate(e.target.value)} />
           <button onClick={handleSave} disabled={saving} className="btn-primary">
             {saving ? 'Saving...' : 'Save Attendance'}
@@ -76,6 +76,7 @@ export function Attendance() {
 
       <div className="card overflow-hidden">
         {loading ? <LoadingSpinner /> : (
+          <div className="overflow-x-auto">
           <table className="table-base">
             <thead>
               <tr>
@@ -120,6 +121,7 @@ export function Attendance() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>
@@ -184,6 +186,7 @@ export function Grades() {
           {gradeData.grades.length === 0 ? (
             <EmptyState icon={BookOpen} title="No grades recorded" description="Grades will appear here once submitted by teachers." />
           ) : (
+            <div className="overflow-x-auto">
             <table className="table-base">
               <thead>
                 <tr><th>Subject</th><th>Quarter</th><th>Grade</th><th>Score</th><th>School Year</th></tr>
@@ -200,6 +203,7 @@ export function Grades() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       )}
@@ -272,7 +276,7 @@ export function Behavior() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="page-title">Behavior Monitoring</h1>
           <p className="page-subtitle">Log and track student behavioral observations</p>
@@ -349,7 +353,7 @@ export function Behavior() {
               </div>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">Category</label>
               <select className="input" value={form.category} onChange={e => setForm(p => ({ ...p, category: e.target.value }))}>
@@ -482,6 +486,7 @@ export function SecurePass() {
           {logs.length === 0 ? (
             <div className="p-8 text-center text-sm text-slate-400">No dismissals recorded today.</div>
           ) : (
+            <div className="overflow-x-auto">
             <table className="table-base">
               <thead><tr><th>Student</th><th>Guardian</th><th>Status</th><th>Time</th></tr></thead>
               <tbody>
@@ -501,6 +506,7 @@ export function SecurePass() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>
@@ -540,7 +546,7 @@ export function RiskOverview() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="page-title">Risk Overview</h1>
           <p className="page-subtitle">AI-generated student risk assessment</p>
@@ -551,7 +557,7 @@ export function RiskOverview() {
       </div>
 
       {/* Summary */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
           { label: 'Stable',         count: risk.stable,        color: 'text-emerald-700 bg-emerald-50', dot: 'bg-emerald-500' },
           { label: 'Moderate Risk',  count: risk.moderate_risk, color: 'text-amber-700 bg-amber-50',     dot: 'bg-amber-500'   },
@@ -577,6 +583,7 @@ export function RiskOverview() {
         {loading ? <LoadingSpinner /> : alerts.length === 0 ? (
           <EmptyState icon={AlertTriangle} title="No high-risk students" description="All students are currently stable." />
         ) : (
+          <div className="overflow-x-auto">
           <table className="table-base">
             <thead><tr><th>Student</th><th>Grade</th><th>Risk Score</th><th>Last Assessed</th></tr></thead>
             <tbody>
@@ -597,6 +604,7 @@ export function RiskOverview() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>
@@ -642,7 +650,7 @@ export function Announcements() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="page-title">Announcements</h1>
           <p className="page-subtitle">School-wide notices and updates</p>

@@ -46,7 +46,7 @@ function AssignmentRow({ row, index, onChange, onRemove }) {
   }
 
   return (
-    <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 items-center">
+    <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto] gap-2 items-center">
       {/* Grade Level */}
       <select
         className="input text-xs py-2"

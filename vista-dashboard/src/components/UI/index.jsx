@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
 
@@ -102,15 +103,16 @@ export function EmptyState({ icon: Icon, title, description, action }) {
 export function Modal({ open, onClose, title, children, size = 'md', selfScroll = false }) {
   if (!open) return null
   const widths = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' }
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div className={clsx(
-        'relative w-full card shadow-2xl animate-slide-up flex flex-col max-h-[84vh]',
+        'relative w-full card shadow-2xl animate-slide-up flex flex-col max-h-[90vh] sm:max-h-[84vh]',
+        'rounded-b-none sm:rounded-2xl',
         widths[size]
       )}>
         {/* Fixed header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-100 flex-shrink-0">
           <h3 className="text-base font-semibold text-slate-900">{title}</h3>
           <button
             onClick={onClose}
@@ -119,11 +121,12 @@ export function Modal({ open, onClose, title, children, size = 'md', selfScroll 
         </div>
         {/* Body — selfScroll lets children manage their own overflow */}
         <div className={clsx(
-          'px-6 py-5 flex flex-col flex-1 min-h-0',
+          'px-4 sm:px-6 py-5 flex flex-col flex-1 min-h-0',
           selfScroll ? 'overflow-hidden' : 'overflow-y-auto'
         )}>{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 

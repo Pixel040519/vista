@@ -112,6 +112,43 @@ router.post('/school-years', authorize('admin'), async (req, res, next) => {
            ON CONFLICT DO NOTHING`,
           [newSY.id, value.copy_from_id]
         )
+
+        // Copy grading structures: fetch old categories, insert as new, then copy children
+        const oldCats = await client.query(
+          `SELECT gs.id AS old_id, gs.name, gs.weight, gs.sort_order,
+                  old_sub.name AS sub_name, old_sub.grade_level
+           FROM grading_structure gs
+           JOIN subjects old_sub ON old_sub.id = gs.subject_id
+           WHERE old_sub.school_year_id = $1
+             AND gs.category_id IS NULL AND gs.is_active = TRUE
+           ORDER BY gs.sort_order`,
+          [value.copy_from_id]
+        )
+        for (const cat of oldCats.rows) {
+          // Find the matching new subject
+          const newSub = await client.query(
+            `SELECT id FROM subjects WHERE school_year_id=$1 AND name=$2 AND grade_level=$3 AND is_active=TRUE LIMIT 1`,
+            [newSY.id, cat.sub_name, cat.grade_level]
+          )
+          if (!newSub.rows.length) continue
+          const newSubId = newSub.rows[0].id
+
+          // Insert the category
+          const newCat = await client.query(
+            `INSERT INTO grading_structure (subject_id, category_id, name, weight, sort_order)
+             VALUES ($1, NULL, $2, $3, $4) RETURNING id`,
+            [newSubId, cat.name, cat.weight, cat.sort_order]
+          )
+          // Copy child components
+          await client.query(
+            `INSERT INTO grading_structure (subject_id, category_id, name, weight, sort_order)
+             SELECT $1, $2, gs.name, gs.weight, gs.sort_order
+             FROM grading_structure gs
+             WHERE gs.category_id = $3 AND gs.is_active = TRUE
+             ORDER BY gs.sort_order`,
+            [newSubId, newCat.rows[0].id, cat.old_id]
+          )
+        }
       }
 
       return newSY
@@ -216,7 +253,8 @@ router.get('/subjects', async (req, res, next) => {
     if (req.query.grade_level) { params.push(req.query.grade_level); conditions.push(`grade_level=$${params.length}`) }
 
     const result = await query(
-      `SELECT id, name, grade_level, description, created_at
+      `SELECT id, name, grade_level, description, created_at,
+              EXISTS(SELECT 1 FROM grading_structure gs WHERE gs.subject_id=subjects.id AND gs.is_active=TRUE) AS has_grading
        FROM subjects WHERE ${conditions.join(' AND ')}
        ORDER BY ${GRADE_ORDER}, name`, params
     )
@@ -228,7 +266,8 @@ router.get('/subjects/grouped', async (req, res, next) => {
   try {
     const sy_id = await resolveSYId(req.query.sy_id)
     const result = await query(
-      `SELECT id, name, grade_level, description
+      `SELECT id, name, grade_level, description,
+              EXISTS(SELECT 1 FROM grading_structure gs WHERE gs.subject_id=subjects.id AND gs.is_active=TRUE) AS has_grading
        FROM subjects WHERE school_year_id=$1 AND is_active=TRUE
        ORDER BY ${GRADE_ORDER}, name`, [sy_id]
     )
@@ -406,6 +445,125 @@ router.delete('/sections/:id', authorize('admin'), async (req, res, next) => {
     }
     await query('UPDATE sections SET is_active=FALSE, updated_at=NOW() WHERE id=$1', [req.params.id])
     res.json({ message: `Section "${sec.rows[0].name}" removed from ${sec.rows[0].grade_level}.` })
+  } catch (err) { next(err) }
+})
+
+// ════════════════════════════════════════════════════════════
+// GRADING STRUCTURE  (per subject)
+// ════════════════════════════════════════════════════════════
+
+router.get('/subjects/:id/grading', async (req, res, next) => {
+  try {
+    const result = await query(
+      `SELECT id, category_id, name, weight, sort_order
+       FROM grading_structure
+       WHERE subject_id=$1 AND is_active=TRUE
+       ORDER BY sort_order, name`,
+      [req.params.id]
+    )
+    // Assemble tree: categories (category_id IS NULL) with nested components
+    const categories = []
+    const catMap = new Map()
+    for (const row of result.rows) {
+      if (!row.category_id) {
+        const cat = { ...row, components: [] }
+        categories.push(cat)
+        catMap.set(row.id, cat)
+      }
+    }
+    for (const row of result.rows) {
+      if (row.category_id && catMap.has(row.category_id)) {
+        const { category_id, ...comp } = row
+        catMap.get(row.category_id).components.push(comp)
+      }
+    }
+    res.json({ categories })
+  } catch (err) { next(err) }
+})
+
+router.put('/subjects/:id/grading', authorize('admin'), async (req, res, next) => {
+  try {
+    // Validate subject exists
+    const sub = await query('SELECT id FROM subjects WHERE id=$1 AND is_active=TRUE', [req.params.id])
+    if (!sub.rows.length) throw new AppError('Subject not found.', 404)
+
+    const catSchema = Joi.object({
+      name:       Joi.string().min(1).max(100).required(),
+      weight:     Joi.number().precision(2).greater(0).max(100).required(),
+      sort_order: Joi.number().integer().min(0).default(0),
+      components: Joi.array().items(Joi.object({
+        name:       Joi.string().min(1).max(100).required(),
+        weight:     Joi.number().precision(2).greater(0).max(100).required(),
+        sort_order: Joi.number().integer().min(0).default(0),
+      })).default([]),
+    })
+    const { error, value } = Joi.object({
+      categories: Joi.array().items(catSchema).min(1).required(),
+    }).validate(req.body)
+    if (error) throw new AppError(error.details[0].message, 422)
+
+    // Validate category weights sum to 100
+    const catTotal = value.categories.reduce((s, c) => s + parseFloat(c.weight), 0)
+    if (Math.abs(catTotal - 100) > 0.01) {
+      throw new AppError(`Category weights must sum to 100% (currently ${catTotal.toFixed(2)}%).`, 422)
+    }
+
+    // Validate component weights within each category sum to category weight
+    for (const cat of value.categories) {
+      if (cat.components.length > 0) {
+        const compTotal = cat.components.reduce((s, c) => s + parseFloat(c.weight), 0)
+        if (Math.abs(compTotal - parseFloat(cat.weight)) > 0.01) {
+          throw new AppError(
+            `Components in "${cat.name}" must sum to ${cat.weight}% (currently ${compTotal.toFixed(2)}%).`, 422
+          )
+        }
+      }
+    }
+
+    const categories = await withTransaction(async (client) => {
+      // Soft-delete existing structure
+      await client.query(
+        `UPDATE grading_structure SET is_active=FALSE, updated_at=NOW() WHERE subject_id=$1 AND is_active=TRUE`,
+        [req.params.id]
+      )
+
+      const result = []
+      for (let i = 0; i < value.categories.length; i++) {
+        const cat = value.categories[i]
+        const catRes = await client.query(
+          `INSERT INTO grading_structure (subject_id, category_id, name, weight, sort_order)
+           VALUES ($1, NULL, $2, $3, $4) RETURNING id, name, weight, sort_order`,
+          [req.params.id, cat.name, cat.weight, cat.sort_order ?? i]
+        )
+        const newCat = { ...catRes.rows[0], components: [] }
+
+        for (let j = 0; j < cat.components.length; j++) {
+          const comp = cat.components[j]
+          const compRes = await client.query(
+            `INSERT INTO grading_structure (subject_id, category_id, name, weight, sort_order)
+             VALUES ($1, $2, $3, $4, $5) RETURNING id, name, weight, sort_order`,
+            [req.params.id, newCat.id, comp.name, comp.weight, comp.sort_order ?? j]
+          )
+          newCat.components.push(compRes.rows[0])
+        }
+        result.push(newCat)
+      }
+      return result
+    })
+
+    res.json({ message: 'Grading structure saved.', categories })
+  } catch (err) { next(err) }
+})
+
+router.delete('/subjects/:id/grading', authorize('admin'), async (req, res, next) => {
+  try {
+    const result = await query(
+      `UPDATE grading_structure SET is_active=FALSE, updated_at=NOW()
+       WHERE subject_id=$1 AND is_active=TRUE RETURNING id`,
+      [req.params.id]
+    )
+    if (!result.rows.length) throw new AppError('No grading structure found for this subject.', 404)
+    res.json({ message: 'Grading structure cleared.' })
   } catch (err) { next(err) }
 })
 

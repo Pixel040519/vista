@@ -598,3 +598,25 @@ ALTER TABLE sections ADD CONSTRAINT sections_sy_grade_name_unique
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_subjects_sy ON subjects(school_year_id);
 CREATE INDEX IF NOT EXISTS idx_sections_sy ON sections(school_year_id);
+
+
+-- ============================================================
+-- VISTA Migration: Grading structure per subject
+-- Allows configuring grading categories (e.g. Written Tasks 30%)
+-- and components (e.g. Quizzes 15%) per subject.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS grading_structure (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    subject_id  UUID NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    category_id UUID REFERENCES grading_structure(id) ON DELETE CASCADE,
+    name        VARCHAR(100) NOT NULL,
+    weight      DECIMAL(5,2) NOT NULL CHECK (weight > 0 AND weight <= 100),
+    sort_order  SMALLINT NOT NULL DEFAULT 0,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMP DEFAULT NOW(),
+    updated_at  TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_grading_structure_subject  ON grading_structure(subject_id);
+CREATE INDEX IF NOT EXISTS idx_grading_structure_category ON grading_structure(category_id);

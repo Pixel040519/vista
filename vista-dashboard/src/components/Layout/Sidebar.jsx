@@ -1,9 +1,9 @@
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import {
   LayoutDashboard, Users, ClipboardCheck, BookOpen,
   Heart, QrCode, AlertTriangle, Megaphone, UserCog,
-  LogOut, GraduationCap, ChevronRight
+  LogOut, GraduationCap, ChevronRight, X
 } from 'lucide-react'
 import clsx from 'clsx'
 import { formatName, nameInitial } from '../../utils/nameHelper'
@@ -36,27 +36,45 @@ const navGroups = [
   }
 ]
 
-export default function Sidebar() {
+export default function Sidebar({ open, onClose }) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
 
   const handleLogout = () => {
     logout()
     navigate('/login')
   }
 
+  // Close sidebar on mobile when navigating
+  const handleNavClick = () => {
+    onClose()
+  }
+
   return (
-    <aside className="fixed inset-y-0 left-0 w-64 bg-navy-900 flex flex-col z-30">
-      {/* Logo */}
+    <aside className={clsx(
+      'fixed inset-y-0 left-0 w-64 bg-navy-900 flex flex-col z-40 transition-transform duration-200 ease-in-out',
+      'lg:translate-x-0',
+      open ? 'translate-x-0' : '-translate-x-full'
+    )}>
+      {/* Logo + mobile close */}
       <div className="px-5 py-6 border-b border-white/10">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-teal-500 flex items-center justify-center shadow-lg shadow-teal-500/30">
-            <GraduationCap size={20} className="text-white" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-teal-500 flex items-center justify-center shadow-lg shadow-teal-500/30">
+              <GraduationCap size={20} className="text-white" />
+            </div>
+            <div>
+              <h1 className="text-white font-bold text-lg leading-none tracking-wide font-sans">VISTA</h1>
+              <p className="text-slate-400 text-xs mt-0.5">Student Monitor</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-white font-bold text-lg leading-none tracking-wide font-sans">VISTA</h1>
-            <p className="text-slate-400 text-xs mt-0.5">Student Monitor</p>
-          </div>
+          <button
+            onClick={onClose}
+            className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+          >
+            <X size={18} />
+          </button>
         </div>
       </div>
 
@@ -79,6 +97,7 @@ export default function Sidebar() {
                     key={item.to}
                     to={item.to}
                     end={item.exact}
+                    onClick={handleNavClick}
                     className={({ isActive }) =>
                       clsx('nav-item', isActive && 'active')
                     }

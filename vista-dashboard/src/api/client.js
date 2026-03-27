@@ -154,4 +154,8 @@ export const curriculumApi = {
   createSection:      (data)      => api.post('/curriculum/sections', data),
   updateSection:      (id, d)     => api.put(`/curriculum/sections/${id}`, d),
   deleteSection:      (id)        => api.delete(`/curriculum/sections/${id}`),
+  // Grading Structure (per subject)
+  getGrading:         (subjectId) => api.get(`/curriculum/subjects/${subjectId}/grading`),
+  saveGrading:        (subjectId, data) => api.put(`/curriculum/subjects/${subjectId}/grading`, data),
+  clearGrading:       (subjectId) => api.delete(`/curriculum/subjects/${subjectId}/grading`),
 }
