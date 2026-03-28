@@ -3,7 +3,7 @@ import { useAuth } from '../../context/AuthContext'
 import {
   LayoutDashboard, Users, ClipboardCheck, BookOpen,
   Heart, QrCode, AlertTriangle, Megaphone, UserCog,
-  LogOut, GraduationCap, ChevronRight, X
+  LogOut, GraduationCap, ChevronRight, X, PenLine
 } from 'lucide-react'
 import clsx from 'clsx'
 import { formatName, nameInitial } from '../../utils/nameHelper'
@@ -20,7 +20,8 @@ const navGroups = [
     items: [
       { to: '/students',    icon: Users,          label: 'Students'   },
       { to: '/attendance',  icon: ClipboardCheck, label: 'Attendance' },
-      { to: '/grades',      icon: BookOpen,       label: 'Grades'     },
+      { to: '/grades',       icon: BookOpen,       label: 'Grades'     },
+      { to: '/score-entry', icon: PenLine,        label: 'Score Entry', roles: ['admin', 'teacher'] },
       { to: '/behavior',    icon: Heart,          label: 'Behavior'   },
     ]
   },
@@ -30,6 +31,11 @@ const navGroups = [
       { to: '/securepass',    icon: QrCode,         label: 'SecurePass QR', roles: ['admin','teacher'] },
       { to: '/risk',          icon: AlertTriangle,  label: 'Risk Overview', roles: ['admin'] },
       { to: '/announcements', icon: Megaphone,      label: 'Announcements'  },
+    ]
+  },
+  {
+    label: 'Administration',
+    items: [
       { to: '/accounts',     icon: UserCog,        label: 'Accounts',      roles: ['admin'] },
       { to: '/curriculum',   icon: GraduationCap,  label: 'Curriculum',    roles: ['admin'] },
     ]

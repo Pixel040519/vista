@@ -6,8 +6,22 @@
   * { box-sizing: border-box; }
 
   body {
-    @apply bg-slate-50 text-slate-800 font-sans;
+    @apply bg-slate-50 text-slate-800 font-sans cursor-default select-none;
     -webkit-font-smoothing: antialiased;
+  }
+
+  input, textarea, [contenteditable="true"] {
+    cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  select {
+    cursor: pointer;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  button, a, label[for], [role="button"] {
+    cursor: pointer;
   }
 
   /*disable the auto display another eye icon in browser*/

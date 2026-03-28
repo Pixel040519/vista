@@ -135,6 +135,16 @@ export const accountApi = {
   deletePermanent:(id)     => api.delete(`/accounts/teachers/${id}/permanent`),
 }
 
+// ── Scores (Score Items & Student Scores) ────────────────────
+export const scoreApi = {
+  getItems:     (params) => api.get('/scores/items', { params }),
+  saveItems:    (data)   => api.post('/scores/items', data),
+  deleteItem:   (id)     => api.delete(`/scores/items/${id}`),
+  getScores:    (params) => api.get('/scores', { params }),
+  saveScores:   (data)   => api.post('/scores', data),
+  getBreakdown: (params) => api.get('/scores/breakdown', { params }),
+}
+
 // ── Curriculum (Subjects & Sections) ─────────────────────────
 export const curriculumApi = {
   // School Years
@@ -158,4 +168,5 @@ export const curriculumApi = {
   getGrading:         (subjectId) => api.get(`/curriculum/subjects/${subjectId}/grading`),
   saveGrading:        (subjectId, data) => api.put(`/curriculum/subjects/${subjectId}/grading`, data),
   clearGrading:       (subjectId) => api.delete(`/curriculum/subjects/${subjectId}/grading`),
+  checkGradingScores: (subjectId) => api.get(`/curriculum/subjects/${subjectId}/grading/scores-check`),
 }

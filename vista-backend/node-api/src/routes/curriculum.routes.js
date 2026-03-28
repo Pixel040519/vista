@@ -488,10 +488,12 @@ router.put('/subjects/:id/grading', authorize('admin'), async (req, res, next) =
     if (!sub.rows.length) throw new AppError('Subject not found.', 404)
 
     const catSchema = Joi.object({
+      id:         Joi.string().uuid().optional(),
       name:       Joi.string().min(1).max(100).required(),
       weight:     Joi.number().precision(2).greater(0).max(100).required(),
       sort_order: Joi.number().integer().min(0).default(0),
       components: Joi.array().items(Joi.object({
+        id:         Joi.string().uuid().optional(),
         name:       Joi.string().min(1).max(100).required(),
         weight:     Joi.number().precision(2).greater(0).max(100).required(),
         sort_order: Joi.number().integer().min(0).default(0),
@@ -521,30 +523,106 @@ router.put('/subjects/:id/grading', authorize('admin'), async (req, res, next) =
     }
 
     const categories = await withTransaction(async (client) => {
-      // Soft-delete existing structure
-      await client.query(
-        `UPDATE grading_structure SET is_active=FALSE, updated_at=NOW() WHERE subject_id=$1 AND is_active=TRUE`,
-        [req.params.id]
-      )
+      // Collect IDs that should remain active
+      const keepIds = []
+      for (const cat of value.categories) {
+        if (cat.id) keepIds.push(cat.id)
+        for (const comp of cat.components) {
+          if (comp.id) keepIds.push(comp.id)
+        }
+      }
+
+      // Find rows being removed
+      const removedRes = keepIds.length > 0
+        ? await client.query(
+            `SELECT id, name, category_id FROM grading_structure
+             WHERE subject_id=$1 AND is_active=TRUE AND id != ALL($2)`,
+            [req.params.id, keepIds]
+          )
+        : await client.query(
+            `SELECT id, name, category_id FROM grading_structure
+             WHERE subject_id=$1 AND is_active=TRUE`,
+            [req.params.id]
+          )
+
+      // Block removal of components that have recorded scores
+      if (removedRes.rows.length > 0) {
+        const removedIds = removedRes.rows.map(r => r.id)
+        const withScores = await client.query(
+          `SELECT DISTINCT gs.id, gs.name
+           FROM grading_structure gs
+           JOIN score_items si ON si.component_id = gs.id AND si.is_active = TRUE
+           JOIN student_scores ss ON ss.score_item_id = si.id
+           WHERE gs.id = ANY($1)`,
+          [removedIds]
+        )
+        if (withScores.rows.length > 0) {
+          const names = withScores.rows.map(r => `"${r.name}"`).join(', ')
+          throw new AppError(`Cannot remove ${names} — has recorded student scores. Clear scores in Score Entry first.`, 422)
+        }
+      }
+
+      // Soft-delete rows that are no longer in the payload
+      if (removedRes.rows.length > 0) {
+        const removedIds = removedRes.rows.map(r => r.id)
+        await client.query(
+          `UPDATE grading_structure SET is_active=FALSE, updated_at=NOW()
+           WHERE id = ANY($1)`,
+          [removedIds]
+        )
+      }
 
       const result = []
       for (let i = 0; i < value.categories.length; i++) {
         const cat = value.categories[i]
-        const catRes = await client.query(
-          `INSERT INTO grading_structure (subject_id, category_id, name, weight, sort_order)
-           VALUES ($1, NULL, $2, $3, $4) RETURNING id, name, weight, sort_order`,
-          [req.params.id, cat.name, cat.weight, cat.sort_order ?? i]
-        )
-        const newCat = { ...catRes.rows[0], components: [] }
+        let catRow
+
+        if (cat.id) {
+          // Update existing category
+          const catRes = await client.query(
+            `UPDATE grading_structure SET name=$1, weight=$2, sort_order=$3, is_active=TRUE, updated_at=NOW()
+             WHERE id=$4 AND subject_id=$5
+             RETURNING id, name, weight, sort_order`,
+            [cat.name, cat.weight, cat.sort_order ?? i, cat.id, req.params.id]
+          )
+          catRow = catRes.rows[0]
+        }
+        if (!catRow) {
+          // Insert new category
+          const catRes = await client.query(
+            `INSERT INTO grading_structure (subject_id, category_id, name, weight, sort_order)
+             VALUES ($1, NULL, $2, $3, $4) RETURNING id, name, weight, sort_order`,
+            [req.params.id, cat.name, cat.weight, cat.sort_order ?? i]
+          )
+          catRow = catRes.rows[0]
+        }
+
+        const newCat = { ...catRow, components: [] }
 
         for (let j = 0; j < cat.components.length; j++) {
           const comp = cat.components[j]
-          const compRes = await client.query(
-            `INSERT INTO grading_structure (subject_id, category_id, name, weight, sort_order)
-             VALUES ($1, $2, $3, $4, $5) RETURNING id, name, weight, sort_order`,
-            [req.params.id, newCat.id, comp.name, comp.weight, comp.sort_order ?? j]
-          )
-          newCat.components.push(compRes.rows[0])
+          let compRow
+
+          if (comp.id) {
+            // Update existing component
+            const compRes = await client.query(
+              `UPDATE grading_structure SET name=$1, weight=$2, sort_order=$3, category_id=$4, is_active=TRUE, updated_at=NOW()
+               WHERE id=$5 AND subject_id=$6
+               RETURNING id, name, weight, sort_order`,
+              [comp.name, comp.weight, comp.sort_order ?? j, newCat.id, comp.id, req.params.id]
+            )
+            compRow = compRes.rows[0]
+          }
+          if (!compRow) {
+            // Insert new component
+            const compRes = await client.query(
+              `INSERT INTO grading_structure (subject_id, category_id, name, weight, sort_order)
+               VALUES ($1, $2, $3, $4, $5) RETURNING id, name, weight, sort_order`,
+              [req.params.id, newCat.id, comp.name, comp.weight, comp.sort_order ?? j]
+            )
+            compRow = compRes.rows[0]
+          }
+          newCat.components.push(compRow)
         }
         result.push(newCat)
       }
@@ -557,6 +635,20 @@ router.put('/subjects/:id/grading', authorize('admin'), async (req, res, next) =
 
 router.delete('/subjects/:id/grading', authorize('admin'), async (req, res, next) => {
   try {
+    // Block if any component has recorded scores
+    const withScores = await query(
+      `SELECT DISTINCT gs.name
+       FROM grading_structure gs
+       JOIN score_items si ON si.component_id = gs.id AND si.is_active = TRUE
+       JOIN student_scores ss ON ss.score_item_id = si.id
+       WHERE gs.subject_id=$1 AND gs.is_active=TRUE`,
+      [req.params.id]
+    )
+    if (withScores.rows.length > 0) {
+      const names = withScores.rows.map(r => `"${r.name}"`).join(', ')
+      throw new AppError(`Cannot clear — ${names} has recorded student scores. Clear scores in Score Entry first.`, 422)
+    }
+
     const result = await query(
       `UPDATE grading_structure SET is_active=FALSE, updated_at=NOW()
        WHERE subject_id=$1 AND is_active=TRUE RETURNING id`,
@@ -564,6 +656,22 @@ router.delete('/subjects/:id/grading', authorize('admin'), async (req, res, next
     )
     if (!result.rows.length) throw new AppError('No grading structure found for this subject.', 404)
     res.json({ message: 'Grading structure cleared.' })
+  } catch (err) { next(err) }
+})
+
+// GET /api/curriculum/subjects/:id/grading/scores-check
+// Returns component IDs that have recorded student scores
+router.get('/subjects/:id/grading/scores-check', authorize('admin'), async (req, res, next) => {
+  try {
+    const result = await query(
+      `SELECT DISTINCT gs.id
+       FROM grading_structure gs
+       JOIN score_items si ON si.component_id = gs.id AND si.is_active = TRUE
+       JOIN student_scores ss ON ss.score_item_id = si.id
+       WHERE gs.subject_id=$1 AND gs.is_active=TRUE`,
+      [req.params.id]
+    )
+    res.json({ components_with_scores: result.rows.map(r => r.id) })
   } catch (err) { next(err) }
 })
 

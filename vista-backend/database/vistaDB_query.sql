@@ -620,3 +620,42 @@ CREATE TABLE IF NOT EXISTS grading_structure (
 
 CREATE INDEX IF NOT EXISTS idx_grading_structure_subject  ON grading_structure(subject_id);
 CREATE INDEX IF NOT EXISTS idx_grading_structure_category ON grading_structure(category_id);
+
+
+-- ============================================================
+-- Score Items & Student Scores
+-- Individual assessments (e.g. Quiz 1, Quiz 2) under grading
+-- components, with per-student raw scores.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS score_items (
+    id                     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    component_id           UUID NOT NULL REFERENCES grading_structure(id) ON DELETE CASCADE,
+    subject_id             UUID NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    quarter                SMALLINT NOT NULL CHECK (quarter BETWEEN 1 AND 4),
+    name                   VARCHAR(100) NOT NULL,
+    highest_possible_score DECIMAL(7,2) NOT NULL CHECK (highest_possible_score > 0),
+    sort_order             SMALLINT NOT NULL DEFAULT 0,
+    created_by             UUID REFERENCES users(id),
+    is_active              BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at             TIMESTAMP DEFAULT NOW(),
+    updated_at             TIMESTAMP DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_score_items_unique_active ON score_items(component_id, quarter, name) WHERE is_active=TRUE;
+CREATE INDEX IF NOT EXISTS idx_score_items_component ON score_items(component_id, quarter);
+CREATE INDEX IF NOT EXISTS idx_score_items_subject   ON score_items(subject_id, quarter);
+
+CREATE TABLE IF NOT EXISTS student_scores (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    score_item_id UUID NOT NULL REFERENCES score_items(id) ON DELETE CASCADE,
+    student_id    UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    score         DECIMAL(7,2) CHECK (score >= 0),
+    recorded_by   UUID REFERENCES users(id),
+    created_at    TIMESTAMP DEFAULT NOW(),
+    updated_at    TIMESTAMP DEFAULT NOW(),
+    UNIQUE(score_item_id, student_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_student_scores_item    ON student_scores(score_item_id);
+CREATE INDEX IF NOT EXISTS idx_student_scores_student ON student_scores(student_id);

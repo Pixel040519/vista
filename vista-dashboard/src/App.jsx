@@ -14,6 +14,7 @@ import Announcements from './pages/Announcements'
 import RiskOverview from './pages/RiskOverview'
 import AccountManagement from './pages/AccountManagement'
 import CurriculumManagement from './pages/CurriculumManagement'
+import ScoreEntry from './pages/ScoreEntry'
 
 
 function PrivateRoute({ children, roles }) {
@@ -56,6 +57,10 @@ export default function App() {
             <Route path="attendance" element={<Attendance />} />
 
             <Route path="grades" element={<Grades />} />
+
+            <Route path="score-entry" element={
+              <PrivateRoute roles={['admin', 'teacher']}><ScoreEntry /></PrivateRoute>
+            } />
 
             <Route path="behavior" element={<Behavior />} />
 

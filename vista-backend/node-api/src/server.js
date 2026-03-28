@@ -21,6 +21,7 @@ const announcementRoutes = require('./routes/announcement.routes');
 const aiRoutes = require('./routes/ai.routes');
 const accountRoutes = require('./routes/account.routes');
 const curriculumRoutes = require('./routes/curriculum.routes');
+const scoreRoutes = require('./routes/score.routes');
 
 const { errorHandler } = require('./middleware/error.middleware');
 
@@ -71,6 +72,7 @@ app.use('/api/announcements', announcementRoutes);
 app.use('/api/ai', aiRoutes);  // Proxy to FastAPI AI service
 app.use('/api/accounts', accountRoutes);   // Admin: teacher account management
 app.use('/api/curriculum', curriculumRoutes); // Subjects & sections management
+app.use('/api/scores', scoreRoutes);         // Score items & student scores
 
 // ─── 404 Handler ──────────────────────────────────────────────
 app.use((req, res) => {
