@@ -18,7 +18,7 @@ export default function Layout() {
 
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      <div className="flex-1 lg:ml-64 flex flex-col min-h-screen">
+      <div className="flex-1 lg:ml-64 flex flex-col min-h-screen min-w-0">
         <Topbar onMenuToggle={() => setSidebarOpen(true)} />
         <main className="flex-1 p-4 sm:p-6 overflow-auto">
           <Outlet />

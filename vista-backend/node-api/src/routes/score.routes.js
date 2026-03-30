@@ -7,6 +7,15 @@ const { AppError } = require('../middleware/error.middleware')
 
 router.use(authenticate)
 
+// ── Helper: DepEd transmutation table (DO 8, s. 2015) ────────
+// Converts initial grade (weighted average) to transmuted grade (60–100 scale)
+const transmuteGrade = (initial) => {
+  if (initial >= 100) return 100
+  if (initial >= 60)  return Math.min(99, 75 + Math.floor((initial - 60) / 1.6))
+  if (initial > 0)    return Math.min(74, 60 + Math.floor(initial / 4))
+  return 60
+}
+
 // ── Helper: resolve school_year_id ────────────────────────────
 const resolveSYId = async (sy_id) => {
   if (sy_id) return sy_id
@@ -202,7 +211,7 @@ router.get('/', authorize('admin', 'teacher'), async (req, res, next) => {
 
     // Fetch students in this grade_level + section
     const studentsRes = await query(
-      `SELECT id, lrn, surname, first_name, middle_name
+      `SELECT id, lrn, surname, first_name, middle_name, gender
        FROM students
        WHERE grade_level=$1 AND section=$2 AND is_active=TRUE
        ORDER BY surname, first_name`,
@@ -334,15 +343,17 @@ router.post('/', authorize('admin', 'teacher'), async (req, res, next) => {
         }
       }
 
-      const finalGrade = Math.round(initialGrade * 100) / 100
+      const roundedInitial = Math.round(initialGrade * 100) / 100
+      const transmutedGrade = transmuteGrade(roundedInitial)
+      const remarks = transmutedGrade >= 75 ? 'Passed' : 'Failed'
 
       if (schoolYear) {
         await query(
-          `INSERT INTO grades (student_id, subject_id, quarter, school_year, score, grade, recorded_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+          `INSERT INTO grades (student_id, subject_id, quarter, school_year, score, grade, remarks, recorded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            ON CONFLICT (student_id, subject_id, quarter, school_year)
-           DO UPDATE SET score = EXCLUDED.score, grade = EXCLUDED.grade, updated_at = NOW()`,
-          [studentId, value.subject_id, value.quarter, schoolYear, finalGrade, finalGrade, req.user.id]
+           DO UPDATE SET score = EXCLUDED.score, grade = EXCLUDED.grade, remarks = EXCLUDED.remarks, updated_at = NOW()`,
+          [studentId, value.subject_id, value.quarter, schoolYear, roundedInitial, transmutedGrade, remarks, req.user.id]
         )
       }
     }
@@ -364,7 +375,7 @@ router.get('/breakdown', authorize('admin', 'teacher'), async (req, res, next) =
 
     // Fetch students
     const studentsRes = await query(
-      `SELECT id, lrn, surname, first_name, middle_name
+      `SELECT id, lrn, surname, first_name, middle_name, gender
        FROM students
        WHERE grade_level=$1 AND section=$2 AND is_active=TRUE
        ORDER BY surname, first_name`,
@@ -420,12 +431,14 @@ router.get('/breakdown', authorize('admin', 'teacher'), async (req, res, next) =
         const catWs = compBreakdown.reduce((sum, c) => sum + c.ws, 0)
         return { id: cat.id, name: cat.name, weight: cat.weight, components: compBreakdown, ws: Math.round(catWs * 100) / 100 }
       })
-      const initialGrade = catBreakdown.reduce((sum, c) => sum + c.ws, 0)
+      const initialGrade = Math.round(catBreakdown.reduce((sum, c) => sum + c.ws, 0) * 100) / 100
+      const transmuted = transmuteGrade(initialGrade)
       return {
         student,
         categories: catBreakdown,
-        initial_grade: Math.round(initialGrade * 100) / 100,
-        final_grade:   Math.round(initialGrade * 100) / 100,
+        initial_grade: initialGrade,
+        final_grade:   transmuted,
+        remarks:       transmuted >= 75 ? 'Passed' : 'Failed',
       }
     })
 
