@@ -78,10 +78,10 @@ React Dashboard → Node.js API (/api/*) → PostgreSQL
 PostgreSQL database `vista_db`. Schema is in `vista-backend/database/vistaDB_query.sql`.
 
 Key tables and relationships:
-- `users` — All accounts (admin, teacher, parent roles); uses `surname`/`first_name`/`middle_name` fields
+- `users` — All accounts (admin, teacher, parent roles); uses `surname`/`first_name`/`middle_name` fields (no `home_address` column — removed)
 - `students` — Student profiles with LRN, grade_level, section, QR code for SecurePass
 - `parent_student` — Many-to-many guardian↔student relationships
-- `class_assignments` / `teacher_assignments` — Teacher to class/subject mappings
+- `class_assignments` / `teacher_assignments` — Teacher to class/subject mappings; each (grade_level, section, subject) combination can only be assigned to one teacher (enforced by backend validation on create/update)
 - `attendance` — Daily records per student (Present/Absent/Late/Excused)
 - `subjects` — Curriculum subjects scoped to grade level and school year
 - `grades` — Per-subject, per-quarter grades (auto-computed from score entry); `score` column = initial grade (weighted average), `grade` column = DepEd transmuted grade, `remarks` = "Passed"/"Failed"
@@ -101,19 +101,27 @@ Supported grade levels: Pre-Nursery, Nursery, Pre-Kinder, Kinder, Grades 1–6.
 
 - Authentication uses JWT (access + refresh tokens); the Node API validates tokens before all protected routes.
 - The AI service is called by Node.js internally — the frontend never calls FastAPI directly.
-- Behavior logs store a `vader_compound` score (−1 to 1) alongside the teacher's raw observation text.
+- Behavior logs store a `vader_compound` score (−1 to 1) alongside the teacher's raw observation text. Behavior logs support edit (PUT) and delete (DELETE) via `/api/behavior/:id`.
 - SecurePass uses QR codes generated per-student; dismissal requires matching an authorized guardian.
 - All name fields use `surname`, `first_name`, `middle_name` (not a single `full_name` field).
 - School year status: exactly one may be `is_active` (enforced in a transaction); multiple may be `is_upcoming`; all others are archived. The backend enforces both constraints in transactions. Past years (end year ≤ current year) cannot be set to upcoming. The `resolveSYId` helper falls back to the active school year when no `sy_id` is provided.
+- Grading structure percentage fields reject negative values (clamped to 0). Category weight fields turn red when the total exceeds 100%; component weight fields turn red when their total exceeds the parent category's weight. The grading config modal has a "Copy from" button that lets you copy another subject's grading structure (filtered by grade level).
 - Grading structure: each subject can have a configurable grading breakdown (categories + components with percentage weights). The `grading_structure` table uses `category_id` (self-referencing FK) where `NULL` = top-level category, non-NULL = component under that category. Category weights must sum to 100%; component weights must sum to their parent category's weight. Grading structures are copied when creating a new school year with "copy from". The curriculum management UI exposes a per-subject grading config modal (sliders icon). Editing grading structure preserves existing UUIDs (update in place, not delete-and-recreate) so `score_items.component_id` FK references remain valid. Categories/components with recorded student scores cannot be deleted — the backend blocks it and the frontend grays out delete buttons.
-- Score entry: teachers create score items (e.g., Quiz 1, Quiz 2) under grading components via a modal, then enter raw student scores in a spreadsheet-like grid. The system auto-computes T (total) → PS (percentage score = T/HPS×100) → WS (weighted score = PS×weight/100) per component, rolls up to category totals, and saves the final quarterly grade to the `grades` table. Score items with recorded scores cannot be deleted; items without scores are hard-deleted from DB. Filter selections (school year, grade level, section, subject, quarter) and expanded component state persist in `sessionStorage` across navigation and refresh.
+- Score entry: teachers create score items (e.g., Quiz 1, Quiz 2) under grading components via a modal, then enter raw student scores in a spreadsheet-like grid. The system auto-computes T (total) → PS (percentage score = T/HPS×100) → WS (weighted score = PS×weight/100) per component, rolls up to category totals, and saves the final quarterly grade to the `grades` table. Score items with recorded scores cannot be deleted; items without scores are hard-deleted from DB. Adding a score item requires both a name and a valid HPS (> 0) — the frontend validates before saving. Filter selections (grade level, section, subject, quarter) and expanded component state persist in `sessionStorage` across navigation and refresh. The school year filter is locked to the active school year (displayed as read-only "SY 2025-2026").
 - DepEd transmutation (DO 8, s. 2015): initial grades (weighted averages) are transmuted to a 60–100 scale before saving as the final grade. The `transmuteGrade()` function exists in both backend (`score.routes.js`) and frontend (`ScoreEntry.jsx`). Formula: initial ≥ 100 → 100; initial ≥ 60 → 75 + floor((initial−60)/1.6) capped at 99; initial > 0 → 60 + floor(initial/4) capped at 74; else 60. Passing = transmuted ≥ 75.
-- Excel export: the Score Entry page has an "Export Excel" button (uses `xlsx-js-style`) that generates a DepEd-format grading sheet with colored category/component headers, HPS row, students grouped by gender (Male/Female), and T/PS/WS/IN/F/Remark columns. T, PS, WS, IN, F, and Remark cells use Excel formulas so the spreadsheet auto-recalculates when scores are edited. Export is blocked if any component has no score items.
+- Excel export: the Score Entry page has an "Export Excel" button (uses `xlsx-js-style`) that generates a DepEd-format grading sheet with colored category/component headers, HPS row, students grouped by gender (Male/Female), and T/PS/WS/IN/F/Remark columns. T, PS, WS, IN, F, and Remark cells use Excel formulas so the spreadsheet auto-recalculates when scores are edited. PS, WS, and IN values are rounded to 2 decimal places via `ROUND()` formulas. Export is blocked if any component has no score items.
+
+## Role-Based Access
+
+- **Admin**: Full access to all pages except Attendance and Score Entry (teacher-only). Can manage accounts, curriculum, students, and view student details.
+- **Teacher**: The `/api/auth/me` endpoint returns `assignments` (grade_level, section, subject) for teachers. Teacher-facing pages (Students, Attendance, Score Entry) show a "Class" dropdown filtered to their assigned sections instead of open grade/section filters. Attendance and Score Entry are teacher-only in both sidebar and route guards. Attendance backend: GET is open to admin+teacher (student detail page uses it), POST is teacher-only.
+- **Parent**: Limited access; students endpoint filters to linked students via `parent_student` table.
+- Teacher assignments are unique per (grade_level, section, subject) — the backend rejects duplicates on create/update, and the frontend disables already-taken subjects in the assignment dropdown (showing the assigned teacher's name).
 
 ## Frontend UI Patterns
 
 ### Sidebar Navigation
-- The sidebar groups nav items into 4 sections: **Overview** (Dashboard), **Student Management** (Students, Attendance, Grades, Score Entry, Behavior), **Tools** (SecurePass, Risk Overview, Announcements), **Administration** (Accounts, Curriculum). Groups with no visible items for the user's role are auto-hidden. Score Entry is visible to admin and teacher roles only.
+- The sidebar groups nav items into 4 sections: **Overview** (Dashboard), **Student Management** (Students, Attendance, Grades, Score Entry, Behavior), **Tools** (SecurePass, Risk Overview, Announcements), **Administration** (Accounts, Curriculum). Groups with no visible items for the user's role are auto-hidden. Score Entry and Attendance are visible to teacher role only.
 - The Grade Summary table in Score Entry groups students by gender (Male/Female) with separator rows, shows category weighted scores, initial grade, transmuted final grade (color-coded: teal ≥ 75, red < 75), and a Passed/Failed remarks pill. Category header columns use `truncate` with `max-w-[160px]` to handle long names.
 
 ### Responsive Layout
@@ -135,6 +143,8 @@ Supported grade levels: Pre-Nursery, Nursery, Pre-Kinder, Kinder, Grades 1–6.
 - Page headers should use `flex-wrap gap-3` so action buttons wrap below the title on small screens.
 - Form grids inside modals: prefer `grid-cols-1 sm:grid-cols-2` over a hard `grid-cols-2`.
 - The `BrowserRouter` in both `App.jsx` and `main.jsx` has `v7_startTransition` and `v7_relativeSplatPath` future flags enabled.
-- The body has `select-none` and `cursor-default` globally; `user-select: text` and `cursor: text` are re-enabled on `input` and `textarea` elements; `select` elements use `cursor: pointer`. This prevents the text caret from appearing on non-interactive elements like titles, headers, and hints.
+- The body has `select-none` and `cursor-default` globally; `user-select: text` and `cursor: text` are re-enabled on text-type `input` and `textarea` elements; `checkbox` and `radio` inputs use `cursor: pointer`; `select` elements use `cursor: pointer`. This prevents the text caret from appearing on non-interactive elements like titles, headers, and hints.
 - All input fields use `onKeyDown` to blur on Enter key press for consistent UX across the app.
 - Drag-and-drop reordering (via HTML5 DnD API + grip handle) is used in the grading config modal for categories and in the score items modal for items.
+- Attendance page: teacher sees a "Class" dropdown (assigned sections), a date picker, and a subject pills bar above the student table. Changing the date loads existing attendance records via `GET /api/attendance/bulk` and auto-selects the saved statuses. Clicking an already-selected status deselects it. The `POST /api/attendance` endpoint upserts (ON CONFLICT DO UPDATE) so re-saving updates existing records.
+- Students page: teachers see a "Class" dropdown and search with labels; Grade Level and Section columns are hidden (redundant). Admin sees full grade/section filter dropdowns.

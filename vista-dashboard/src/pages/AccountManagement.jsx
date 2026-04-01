@@ -11,7 +11,7 @@ import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
 
 // ── School Data ───────────────────────────────────────────────
 const GRADE_LEVELS = [
-  'Pre-Nursery', 'Pre-Kinder', 'Nursery', 'Kinder',
+  'Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder',
   'Grade 1', 'Grade 2', 'Grade 3',
   'Grade 4', 'Grade 5', 'Grade 6',
 ]
@@ -19,7 +19,7 @@ const GRADE_LEVELS = [
 // Sections and subjects loaded live from curriculum API per grade level
 
 // ── Assignment Row Component ──────────────────────────────────
-function AssignmentRow({ row, index, onChange, onRemove }) {
+function AssignmentRow({ row, index, onChange, onRemove, takenAssignments = [] }) {
   const [sections, setSections] = useState([])
   const [subjects, setSubjects] = useState([])
 
@@ -35,11 +35,22 @@ function AssignmentRow({ row, index, onChange, onRemove }) {
     }).catch(() => { setSections([]); setSubjects([]) })
   }, [row.grade_level])
 
+  const isTaken = (gradeLevel, section, subject) =>
+    takenAssignments.some(a => a.grade_level === gradeLevel && a.section === section && a.subject === subject)
+
+  const getTakenBy = (gradeLevel, section, subject) => {
+    const match = takenAssignments.find(a => a.grade_level === gradeLevel && a.section === section && a.subject === subject)
+    return match?.teacher_name || ''
+  }
+
   const set = (field, val) => {
     const updated = { ...row, [field]: val }
     // Reset section/subject if grade changes
     if (field === 'grade_level') {
       updated.section = ''
+      updated.subject = ''
+    }
+    if (field === 'section') {
       updated.subject = ''
     }
     onChange(index, updated)
@@ -70,13 +81,21 @@ function AssignmentRow({ row, index, onChange, onRemove }) {
 
       {/* Subject */}
       <select
-        className="input text-xs py-2"
+        className={clsx('input text-xs py-2', row.subject && row.section && isTaken(row.grade_level, row.section, row.subject) && 'border-red-400 text-red-600')}
         value={row.subject}
         onChange={e => set('subject', e.target.value)}
-        disabled={!row.grade_level}
+        disabled={!row.grade_level || !row.section}
       >
         <option value="">Subject</option>
-        {subjects.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+        {subjects.map(s => {
+          const taken = row.section && isTaken(row.grade_level, row.section, s.name)
+          const takenBy = taken ? getTakenBy(row.grade_level, row.section, s.name) : ''
+          return (
+            <option key={s.id} value={s.name} disabled={taken}>
+              {s.name}{taken ? ` (${takenBy})` : ''}
+            </option>
+          )
+        })}
       </select>
 
       <button
@@ -95,13 +114,13 @@ const emptyRow = () => ({ grade_level: '', section: '', subject: '' })
 
 // ── Teacher Form (shared by create + edit) ────────────────────
 function TeacherForm({ initial, onSubmit, onClose, mode }) {
+  const teacherId = initial?.id || null
   const [form, setForm] = useState({
     surname:     initial?.surname     || '',
     first_name:  initial?.first_name   || '',
     middle_name: initial?.middle_name  || '',
     email:       initial?.email      || '',
     phone:       initial?.phone      || '',
-    home_address: initial?.home_address || '',
     password:    '',
     assignments: initial?.assignments?.length
       ? initial.assignments.map(a => ({
@@ -113,6 +132,17 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
   })
   const [showPw, setShowPw]   = useState(false)
   const [saving, setSaving]   = useState(false)
+  const [takenAssignments, setTakenAssignments] = useState([])
+
+  useEffect(() => {
+    accountApi.getAssignments()
+      .then(res => {
+        // Exclude current teacher's own assignments (they can keep theirs)
+        const all = res.data.assignments || []
+        setTakenAssignments(teacherId ? all.filter(a => a.teacher_id !== teacherId) : all)
+      })
+      .catch(() => setTakenAssignments([]))
+  }, [])
 
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
 
@@ -185,15 +215,6 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
               onChange={v => setField('phone', v)} required />
           </div>
           <div className="col-span-2">
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Home Address *</label>
-            <textarea className="input resize-none min-h-16"
-              placeholder="House No., Street, Barangay, Municipality/City, Province"
-              value={form.home_address}
-              onChange={e => setField('home_address', e.target.value)}
-              onBlur={e => setField('home_address', e.target.value.trim())}
-              required/>
-          </div>
-          <div className="col-span-2">
             <label className="block text-sm font-medium text-slate-700 mb-1.5">
               {mode === 'edit' ? 'New Password (leave blank to keep current)' : 'Password *'}
             </label>
@@ -247,6 +268,7 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
               index={i}
               onChange={updateRow}
               onRemove={removeRow}
+              takenAssignments={takenAssignments}
             />
           ))}
 
@@ -551,7 +573,7 @@ export default function AccountManagement() {
 
                     {/* Actions */}
                     <td>
-                      <div className="flex items-center gap-1 justify-end">
+                      <div className="flex items-center gap-1 justify-start">
                         <button
                           onClick={() => setEditTarget(t)}
                           className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors"

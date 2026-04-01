@@ -19,9 +19,9 @@ const navGroups = [
     label: 'Student Management',
     items: [
       { to: '/students',    icon: Users,          label: 'Students'   },
-      { to: '/attendance',  icon: ClipboardCheck, label: 'Attendance' },
+      { to: '/attendance',  icon: ClipboardCheck, label: 'Attendance', roles: ['teacher'] },
       { to: '/grades',       icon: BookOpen,       label: 'Grades'     },
-      { to: '/score-entry', icon: PenLine,        label: 'Score Entry', roles: ['admin', 'teacher'] },
+      { to: '/score-entry', icon: PenLine,        label: 'Score Entry', roles: ['teacher'] },
       { to: '/behavior',    icon: Heart,          label: 'Behavior'   },
     ]
   },

@@ -84,6 +84,7 @@ export const studentApi = {
 // ── Attendance ────────────────────────────────────────────────
 export const attendanceApi = {
   get:    (params)  => api.get('/attendance', { params }),
+  bulk:   (params)  => api.get('/attendance/bulk', { params }),
   submit: (records) => api.post('/attendance', { records }),
 }
 
@@ -95,8 +96,10 @@ export const gradesApi = {
 
 // ── Behavior ──────────────────────────────────────────────────
 export const behaviorApi = {
-  get:  (params) => api.get('/behavior', { params }),
-  log:  (data)   => api.post('/behavior', data),
+  get:    (params)    => api.get('/behavior', { params }),
+  log:    (data)      => api.post('/behavior', data),
+  update: (id, data)  => api.put(`/behavior/${id}`, data),
+  delete: (id)        => api.delete(`/behavior/${id}`),
 }
 
 // ── Dismissal ─────────────────────────────────────────────────
@@ -127,6 +130,7 @@ export const aiApi = {
 
 // ── Account Management (Admin only) ──────────────────────────
 export const accountApi = {
+  getAssignments: ()       => api.get('/accounts/assignments'),
   listTeachers:   (params) => api.get('/accounts/teachers', { params }),
   getTeacher:     (id)     => api.get(`/accounts/teachers/${id}`),
   createTeacher:  (data)   => api.post('/accounts/teachers', data),

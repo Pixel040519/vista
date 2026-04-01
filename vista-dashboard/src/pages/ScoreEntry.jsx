@@ -92,15 +92,13 @@ export default function ScoreEntry() {
   // All filters selected?
   const filtersReady = syId && gradeLevel && section && subjectId && quarter
 
-  // ── Load school years on mount ────────────────────────────
+  // ── Load school years on mount — lock to active SY ────────
   useEffect(() => {
     curriculumApi.getSchoolYears().then(res => {
       const syList = res.data.school_years || res.data
       setSchoolYears(syList)
-      if (!syId) {
-        const active = syList.find(sy => sy.is_active)
-        if (active) setSyId(active.id)
-      }
+      const active = syList.find(sy => sy.is_active)
+      if (active) setSyId(active.id)
     }).catch(() => {})
   }, [])
 
@@ -305,8 +303,11 @@ export default function ScoreEntry() {
   }
 
   const saveEditItems = async () => {
-    const items = editItems
-      .filter(i => i.name.trim() && i.highest_possible_score)
+    const filled = editItems.filter(i => i.name.trim())
+    if (filled.length === 0) return toast.error('Add at least one item with a name.')
+    const missingHps = filled.find(i => !i.highest_possible_score || Number(i.highest_possible_score) <= 0)
+    if (missingHps) return toast.error(`"${missingHps.name}" is missing a valid HPS (must be greater than 0).`)
+    const items = filled
       .map((i, idx) => ({
         ...(i.id ? { id: i.id } : {}),
         name: i.name.trim(),
@@ -535,10 +536,10 @@ export default function ScoreEntry() {
 
         // T = SUM of item scores
         row[c] = { v: '', s: centerCell, f: `SUM(${firstItemCol}${rowNum}:${lastItemCol}${rowNum})` }
-        // PS = T / HPS_Total * 100
-        row[c + 1] = { v: '', s: centerCell, f: `IF(${hpsTotalRef}=0,0,${tCol}${rowNum}/${hpsTotalRef}*100)` }
-        // WS = PS * weight / 100
-        row[c + 2] = { v: '', s: { ...centerBold, fill: { fgColor: { rgb: 'FFFF00' } }, font: { bold: true, sz: 9 } }, f: `${psCol}${rowNum}*${cc.comp.weight}/100` }
+        // PS = ROUND(T / HPS_Total * 100, 2)
+        row[c + 1] = { v: '', s: centerCell, f: `IF(${hpsTotalRef}=0,0,ROUND(${tCol}${rowNum}/${hpsTotalRef}*100,2))` }
+        // WS = ROUND(PS * weight / 100, 2)
+        row[c + 2] = { v: '', s: { ...centerBold, fill: { fgColor: { rgb: 'FFFF00' } }, font: { bold: true, sz: 9 } }, f: `ROUND(${psCol}${rowNum}*${cc.comp.weight}/100,2)` }
         wsCols.push(`${wsCol}${rowNum}`)
         c += 3
       }
@@ -551,7 +552,7 @@ export default function ScoreEntry() {
       // IN = SUM of all WS cells
       const inRef = ec(inCol)
       const fRef = ec(fCol)
-      row[inCol] = { v: '', s: centerBold, f: wsCols.length ? wsCols.join('+') : '0' }
+      row[inCol] = { v: '', s: centerBold, f: wsCols.length ? `ROUND(${wsCols.join('+')},2)` : '0' }
       // F = DepEd transmutation formula
       const passedS = { ...centerBold, font: { bold: true, sz: 9 }, fill: { fgColor: { rgb: passed ? '92D050' : 'FF0000' } } }
       row[fCol] = { v: '', s: passedS, f: `IF(${inRef}${rowNum}>=100,100,IF(${inRef}${rowNum}>=60,MIN(99,75+INT((${inRef}${rowNum}-60)/1.6)),IF(${inRef}${rowNum}>0,MIN(74,60+INT(${inRef}${rowNum}/4)),60)))` }
@@ -671,12 +672,9 @@ export default function ScoreEntry() {
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Filters</span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-          <select className="input" value={syId} onChange={e => { setSyId(e.target.value); setSection(''); setSubjectId('') }}>
-            <option value="">School Year</option>
-            {schoolYears.map(sy => (
-              <option key={sy.id} value={sy.id}>{sy.label}{sy.is_active ? ' (Active)' : ''}</option>
-            ))}
-          </select>
+          <div className="input bg-slate-50 flex items-center text-slate-700 font-semibold cursor-default">
+            {syLabel ? `SY ${syLabel}` : 'No active school year'}
+          </div>
 
           <select className="input" value={gradeLevel} onChange={e => { setGradeLevel(e.target.value); setSection(''); setSubjectId('') }}>
             <option value="">Grade Level</option>

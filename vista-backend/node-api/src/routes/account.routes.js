@@ -22,7 +22,6 @@ const createSchema = Joi.object({
   first_name:  Joi.string().min(1).required(),
   middle_name: Joi.string().optional().allow(''),
   phone:       Joi.string().min(7).required(),
-  home_address: Joi.string().trim().min(1).required(),
   assignments: Joi.array().items(assignmentShape).optional(),
 })
 
@@ -31,7 +30,6 @@ const updateSchema = Joi.object({
   first_name:  Joi.string().min(1).optional(),
   middle_name: Joi.string().optional().allow(''),
   phone:       Joi.string().optional().allow(''),
-  home_address: Joi.string().trim().optional().allow(''),
   password:    Joi.string().min(8).optional().allow(''),
   is_active:   Joi.boolean().optional(),
   assignments: Joi.array().items(assignmentShape).optional(),
@@ -46,6 +44,19 @@ const getAssignments = async (teacher_id) => {
   )
   return res.rows
 }
+
+// GET /api/accounts/assignments — All taken teacher assignments
+router.get('/assignments', async (req, res, next) => {
+  try {
+    const result = await query(
+      `SELECT ta.grade_level, ta.section, ta.subject, ta.teacher_id, u.full_name as teacher_name
+       FROM teacher_assignments ta
+       JOIN users u ON u.id = ta.teacher_id
+       ORDER BY ta.grade_level, ta.section, ta.subject`
+    )
+    res.json({ assignments: result.rows })
+  } catch (err) { next(err) }
+})
 
 // GET /api/accounts/teachers
 router.get('/teachers', async (req, res, next) => {
@@ -64,7 +75,7 @@ router.get('/teachers', async (req, res, next) => {
     }
 
     const result = await query(
-      `SELECT u.id, u.email, u.surname, u.first_name, u.middle_name, u.full_name, u.home_address,
+      `SELECT u.id, u.email, u.surname, u.first_name, u.middle_name, u.full_name,
               u.phone, u.is_active, u.created_at,
          COALESCE(json_agg(json_build_object(
            'id',ta.id,'grade_level',ta.grade_level,'section',ta.section,
@@ -107,14 +118,27 @@ router.post('/teachers', async (req, res, next) => {
     const existing = await query('SELECT id FROM users WHERE email=$1', [email])
     if (existing.rows.length) throw new AppError('Email already registered.', 409)
 
+    // Check for conflicts before creating
+    for (const a of assignments) {
+      if (!a.grade_level || !a.section || !a.subject) continue
+      const conflict = await query(
+        `SELECT u.full_name FROM teacher_assignments ta JOIN users u ON u.id = ta.teacher_id
+         WHERE ta.grade_level=$1 AND ta.section=$2 AND ta.subject=$3`,
+        [a.grade_level, a.section, a.subject]
+      )
+      if (conflict.rows.length) {
+        throw new AppError(`${a.grade_level} — ${a.section} — ${a.subject} is already assigned to ${conflict.rows[0].full_name}.`, 409)
+      }
+    }
+
     const teacher = await withTransaction(async (client) => {
       const hash = await bcrypt.hash(password, await bcrypt.genSalt(12))
 
       const uRes = await client.query(
-        `INSERT INTO users (email, password_hash, surname, first_name, middle_name, role, phone, home_address)
-         VALUES ($1,$2,$3,$4,$5,'teacher',$6,$7)
-         RETURNING id, email, surname, first_name, middle_name, full_name, phone, home_address, is_active, created_at`,
-        [email, hash, surname, first_name, middle_name || null, phone || null, value.home_address || null]
+        `INSERT INTO users (email, password_hash, surname, first_name, middle_name, role, phone)
+         VALUES ($1,$2,$3,$4,$5,'teacher',$6)
+         RETURNING id, email, surname, first_name, middle_name, full_name, phone, is_active, created_at`,
+        [email, hash, surname, first_name, middle_name || null, phone || null]
       )
       const user = uRes.rows[0]
 
@@ -149,7 +173,6 @@ router.put('/teachers/:id', async (req, res, next) => {
       if (normed.first_name)            { params.push(normed.first_name);  sets.push(`first_name=$${params.length}`) }
       if (normed.middle_name !== undefined) { params.push(normed.middle_name || null); sets.push(`middle_name=$${params.length}`) }
       if (phone        !== undefined)   { params.push(phone);                    sets.push(`phone=$${params.length}`) }
-      if (value.home_address !== undefined) { params.push(value.home_address||null); sets.push(`home_address=$${params.length}`) }
       if (is_active  !== undefined)     { params.push(is_active);  sets.push(`is_active=$${params.length}`) }
       if (password) {
         params.push(await bcrypt.hash(password, await bcrypt.genSalt(12)))
@@ -168,6 +191,18 @@ router.put('/teachers/:id', async (req, res, next) => {
       }
 
       if (assignments !== undefined) {
+        // Check for conflicts with other teachers
+        for (const a of assignments) {
+          if (!a.grade_level || !a.section || !a.subject) continue
+          const conflict = await client.query(
+            `SELECT u.full_name FROM teacher_assignments ta JOIN users u ON u.id = ta.teacher_id
+             WHERE ta.grade_level=$1 AND ta.section=$2 AND ta.subject=$3 AND ta.teacher_id != $4`,
+            [a.grade_level, a.section, a.subject, req.params.id]
+          )
+          if (conflict.rows.length) {
+            throw new AppError(`${a.grade_level} — ${a.section} — ${a.subject} is already assigned to ${conflict.rows[0].full_name}.`, 409)
+          }
+        }
         await client.query('DELETE FROM teacher_assignments WHERE teacher_id=$1', [req.params.id])
         for (const a of assignments) {
           await client.query(

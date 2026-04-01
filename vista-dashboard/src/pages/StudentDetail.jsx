@@ -350,7 +350,7 @@ export default function StudentDetail() {
                         style={{ width: `${Math.abs(b.sentiment_score) * 100}%` }}
                       />
                     </div>
-                    <span className="text-xs font-mono text-slate-400">score: {b.sentiment_score?.toFixed(3)}</span>
+                    <span className="text-xs font-mono text-slate-400">score: {Number(b.sentiment_score).toFixed(3)}</span>
                   </div>
                 )}
               </div>

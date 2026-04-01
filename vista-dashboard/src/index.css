@@ -10,10 +10,13 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  input, textarea, [contenteditable="true"] {
+  input:not([type="checkbox"]):not([type="radio"]), textarea, [contenteditable="true"] {
     cursor: text;
     user-select: text;
     -webkit-user-select: text;
+  }
+  input[type="checkbox"], input[type="radio"] {
+    cursor: pointer;
   }
   select {
     cursor: pointer;

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, ChevronDown, ChevronRight, Loader2, SlidersHorizontal, GripVertical } from 'lucide-react'
+import { Plus, Trash2, ChevronDown, ChevronRight, Loader2, SlidersHorizontal, GripVertical, Copy } from 'lucide-react'
 import { curriculumApi } from '../api/client'
 import { Modal } from './UI'
 import toast from 'react-hot-toast'
@@ -16,6 +16,10 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
   const [dragOverIdx, setDragOverIdx] = useState(null)
   const [gripHeld, setGripHeld]     = useState(false)
   const [compsWithScores, setCompsWithScores] = useState(new Set())
+  const [showCopy, setShowCopy]     = useState(false)
+  const [copySubjects, setCopySubjects] = useState([])
+  const [loadingCopy, setLoadingCopy] = useState(false)
+  const [copyFilter, setCopyFilter] = useState('')
 
   // Load existing grading structure + scores check
   useEffect(() => {
@@ -52,8 +56,15 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
     setCategories(prev => [...prev, { ...emptyCategory(), sort_order: prev.length }])
   }
 
+  const clampWeight = (val) => {
+    if (val === '') return ''
+    const n = parseFloat(val)
+    if (isNaN(n) || n < 0) return '0'
+    return val
+  }
+
   const updateCategory = (idx, field, val) => {
-    const v = field === 'name' ? val.toUpperCase() : val
+    const v = field === 'name' ? val.toUpperCase() : field === 'weight' ? clampWeight(val) : val
     setCategories(prev => prev.map((c, i) => i === idx ? { ...c, [field]: v } : c))
   }
 
@@ -104,7 +115,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
   const ucFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1)
 
   const updateComponent = (catIdx, compIdx, field, val) => {
-    const v = field === 'name' ? ucFirst(val) : val
+    const v = field === 'name' ? ucFirst(val) : field === 'weight' ? clampWeight(val) : val
     setCategories(prev => prev.map((c, i) =>
       i === catIdx ? {
         ...c,
@@ -186,6 +197,49 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
     } finally { setSaving(false) }
   }
 
+  // ── Copy from another subject ─────────────────────────────
+  const openCopyPicker = async () => {
+    setShowCopy(true)
+    setCopyFilter('')
+    setLoadingCopy(true)
+    try {
+      const res = await curriculumApi.getSubjects({ sy_id: subject.school_year_id })
+      const list = (res.data.subjects || []).filter(s => s.id !== subject.id)
+      setCopySubjects(list)
+    } catch { setCopySubjects([]) }
+    setLoadingCopy(false)
+  }
+
+  const copyFrom = async (sourceId) => {
+    setLoadingCopy(true)
+    try {
+      const res = await curriculumApi.getGrading(sourceId)
+      const cats = res.data.categories || []
+      if (cats.length === 0) {
+        toast.error('Selected subject has no grading structure.')
+        setLoadingCopy(false)
+        return
+      }
+      const cleanWeight = (w) => { const v = parseFloat(w); return v % 1 === 0 ? String(v) : String(parseFloat(v.toFixed(2))) }
+      setCategories(cats.map(c => ({
+        name: c.name,
+        weight: cleanWeight(c.weight),
+        sort_order: c.sort_order,
+        expanded: true,
+        components: (c.components || []).map(comp => ({
+          name: comp.name,
+          weight: cleanWeight(comp.weight),
+          sort_order: comp.sort_order,
+        })),
+      })))
+      toast.success('Grading structure copied.')
+      setShowCopy(false)
+    } catch {
+      toast.error('Failed to copy grading structure.')
+    }
+    setLoadingCopy(false)
+  }
+
   if (!subject) return null
 
   return (
@@ -210,8 +264,48 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
             )}
           </div>
 
+          {/* Copy from another subject */}
+          {showCopy && (() => {
+            const gradeLevels = [...new Set(copySubjects.map(s => s.grade_level))].sort()
+            const filtered = copySubjects.filter(s =>
+              (!copyFilter || s.grade_level === copyFilter)
+            )
+            return (
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide">Copy structure from</p>
+                <button type="button" onClick={() => setShowCopy(false)}
+                  className="text-xs text-blue-500 hover:text-blue-700 font-medium">Cancel</button>
+              </div>
+              {loadingCopy ? (
+                <div className="flex justify-center py-3"><Loader2 size={18} className="animate-spin text-blue-400" /></div>
+              ) : copySubjects.length === 0 ? (
+                <p className="text-xs text-blue-400 text-center py-2">No other subjects found in this school year.</p>
+              ) : (
+                <>
+                  <select className="input text-sm py-1.5" value={copyFilter} onChange={e => setCopyFilter(e.target.value)}>
+                    <option value="">All Grade Levels</option>
+                    {gradeLevels.map(gl => <option key={gl} value={gl}>{gl}</option>)}
+                  </select>
+                  <div className="max-h-40 overflow-y-auto space-y-1">
+                    {filtered.length === 0 ? (
+                      <p className="text-xs text-blue-400 text-center py-2">No subjects found for this grade level.</p>
+                    ) : filtered.map(s => (
+                      <button key={s.id} type="button" onClick={() => copyFrom(s.id)}
+                        className="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-blue-100 transition-colors">
+                        <span className="font-medium">{s.name}</span>
+                        <span className="text-xs text-slate-400 ml-2">{s.grade_level}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            )
+          })()}
+
           {/* Categories list */}
-          {categories.length === 0 && (
+          {categories.length === 0 && !showCopy && (
             <div className="text-center py-8">
               <SlidersHorizontal size={28} className="mx-auto text-slate-300 mb-3" />
               <p className="text-sm text-slate-500 font-medium">No grading structure configured</p>
@@ -258,8 +352,10 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                     />
                     <div className="flex items-center gap-1 flex-shrink-0">
                       <input
-                        type="number" min="0.01" max="100" step="0.01"
-                        className="w-14 text-sm font-mono text-center bg-white border border-slate-200 rounded-lg px-1.5 py-1 outline-none focus:border-teal-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        type="number" min="0" max="100" step="0.01"
+                        className={clsx('w-14 text-sm font-mono text-center bg-white border rounded-lg px-1.5 py-1 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none',
+                          catTotal > 100.01 ? 'border-red-400 text-red-600 focus:border-red-500' : 'border-slate-200 focus:border-teal-400'
+                        )}
                         placeholder="0"
                         value={cat.weight}
                         onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
@@ -300,8 +396,10 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                           />
                           <div className="flex items-center gap-1 flex-shrink-0">
                             <input
-                              type="number" min="0.01" max="100" step="0.01"
-                              className="w-14 text-sm font-mono text-center bg-white border border-slate-200 rounded-lg px-1.5 py-1 outline-none focus:border-teal-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              type="number" min="0" max="100" step="0.01"
+                              className={clsx('w-14 text-sm font-mono text-center bg-white border rounded-lg px-1.5 py-1 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none',
+                                compTotal > catWeight + 0.01 ? 'border-red-400 text-red-600 focus:border-red-500' : 'border-slate-200 focus:border-teal-400'
+                              )}
                               placeholder="0"
                               value={comp.weight}
                               onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
@@ -328,11 +426,19 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
             })}
           </div>
 
-          {/* Add Category button */}
-          <button type="button" onClick={addCategory}
-            className="flex items-center gap-2 w-full justify-center py-2.5 border-2 border-dashed border-slate-200 rounded-xl text-sm font-medium text-slate-500 hover:text-teal-600 hover:border-teal-300 transition-colors">
-            <Plus size={15} /> Add Category
-          </button>
+          {/* Add Category + Copy from buttons */}
+          <div className="flex gap-2">
+            <button type="button" onClick={addCategory}
+              className="flex items-center gap-2 flex-1 justify-center py-2.5 border-2 border-dashed border-slate-200 rounded-xl text-sm font-medium text-slate-500 hover:text-teal-600 hover:border-teal-300 transition-colors">
+              <Plus size={15} /> Add Category
+            </button>
+            {!showCopy && (
+              <button type="button" onClick={openCopyPicker}
+                className="flex items-center gap-2 px-4 py-2.5 border-2 border-dashed border-slate-200 rounded-xl text-sm font-medium text-slate-500 hover:text-blue-600 hover:border-blue-300 transition-colors">
+                <Copy size={15} /> Copy from
+              </button>
+            )}
+          </div>
 
           {/* Action buttons */}
           <div className="flex items-center gap-2 pt-3 border-t border-slate-100">

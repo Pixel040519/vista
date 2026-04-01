@@ -59,7 +59,7 @@ export default function App() {
             <Route path="grades" element={<Grades />} />
 
             <Route path="score-entry" element={
-              <PrivateRoute roles={['admin', 'teacher']}><ScoreEntry /></PrivateRoute>
+              <PrivateRoute roles={['teacher']}><ScoreEntry /></PrivateRoute>
             } />
 
             <Route path="behavior" element={<Behavior />} />

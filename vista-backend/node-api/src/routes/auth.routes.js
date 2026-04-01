@@ -100,7 +100,19 @@ router.get('/me', authenticate, async (req, res, next) => {
       [req.user.id]
     );
     if (!result.rows.length) throw new AppError('User not found.', 404);
-    res.json({ user: result.rows[0] });
+    const user = result.rows[0];
+
+    if (user.role === 'teacher') {
+      const asgn = await query(
+        `SELECT id, grade_level, section, subject, school_year
+         FROM teacher_assignments WHERE teacher_id=$1
+         ORDER BY grade_level, section, subject`,
+        [user.id]
+      );
+      user.assignments = asgn.rows;
+    }
+
+    res.json({ user });
   } catch (err) { next(err); }
 });
 

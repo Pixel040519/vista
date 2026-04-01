@@ -9,6 +9,8 @@ const { AppError } = require('../middleware/error.middleware');
 
 attendanceRouter.use(authenticate);
 
+// Read access for admin + teacher; write access for teacher only below
+
 // GET /api/attendance?student_id=&start_date=&end_date=
 attendanceRouter.get('/', async (req, res, next) => {
   try {
@@ -39,8 +41,44 @@ attendanceRouter.get('/', async (req, res, next) => {
   }
 });
 
+// GET /api/attendance/bulk?date=&grade_level=&section=
+attendanceRouter.get('/bulk', async (req, res, next) => {
+  try {
+    const { date, grade_level, section } = req.query;
+    if (!date) throw new AppError('date is required.', 400);
+
+    const conditions = ['a.date = $1'];
+    const params = [date];
+
+    if (grade_level) {
+      params.push(grade_level);
+      conditions.push(`s.grade_level = $${params.length}`);
+    }
+    if (section) {
+      params.push(section);
+      conditions.push(`s.section = $${params.length}`);
+    }
+
+    const result = await query(
+      `SELECT a.student_id, a.status
+       FROM attendance a
+       JOIN students s ON s.id = a.student_id
+       WHERE ${conditions.join(' AND ')}`,
+      params
+    );
+
+    // Return as { student_id: status } map
+    const records = {};
+    for (const row of result.rows) records[row.student_id] = row.status;
+
+    res.json({ records });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/attendance — Log attendance (single or batch)
-attendanceRouter.post('/', authorize('admin', 'teacher'), async (req, res, next) => {
+attendanceRouter.post('/', authorize('teacher'), async (req, res, next) => {
   try {
     const { records } = req.body; // [{ student_id, date, status, remarks }]
     if (!Array.isArray(records) || records.length === 0) {
@@ -176,7 +214,7 @@ behaviorRouter.post('/', authorize('admin', 'teacher'), async (req, res, next) =
     let sentiment_score = 0;
     try {
       const aiResponse = await axios.post(
-        `${process.env.AI_SERVICE_URL}/analyze/sentiment`,
+        `${process.env.AI_SERVICE_URL || 'http://localhost:8000'}/analyze/sentiment`,
         { text: observation }
       );
       sentiment = aiResponse.data.sentiment;
@@ -199,6 +237,56 @@ behaviorRouter.post('/', authorize('admin', 'teacher'), async (req, res, next) =
       log: result.rows[0],
       ai: { sentiment, sentiment_score }
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/behavior/:id — Update a behavior log
+behaviorRouter.put('/:id', authorize('admin', 'teacher'), async (req, res, next) => {
+  try {
+    const { observation, category } = req.body;
+    if (!observation) throw new AppError('observation is required.', 400);
+
+    // Re-analyze sentiment
+    let sentiment = 'Neutral';
+    let sentiment_score = 0;
+    try {
+      const aiResponse = await axios.post(
+        `${process.env.AI_SERVICE_URL || 'http://localhost:8000'}/analyze/sentiment`,
+        { text: observation }
+      );
+      sentiment = aiResponse.data.sentiment;
+      sentiment_score = aiResponse.data.score;
+    } catch (aiErr) {
+      console.warn('AI sentiment service unavailable, skipping:', aiErr.message);
+    }
+
+    const result = await query(
+      `UPDATE behavior_logs
+       SET observation=$1, category=$2, sentiment=$3, sentiment_score=$4
+       WHERE id=$5
+       RETURNING *`,
+      [observation, category || 'Social', sentiment, sentiment_score, req.params.id]
+    );
+    if (!result.rows.length) throw new AppError('Behavior log not found.', 404);
+
+    res.json({ message: 'Behavior log updated.', log: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/behavior/:id — Delete a behavior log
+behaviorRouter.delete('/:id', authorize('admin', 'teacher'), async (req, res, next) => {
+  try {
+    const result = await query(
+      'DELETE FROM behavior_logs WHERE id=$1 RETURNING id',
+      [req.params.id]
+    );
+    if (!result.rows.length) throw new AppError('Behavior log not found.', 404);
+
+    res.json({ message: 'Behavior log deleted.' });
   } catch (err) {
     next(err);
   }

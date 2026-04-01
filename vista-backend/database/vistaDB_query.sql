@@ -514,12 +514,10 @@ ALTER TABLE parent_student
 
 
 -- ============================================================
--- VISTA Migration: Add home_address to users table
--- Run once: psql vista_db < database/migration_user_address.sql
+-- VISTA Migration: home_address removed from users table
 -- ============================================================
 
-ALTER TABLE users
-  ADD COLUMN IF NOT EXISTS home_address TEXT;
+ALTER TABLE users DROP COLUMN IF EXISTS home_address;
 
 
   -- ============================================================

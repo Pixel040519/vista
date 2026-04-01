@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Search, Plus, Filter, ChevronRight, Pencil, Trash2,
@@ -13,7 +13,7 @@ import clsx from 'clsx'
 import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
 
 // ── School constants ──────────────────────────────────────────
-const GRADE_LEVELS = ['Pre-Nursery','Pre-Kinder','Nursery','Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
+const GRADE_LEVELS = ['Pre-Nursery','Nursery','Pre-Kinder','Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
 
 // Sections loaded dynamically from API per grade level
 
@@ -432,25 +432,22 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
 
       {tab === 'guardians' && mode === 'create' && (
         <div className="space-y-3">
-          {/* Skip guardians checkbox */}
-          <label className="flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all border-slate-200 hover:border-teal-300 bg-slate-50">
-            <input type="checkbox" className="rounded w-4 h-4 accent-teal-500"
-              checked={skipGuardians} onChange={e => setSkipGuardians(e.target.checked)}/>
-            <div>
-              <p className="text-sm font-medium text-slate-700">Add guardians / parents later</p>
-              <p className="text-xs text-slate-400 mt-0.5">You can link guardians from the student list after saving.</p>
-            </div>
-          </label>
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" className="rounded accent-teal-500"
+                checked={skipGuardians} onChange={e => setSkipGuardians(e.target.checked)}/>
+              <span className="text-sm text-slate-600 font-medium cursor-pointer">Add guardians / parents later</span>
+            </label>
+            {!skipGuardians && (
+              <button type="button" onClick={addG}
+                className="flex items-center gap-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors">
+                <Plus size={13}/> Add Guardian
+              </button>
+            )}
+          </div>
 
           {!skipGuardians && (
             <div>
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-slate-500">Add parents or guardians for this student.</p>
-                <button type="button" onClick={addG}
-                  className="flex items-center gap-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors">
-                  <Plus size={13}/> Add Guardian
-                </button>
-              </div>
               {form.guardians.length === 0 ? (
                 <div className="text-center py-8 text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">
                   No guardians added.
@@ -770,6 +767,18 @@ function DeleteConfirm({ student, onConfirm, onClose }) {
 export default function Students() {
   const { user } = useAuth()
   const isAdmin  = user?.role === 'admin'
+  const isTeacher = user?.role === 'teacher'
+  const assignments = user?.assignments || []
+
+  // Derive unique grade_level + section pairs from teacher assignments
+  const teacherSections = useMemo(() => {
+    const map = new Map()
+    for (const a of assignments) {
+      const key = `${a.grade_level}|||${a.section}`
+      if (!map.has(key)) map.set(key, { grade_level: a.grade_level, section: a.section })
+    }
+    return [...map.values()].sort((a, b) => a.grade_level.localeCompare(b.grade_level) || a.section.localeCompare(b.section))
+  }, [assignments])
 
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -777,18 +786,33 @@ export default function Students() {
   const search        = searchParams.get('q')       || ''
   const gradeFilter   = searchParams.get('grade')   || ''
   const sectionFilter = searchParams.get('section') || ''
+  // Teacher: combined section key
+  const teacherSection = searchParams.get('ts') || ''
 
-  const setSearch        = (v) => updateParams({ q: v,       grade: gradeFilter,   section: sectionFilter })
-  const setGradeFilter   = (v) => updateParams({ q: search,  grade: v,             section: '' })
-  const setSectionFilter = (v) => updateParams({ q: search,  grade: gradeFilter,   section: v })
+  const setSearch        = (v) => updateParams({ q: v, grade: gradeFilter, section: sectionFilter, ts: teacherSection })
+  const setGradeFilter   = (v) => updateParams({ q: search, grade: v, section: '', ts: teacherSection })
+  const setSectionFilter = (v) => updateParams({ q: search, grade: gradeFilter, section: v, ts: teacherSection })
+  const setTeacherSection = (v) => updateParams({ q: search, grade: '', section: '', ts: v })
 
   const updateParams = (vals) => {
     const p = {}
     if (vals.q)       p.q       = vals.q
     if (vals.grade)   p.grade   = vals.grade
     if (vals.section) p.section = vals.section
+    if (vals.ts)      p.ts      = vals.ts
     setSearchParams(p, { replace: true })
   }
+
+  // For teacher: auto-select first section if none selected
+  useEffect(() => {
+    if (isTeacher && !teacherSection && teacherSections.length > 0) {
+      setTeacherSection(`${teacherSections[0].grade_level}|||${teacherSections[0].section}`)
+    }
+  }, [isTeacher, teacherSections])
+
+  // Derive active grade/section for fetching
+  const activeGrade = isTeacher ? (teacherSection.split('|||')[0] || '') : gradeFilter
+  const activeSection = isTeacher ? (teacherSection.split('|||')[1] || '') : sectionFilter
 
   const [students, setStudents]     = useState([])
   const [pagination, setPagination] = useState({ total:0, page:1, totalPages:1 })
@@ -800,23 +824,29 @@ export default function Students() {
   const [editGuardians, setEditGuardians] = useState(null)
   const [deleteTarget, setDeleteTarget]   = useState(null)
 
-  // Load sections for the filter bar when grade changes
-  // NOTE: do NOT reset sectionFilter here — that wipes the URL param on mount
+  // Load sections for the filter bar when grade changes (admin only)
   useEffect(() => {
+    if (isTeacher) return
     if (!gradeFilter) { setFilterSections([]); return }
     curriculumApi.getSections({ grade_level: gradeFilter })
       .then(res => setFilterSections(res.data.sections || []))
       .catch(() => setFilterSections([]))
-  }, [gradeFilter])
+  }, [gradeFilter, isTeacher])
 
   const fetchStudents = useCallback(async (page = 1) => {
+    if (isTeacher && !teacherSection) return
     setLoading(true)
     try {
-      const res = await studentApi.list({ search, grade_level: gradeFilter, section: sectionFilter || undefined, page, limit: 20 })
+      const res = await studentApi.list({
+        search,
+        grade_level: activeGrade || undefined,
+        section: activeSection || undefined,
+        page, limit: 20
+      })
       setStudents(res.data.students)
       setPagination(res.data.pagination)
     } catch {} finally { setLoading(false) }
-  }, [search, gradeFilter, sectionFilter])
+  }, [search, activeGrade, activeSection, isTeacher, teacherSection])
 
   useEffect(() => {
     const t = setTimeout(() => fetchStudents(1), 300)
@@ -866,25 +896,45 @@ export default function Students() {
 
       {/* Filters */}
       <div className="card p-4 flex flex-col sm:flex-row gap-3 flex-wrap">
+        {/* Section picker for teachers */}
+        {isTeacher && (
+          <div className="sm:w-56 min-w-0 flex-shrink-0">
+            <label className="block text-xs font-medium text-slate-500 mb-1">Class</label>
+            <select className="input truncate" value={teacherSection} onChange={e => setTeacherSection(e.target.value)}>
+              {teacherSections.length === 0 && <option value="">No assigned sections</option>}
+              {teacherSections.map(s => (
+                <option key={`${s.grade_level}|||${s.section}`} value={`${s.grade_level}|||${s.section}`}>
+                  {s.grade_level} — {s.section}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Search */}
         <div className="relative flex-1 min-w-48">
-          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"/>
-          <input className="input pl-10" placeholder="Search by name or LRN..."
-            value={search} onChange={e => setSearch(e.target.value)}/>
+          {isTeacher && <label className="block text-xs font-medium text-slate-500 mb-1">Search</label>}
+          <div className="relative">
+            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"/>
+            <input className="input pl-10" placeholder="Search by name or LRN..."
+              value={search} onChange={e => setSearch(e.target.value)}/>
+          </div>
         </div>
 
-        {/* Grade Level filter */}
-        <div className="relative sm:w-48">
-          <Filter size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"/>
-          <select className="input pl-9 appearance-none cursor-pointer"
-            value={gradeFilter} onChange={e => setGradeFilter(e.target.value)}>
-            <option value="">All Grade Levels</option>
-            {GRADE_LEVELS.map(g => <option key={g}>{g}</option>)}
-          </select>
-        </div>
+        {/* Grade Level filter (admin only) */}
+        {!isTeacher && (
+          <div className="relative sm:w-48">
+            <Filter size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"/>
+            <select className="input pl-9 appearance-none cursor-pointer"
+              value={gradeFilter} onChange={e => setGradeFilter(e.target.value)}>
+              <option value="">All Grade Levels</option>
+              {GRADE_LEVELS.map(g => <option key={g}>{g}</option>)}
+            </select>
+          </div>
+        )}
 
-        {/* Section filter — only shown when a grade is selected */}
-        {gradeFilter && (
+        {/* Section filter (admin only) — only shown when a grade is selected */}
+        {!isTeacher && gradeFilter && (
           <div className="relative sm:w-44">
             <select
               className="input appearance-none cursor-pointer"
@@ -916,8 +966,8 @@ export default function Students() {
                   <tr>
                     <th>Student</th>
                     <th>LRN</th>
-                    <th>Grade Level</th>
-                    <th>Section</th>
+                    {!isTeacher && <th>Grade Level</th>}
+                    {!isTeacher && <th>Section</th>}
                     <th>Gender</th>
                     {isAdmin && <th className="text-right pr-4">Actions</th>}
                     <th></th>
@@ -942,12 +992,14 @@ export default function Students() {
                           {s.lrn}
                         </span>
                       </td>
-                      <td>
-                        <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-medium">
-                          {s.grade_level}
-                        </span>
-                      </td>
-                      <td className="text-sm text-slate-500">{s.section || '—'}</td>
+                      {!isTeacher && (
+                        <td>
+                          <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-medium">
+                            {s.grade_level}
+                          </span>
+                        </td>
+                      )}
+                      {!isTeacher && <td className="text-sm text-slate-500">{s.section || '—'}</td>}
                       <td>
                         <span className={clsx('px-2 py-0.5 rounded-full text-xs font-medium', GENDER_STYLE[s.gender] || 'bg-slate-100 text-slate-600')}>
                           {s.gender}

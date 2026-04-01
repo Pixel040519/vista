@@ -2,34 +2,75 @@
 // ATTENDANCE PAGE
 // ============================================================
 import { formatName, nameInitial } from '../utils/nameHelper'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { attendanceApi, studentApi } from '../api/client'
 import { LoadingSpinner, EmptyState } from '../components/UI'
+import { useAuth } from '../context/AuthContext'
 import { ClipboardCheck, Search } from 'lucide-react'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
 export function Attendance() {
+  const { user } = useAuth()
+  const assignments = user?.assignments || []
+
+  // Derive unique grade_level + section pairs from assignments
+  const sections = useMemo(() => {
+    const map = new Map()
+    for (const a of assignments) {
+      const key = `${a.grade_level}|||${a.section}`
+      if (!map.has(key)) map.set(key, { grade_level: a.grade_level, section: a.section, subjects: [] })
+      const entry = map.get(key)
+      if (!entry.subjects.includes(a.subject)) entry.subjects.push(a.subject)
+    }
+    return [...map.values()].sort((a, b) => a.grade_level.localeCompare(b.grade_level) || a.section.localeCompare(b.section))
+  }, [assignments])
+
+  const [selectedSection, setSelectedSection] = useState('')
   const [students, setStudents] = useState([])
-  const [records, setRecords]   = useState({})   // { studentId: status }
+  const [records, setRecords]   = useState({})
   const [date, setDate]         = useState(format(new Date(), 'yyyy-MM-dd'))
   const [search, setSearch]     = useState('')
   const [saving, setSaving]     = useState(false)
-  const [loading, setLoading]   = useState(true)
+  const [loading, setLoading]   = useState(false)
 
+  // Auto-select first section
   useEffect(() => {
-    studentApi.list({ limit: 100 })
+    if (sections.length > 0 && !selectedSection) {
+      setSelectedSection(`${sections[0].grade_level}|||${sections[0].section}`)
+    }
+  }, [sections])
+
+  // Load students when section changes
+  useEffect(() => {
+    if (!selectedSection) { setStudents([]); return }
+    const [grade_level, section] = selectedSection.split('|||')
+    setLoading(true)
+    setRecords({})
+    studentApi.list({ grade_level, section, limit: 200 })
       .then(res => setStudents(res.data.students))
-      .catch(() => {})
+      .catch(() => setStudents([]))
       .finally(() => setLoading(false))
-  }, [])
+  }, [selectedSection])
+
+  // Load existing attendance records when date or section changes
+  useEffect(() => {
+    if (!selectedSection || !date) return
+    const [grade_level, section] = selectedSection.split('|||')
+    attendanceApi.bulk({ date, grade_level, section })
+      .then(res => setRecords(res.data.records || {}))
+      .catch(() => setRecords({}))
+  }, [selectedSection, date])
 
   const filtered = students.filter(s =>
     formatName(s).toLowerCase().includes(search.toLowerCase()) ||
     (s.lrn || '').toLowerCase().includes(search.toLowerCase())
   )
 
-  const setStatus = (id, status) => setRecords(p => ({ ...p, [id]: status }))
+  const setStatus = (id, status) => setRecords(p => {
+    if (p[id] === status) { const { [id]: _, ...rest } = p; return rest }
+    return { ...p, [id]: status }
+  })
 
   const handleSave = async () => {
     const toSubmit = Object.entries(records).map(([student_id, status]) => ({
@@ -40,7 +81,6 @@ export function Attendance() {
     try {
       await attendanceApi.submit(toSubmit)
       toast.success(`Attendance saved for ${toSubmit.length} students.`)
-      setRecords({})
     } catch {}
     setSaving(false)
   }
@@ -52,6 +92,9 @@ export function Attendance() {
     { val: 'Excused', color: 'bg-blue-500 text-white border-blue-500' },
   ]
 
+  const currentSection = selectedSection ? selectedSection.split('|||') : []
+  const currentSubjects = sections.find(s => `${s.grade_level}|||${s.section}` === selectedSection)?.subjects || []
+
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -61,27 +104,56 @@ export function Attendance() {
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <input type="date" className="input w-auto" value={date} onChange={e => setDate(e.target.value)} />
-          <button onClick={handleSave} disabled={saving} className="btn-primary">
+          <button onClick={handleSave} disabled={saving || !selectedSection} className="btn-primary">
             {saving ? 'Saving...' : 'Save Attendance'}
           </button>
         </div>
       </div>
 
-      <div className="card p-4">
-        <div className="relative">
-          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input className="input pl-10" placeholder="Search student..." value={search} onChange={e => setSearch(e.target.value)} />
+      <div className="card p-4 flex flex-col sm:flex-row gap-3">
+        <div className="sm:w-56 min-w-0 flex-shrink-0">
+          <label className="block text-xs font-medium text-slate-500 mb-1">Class</label>
+          <select className="input truncate" value={selectedSection} onChange={e => setSelectedSection(e.target.value)}>
+            {sections.length === 0 && <option value="">No assigned sections</option>}
+            {sections.map(s => (
+              <option key={`${s.grade_level}|||${s.section}`} value={`${s.grade_level}|||${s.section}`}>
+                {s.grade_level} — {s.section}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex-1">
+          <label className="block text-xs font-medium text-slate-500 mb-1">Search</label>
+          <div className="relative">
+            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input className="input pl-10" placeholder="Search student..." value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
         </div>
       </div>
 
+      {!selectedSection ? (
+        <div className="card">
+          <EmptyState icon={ClipboardCheck} title="No sections assigned" description="Contact your admin to assign sections to your account." />
+        </div>
+      ) : (
       <div className="card overflow-hidden">
-        {loading ? <LoadingSpinner /> : (
+        {currentSubjects.length > 0 && (
+          <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-medium text-slate-400">Subject:</span>
+            {currentSubjects.map(s => (
+              <span key={s} className="px-2.5 py-0.5 rounded-full bg-teal-50 text-teal-700 text-xs font-medium">{s}</span>
+            ))}
+          </div>
+        )}
+        {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
+          <EmptyState icon={ClipboardCheck} title="No students found"
+            description={search ? 'No students match your search.' : `No students in ${currentSection[0]} — ${currentSection[1]}.`} />
+        ) : (
           <div className="overflow-x-auto">
           <table className="table-base">
             <thead>
               <tr>
                 <th>Student</th>
-                <th>Grade</th>
                 <th>Mark Attendance</th>
               </tr>
             </thead>
@@ -99,7 +171,6 @@ export function Attendance() {
                       </div>
                     </div>
                   </td>
-                  <td className="text-sm text-slate-500">{s.grade_level}</td>
                   <td>
                     <div className="flex gap-1.5 flex-wrap">
                       {STATUS_OPTIONS.map(opt => (
@@ -124,6 +195,7 @@ export function Attendance() {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }
@@ -223,7 +295,7 @@ export function Grades() {
 // ============================================================
 import { behaviorApi, aiApi } from '../api/client'
 import { SentimentBadge, Modal } from '../components/UI'
-import { Heart, Plus as PlusIcon } from 'lucide-react'
+import { Heart, Plus as PlusIcon, Pencil, Trash2 } from 'lucide-react'
 
 export function Behavior() {
   const [students, setStudentsB]  = useState([])
@@ -234,6 +306,7 @@ export function Behavior() {
   const [submitting, setSubmitting] = useState(false)
   const [form, setForm]           = useState({ observation: '', category: 'Social', observed_at: '' })
   const [aiResult, setAiResult]   = useState(null)
+  const [editingId, setEditingId] = useState(null)
 
   useEffect(() => {
     studentApi.list({ limit: 200 })
@@ -264,14 +337,36 @@ export function Behavior() {
     e.preventDefault()
     setSubmitting(true)
     try {
-      await behaviorApi.log({ student_id: studentId, ...form })
-      toast.success('Behavior logged successfully!')
+      if (editingId) {
+        await behaviorApi.update(editingId, { observation: form.observation, category: form.category })
+        toast.success('Behavior log updated!')
+      } else {
+        await behaviorApi.log({ student_id: studentId, ...form })
+        toast.success('Behavior logged successfully!')
+      }
       setShowLog(false)
+      setEditingId(null)
       setForm({ observation: '', category: 'Social', observed_at: '' })
       setAiResult(null)
       fetchLogs(studentId)
     } catch {}
     setSubmitting(false)
+  }
+
+  const handleEdit = (b) => {
+    setForm({ observation: b.observation, category: b.category, observed_at: '' })
+    setEditingId(b.id)
+    setAiResult(null)
+    setShowLog(true)
+  }
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Delete this behavior log?')) return
+    try {
+      await behaviorApi.delete(id)
+      toast.success('Behavior log deleted.')
+      fetchLogs(studentId)
+    } catch {}
   }
 
   return (
@@ -314,7 +409,19 @@ export function Behavior() {
                   </div>
                 </div>
                 <p className="text-sm text-slate-600 mt-1.5">{b.observation}</p>
-                <p className="text-xs text-slate-400 mt-1">{format(new Date(b.observed_at), 'MMM d, yyyy · h:mm a')}</p>
+                <div className="flex items-center justify-between mt-1">
+                  <p className="text-xs text-slate-400">{format(new Date(b.observed_at), 'MMM d, yyyy · h:mm a')}</p>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => handleEdit(b)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors">
+                      <Pencil size={13}/>
+                    </button>
+                    <button onClick={() => handleDelete(b.id)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors">
+                      <Trash2 size={13}/>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           ))}
@@ -329,7 +436,7 @@ export function Behavior() {
         </div>
       )}
 
-      <Modal open={showLog} onClose={() => { setShowLog(false); setAiResult(null) }} title="Log Behavior Observation">
+      <Modal open={showLog} onClose={() => { setShowLog(false); setEditingId(null); setAiResult(null) }} title={editingId ? 'Edit Behavior Observation' : 'Log Behavior Observation'}>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Observation *</label>
@@ -353,23 +460,25 @@ export function Behavior() {
               </div>
             )}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className={editingId ? '' : 'grid grid-cols-1 sm:grid-cols-2 gap-4'}>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">Category</label>
               <select className="input" value={form.category} onChange={e => setForm(p => ({ ...p, category: e.target.value }))}>
                 <option>Social</option><option>Emotional</option><option>Academic</option><option>Physical</option>
               </select>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">Date & Time</label>
-              <input type="datetime-local" className="input" value={form.observed_at}
-                onChange={e => setForm(p => ({ ...p, observed_at: e.target.value }))} />
-            </div>
+            {!editingId && (
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">Date & Time</label>
+                <input type="datetime-local" className="input" value={form.observed_at}
+                  onChange={e => setForm(p => ({ ...p, observed_at: e.target.value }))} />
+              </div>
+            )}
           </div>
           <div className="flex gap-3 pt-1">
-            <button type="button" onClick={() => setShowLog(false)} className="btn-secondary flex-1">Cancel</button>
+            <button type="button" onClick={() => { setShowLog(false); setEditingId(null) }} className="btn-secondary flex-1">Cancel</button>
             <button type="submit" disabled={submitting} className="btn-primary flex-1 justify-center">
-              {submitting ? 'Saving...' : 'Save Observation'}
+              {submitting ? 'Saving...' : editingId ? 'Update Observation' : 'Save Observation'}
             </button>
           </div>
         </form>
