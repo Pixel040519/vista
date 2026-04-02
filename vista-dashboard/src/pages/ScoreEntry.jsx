@@ -1,4 +1,4 @@
-import { useState, useEffect, useReducer, useCallback, useRef, Fragment } from 'react'
+import { useState, useEffect, useReducer, useCallback, useRef, useMemo, Fragment } from 'react'
 import { curriculumApi, scoreApi } from '../api/client'
 import { LoadingSpinner, EmptyState, Modal } from '../components/UI'
 import { formatName } from '../utils/nameHelper'
@@ -11,8 +11,6 @@ import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import XLSX from 'xlsx-js-style'
 
-const GRADE_LEVELS = ['Pre-Nursery','Nursery','Pre-Kinder','Kinder',
-  'Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
 const QUARTERS = [1, 2, 3, 4]
 
 // DepEd transmutation table (DO 8, s. 2015)
@@ -57,18 +55,39 @@ function usePersistedFilter(key, fallback = '') {
 }
 
 export default function ScoreEntry() {
-  const { user } = useAuth()
+  const { activeAssignments } = useAuth()
+  const assignments = activeAssignments
 
   // ── Filter state (persisted in sessionStorage) ────────────
   const [syId, setSyId]             = usePersistedFilter('syId')
-  const [gradeLevel, setGradeLevel] = usePersistedFilter('gradeLevel')
-  const [section, setSection]       = usePersistedFilter('section')
+  const [selectedClass, setSelectedClass] = usePersistedFilter('selectedClass')
   const [subjectId, setSubjectId]   = usePersistedFilter('subjectId')
   const [quarter, setQuarter]       = usePersistedFilter('quarter')
 
   const [schoolYears, setSchoolYears] = useState([])
-  const [sections, setSections]       = useState([])
   const [subjects, setSubjects]       = useState([])
+
+  // Derive gradeLevel and section from selectedClass
+  const [gradeLevel, section] = selectedClass ? selectedClass.split('|||') : ['', '']
+
+  // Derive unique class (grade_level + section) options from teacher assignments
+  const activeSYLabel = schoolYears.find(sy => sy.id === syId)?.label || ''
+  const classOptions = useMemo(() => {
+    const map = new Map()
+    for (const a of assignments) {
+      const key = `${a.grade_level}|||${a.section}`
+      if (!map.has(key)) map.set(key, { grade_level: a.grade_level, section: a.section, subjects: [] })
+      const entry = map.get(key)
+      if (!entry.subjects.includes(a.subject)) entry.subjects.push(a.subject)
+    }
+    return [...map.values()].sort((a, b) => a.grade_level.localeCompare(b.grade_level) || a.section.localeCompare(b.section))
+  }, [assignments])
+
+  // Get allowed subject names for the selected class
+  const allowedSubjects = useMemo(() => {
+    if (!selectedClass) return []
+    return classOptions.find(c => `${c.grade_level}|||${c.section}` === selectedClass)?.subjects || []
+  }, [classOptions, selectedClass])
 
   // ── Data state ────────────────────────────────────────────
   const [categories, setCategories]       = useState([])
@@ -102,29 +121,26 @@ export default function ScoreEntry() {
     }).catch(() => {})
   }, [])
 
-  // ── Load sections when grade_level or sy changes ──────────
+  // ── Auto-select first class if none selected ──────────────
   useEffect(() => {
-    if (!syId || !gradeLevel) { setSections([]); return }
-    curriculumApi.getSections({ sy_id: syId, grade_level: gradeLevel })
-      .then(res => {
-        const list = res.data.sections || []
-        setSections(list)
-        if (section && !list.find(s => s.name === section)) setSection('')
-      })
-      .catch(() => setSections([]))
-  }, [syId, gradeLevel])
+    if (classOptions.length > 0 && !selectedClass) {
+      setSelectedClass(`${classOptions[0].grade_level}|||${classOptions[0].section}`)
+    }
+  }, [classOptions])
 
-  // ── Load subjects when grade_level or sy changes ──────────
+  // ── Load subjects when class or sy changes, filtered to assignments ──
   useEffect(() => {
     if (!syId || !gradeLevel) { setSubjects([]); return }
     curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel })
       .then(res => {
         const list = res.data.subjects || []
-        setSubjects(list)
-        if (subjectId && !list.find(s => s.id === subjectId)) setSubjectId('')
+        // Filter to only subjects the teacher is assigned to for this class
+        const filtered = list.filter(s => allowedSubjects.includes(s.name))
+        setSubjects(filtered)
+        if (subjectId && !filtered.find(s => s.id === subjectId)) setSubjectId('')
       })
       .catch(() => setSubjects([]))
-  }, [syId, gradeLevel])
+  }, [syId, gradeLevel, allowedSubjects])
 
   // ── Load data when all filters are set ────────────────────
   const loadData = useCallback(async () => {
@@ -356,7 +372,7 @@ export default function ScoreEntry() {
 
   // ── Subject name lookup ───────────────────────────────────
   const subjectName = subjects.find(s => s.id === subjectId)?.name || ''
-  const syLabel = schoolYears.find(sy => sy.id === syId)?.label || ''
+  const syLabel = activeSYLabel
   const quarterLabels = { 1: 'FIRST GRADING', 2: 'SECOND GRADING', 3: 'THIRD GRADING', 4: 'FOURTH GRADING' }
 
   // ── Excel export ──────────────────────────────────────────
@@ -671,30 +687,38 @@ export default function ScoreEntry() {
           <Filter size={15} className="text-slate-400" />
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Filters</span>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="input bg-slate-50 flex items-center text-slate-700 font-semibold cursor-default">
             {syLabel ? `SY ${syLabel}` : 'No active school year'}
           </div>
 
-          <select className="input" value={gradeLevel} onChange={e => { setGradeLevel(e.target.value); setSection(''); setSubjectId('') }}>
-            <option value="">Grade Level</option>
-            {GRADE_LEVELS.map(gl => <option key={gl} value={gl}>{gl}</option>)}
-          </select>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Class</label>
+            <select className="input truncate" value={selectedClass} onChange={e => { setSelectedClass(e.target.value); setSubjectId('') }}>
+              {classOptions.length === 0 && <option value="">No assigned classes</option>}
+              {classOptions.map(c => (
+                <option key={`${c.grade_level}|||${c.section}`} value={`${c.grade_level}|||${c.section}`}>
+                  {c.grade_level} — {c.section}
+                </option>
+              ))}
+            </select>
+          </div>
 
-          <select className="input" value={section} onChange={e => setSection(e.target.value)} disabled={!sections.length}>
-            <option value="">Section</option>
-            {sections.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-          </select>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Subject</label>
+            <select className="input" value={subjectId} onChange={e => setSubjectId(e.target.value)} disabled={!subjects.length}>
+              <option value="">Subject</option>
+              {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
 
-          <select className="input" value={subjectId} onChange={e => setSubjectId(e.target.value)} disabled={!subjects.length}>
-            <option value="">Subject</option>
-            {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-
-          <select className="input" value={quarter} onChange={e => setQuarter(e.target.value)}>
-            <option value="">Quarter</option>
-            {QUARTERS.map(q => <option key={q} value={q}>Quarter {q}</option>)}
-          </select>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Quarter</label>
+            <select className="input" value={quarter} onChange={e => setQuarter(e.target.value)}>
+              <option value="">Quarter</option>
+              {QUARTERS.map(q => <option key={q} value={q}>Quarter {q}</option>)}
+            </select>
+          </div>
         </div>
       </div>
 

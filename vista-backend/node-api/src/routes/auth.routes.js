@@ -69,9 +69,24 @@ router.post('/login', async (req, res, next) => {
     const user = result.rows[0];
     if (!await bcrypt.compare(value.password, user.password_hash)) throw new AppError('Invalid credentials.', 401);
 
+    const userData = { id: user.id, email: user.email, full_name: user.full_name, surname: user.surname, first_name: user.first_name, middle_name: user.middle_name, role: user.role };
+
+    if (user.role === 'teacher') {
+      const asgn = await query(
+        `SELECT id, grade_level, section, subject, school_year
+         FROM teacher_assignments WHERE teacher_id=$1
+         ORDER BY grade_level, section, subject`,
+        [user.id]
+      );
+      userData.assignments = asgn.rows;
+    }
+
+    const syRes = await query('SELECT label FROM school_years WHERE is_active=TRUE LIMIT 1');
+    userData.active_school_year = syRes.rows[0]?.label || null;
+
     res.json({
       message: 'Login successful.',
-      user: { id: user.id, email: user.email, full_name: user.full_name, surname: user.surname, first_name: user.first_name, middle_name: user.middle_name, role: user.role },
+      user: userData,
       ...generateTokens(user),
     });
   } catch (err) { next(err); }
@@ -111,6 +126,9 @@ router.get('/me', authenticate, async (req, res, next) => {
       );
       user.assignments = asgn.rows;
     }
+
+    const syRes = await query('SELECT label FROM school_years WHERE is_active=TRUE LIMIT 1');
+    user.active_school_year = syRes.rows[0]?.label || null;
 
     res.json({ user });
   } catch (err) { next(err); }

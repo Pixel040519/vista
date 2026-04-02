@@ -137,6 +137,7 @@ export const accountApi = {
   updateTeacher:  (id, d)  => api.put(`/accounts/teachers/${id}`, d),
   deactivate:     (id)     => api.delete(`/accounts/teachers/${id}`),
   deletePermanent:(id)     => api.delete(`/accounts/teachers/${id}/permanent`),
+  assignmentHistory: (id)  => api.get(`/accounts/teachers/${id}/assignment-history`),
 }
 
 // ── Scores (Score Items & Student Scores) ────────────────────

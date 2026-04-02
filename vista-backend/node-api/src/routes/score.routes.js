@@ -16,6 +16,46 @@ const transmuteGrade = (initial) => {
   return 60
 }
 
+// ── Helper: verify teacher is assigned to the given subject's class ──
+// Resolves subject_id → subject name + grade_level, then checks teacher_assignments.
+// Admins are always allowed. For teachers, grade_level and section must also be provided.
+const verifyTeacherAssignment = async (req, subjectId, gradeLevel, section) => {
+  if (req.user.role === 'admin') return
+  // Look up the subject name, grade_level, and school year from subjects table
+  const subRes = await query(
+    `SELECT s.name, s.grade_level, sy.label AS school_year
+     FROM subjects s
+     JOIN school_years sy ON sy.id = s.school_year_id
+     WHERE s.id=$1`, [subjectId]
+  )
+  if (!subRes.rows.length) throw new AppError('Subject not found.', 404)
+  const subjectName = subRes.rows[0].name
+  const subGradeLevel = gradeLevel || subRes.rows[0].grade_level
+  const subSchoolYear = subRes.rows[0].school_year
+
+  const conditions = [
+    'teacher_id=$1', 'grade_level=$2', 'subject=$3'
+  ]
+  const params = [req.user.id, subGradeLevel, subjectName]
+
+  if (section) {
+    conditions.push(`section=$${params.length + 1}`)
+    params.push(section)
+  }
+  if (subSchoolYear) {
+    conditions.push(`school_year=$${params.length + 1}`)
+    params.push(subSchoolYear)
+  }
+
+  const check = await query(
+    `SELECT id FROM teacher_assignments WHERE ${conditions.join(' AND ')} LIMIT 1`,
+    params
+  )
+  if (!check.rows.length) {
+    throw new AppError('You are not assigned to this class/subject.', 403)
+  }
+}
+
 // ── Helper: resolve school_year_id ────────────────────────────
 const resolveSYId = async (sy_id) => {
   if (sy_id) return sy_id
@@ -109,6 +149,9 @@ router.post('/items', authorize('admin', 'teacher'), async (req, res, next) => {
     const { error, value } = schema.validate(req.body)
     if (error) throw new AppError(error.details[0].message, 422)
 
+    // Verify teacher is assigned to this subject
+    await verifyTeacherAssignment(req, value.subject_id)
+
     // Verify component exists and belongs to the subject
     const compCheck = await query(
       `SELECT id FROM grading_structure
@@ -185,6 +228,13 @@ router.post('/items', authorize('admin', 'teacher'), async (req, res, next) => {
 // DELETE /api/scores/items/:id — Soft-delete a score item
 router.delete('/items/:id', authorize('admin', 'teacher'), async (req, res, next) => {
   try {
+    // Look up the item's subject to verify assignment
+    const itemRes = await query(
+      'SELECT subject_id FROM score_items WHERE id=$1 AND is_active=TRUE', [req.params.id]
+    )
+    if (!itemRes.rows.length) throw new AppError('Score item not found.', 404)
+    await verifyTeacherAssignment(req, itemRes.rows[0].subject_id)
+
     const result = await query(
       `UPDATE score_items SET is_active=FALSE, updated_at=NOW()
        WHERE id=$1 AND is_active=TRUE RETURNING id`,
@@ -208,6 +258,9 @@ router.get('/', authorize('admin', 'teacher'), async (req, res, next) => {
     if (!subject_id || !quarter || !grade_level || !section) {
       throw new AppError('subject_id, quarter, grade_level, and section are required.', 400)
     }
+
+    // Verify teacher is assigned to this class/subject
+    await verifyTeacherAssignment(req, subject_id, grade_level, section)
 
     // Fetch students in this grade_level + section
     const studentsRes = await query(
@@ -267,6 +320,9 @@ router.post('/', authorize('admin', 'teacher'), async (req, res, next) => {
     })
     const { error, value } = schema.validate(req.body)
     if (error) throw new AppError(error.details[0].message, 422)
+
+    // Verify teacher is assigned to this class/subject
+    await verifyTeacherAssignment(req, value.subject_id, value.grade_level, value.section)
 
     // Validate scores don't exceed HPS
     const itemIds = [...new Set(value.scores.map(s => s.score_item_id))]
@@ -370,6 +426,9 @@ router.get('/breakdown', authorize('admin', 'teacher'), async (req, res, next) =
     if (!subject_id || !quarter || !grade_level || !section) {
       throw new AppError('subject_id, quarter, grade_level, and section are required.', 400)
     }
+
+    // Verify teacher is assigned to this class/subject
+    await verifyTeacherAssignment(req, subject_id, grade_level, section)
 
     const categories = await getStructureTree(subject_id)
 

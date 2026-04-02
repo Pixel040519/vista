@@ -765,10 +765,10 @@ function DeleteConfirm({ student, onConfirm, onClose }) {
 
 // ── Main Page ─────────────────────────────────────────────────
 export default function Students() {
-  const { user } = useAuth()
+  const { user, activeAssignments } = useAuth()
   const isAdmin  = user?.role === 'admin'
   const isTeacher = user?.role === 'teacher'
-  const assignments = user?.assignments || []
+  const assignments = activeAssignments
 
   // Derive unique grade_level + section pairs from teacher assignments
   const teacherSections = useMemo(() => {

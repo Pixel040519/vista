@@ -149,6 +149,19 @@ router.post('/school-years', authorize('admin'), async (req, res, next) => {
             [newSubId, newCat.rows[0].id, cat.old_id]
           )
         }
+
+        // Copy teacher assignments from source school year
+        const srcSY = await client.query('SELECT label FROM school_years WHERE id=$1', [value.copy_from_id])
+        if (srcSY.rows.length) {
+          await client.query(
+            `INSERT INTO teacher_assignments (teacher_id, grade_level, section, subject, school_year)
+             SELECT teacher_id, grade_level, section, subject, $1
+             FROM teacher_assignments
+             WHERE school_year=$2
+             ON CONFLICT DO NOTHING`,
+            [newSY.label, srcSY.rows[0].label]
+          )
+        }
       }
 
       return newSY

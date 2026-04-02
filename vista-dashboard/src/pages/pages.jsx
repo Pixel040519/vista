@@ -11,8 +11,8 @@ import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
 export function Attendance() {
-  const { user } = useAuth()
-  const assignments = user?.assignments || []
+  const { activeAssignments } = useAuth()
+  const assignments = activeAssignments
 
   // Derive unique grade_level + section pairs from assignments
   const sections = useMemo(() => {

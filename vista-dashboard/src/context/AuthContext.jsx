@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext, useState, useEffect, useMemo } from 'react'
 import { authApi } from '../api/client'
 
 //this auth context is for preview mode only, to bypass to every page of the system.
@@ -37,8 +37,14 @@ export function AuthProvider({ children }) {
     setUser(null)
   }
 
+  const activeAssignments = useMemo(() => {
+    if (!user?.assignments) return []
+    if (!user.active_school_year) return user.assignments
+    return user.assignments.filter(a => a.school_year === user.active_school_year)
+  }, [user])
+
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading }}>
+    <AuthContext.Provider value={{ user, login, logout, loading, activeAssignments }}>
       {children}
     </AuthContext.Provider>
   )

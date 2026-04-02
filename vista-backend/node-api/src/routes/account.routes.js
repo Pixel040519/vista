@@ -35,24 +35,34 @@ const updateSchema = Joi.object({
   assignments: Joi.array().items(assignmentShape).optional(),
 })
 
-const getAssignments = async (teacher_id) => {
+const getActiveSYLabel = async () => {
+  const res = await query('SELECT label FROM school_years WHERE is_active=TRUE LIMIT 1')
+  if (!res.rows.length) throw new AppError('No active school year set.', 400)
+  return res.rows[0].label
+}
+
+const getAssignments = async (teacher_id, schoolYear) => {
+  const syLabel = schoolYear || await getActiveSYLabel()
   const res = await query(
     `SELECT id, grade_level, section, subject, school_year
-     FROM teacher_assignments WHERE teacher_id=$1
+     FROM teacher_assignments WHERE teacher_id=$1 AND school_year=$2
      ORDER BY grade_level, section, subject`,
-    [teacher_id]
+    [teacher_id, syLabel]
   )
   return res.rows
 }
 
-// GET /api/accounts/assignments — All taken teacher assignments
+// GET /api/accounts/assignments — All taken teacher assignments for the active SY
 router.get('/assignments', async (req, res, next) => {
   try {
+    const syLabel = await getActiveSYLabel()
     const result = await query(
       `SELECT ta.grade_level, ta.section, ta.subject, ta.teacher_id, u.full_name as teacher_name
        FROM teacher_assignments ta
        JOIN users u ON u.id = ta.teacher_id
-       ORDER BY ta.grade_level, ta.section, ta.subject`
+       WHERE ta.school_year=$1
+       ORDER BY ta.grade_level, ta.section, ta.subject`,
+      [syLabel]
     )
     res.json({ assignments: result.rows })
   } catch (err) { next(err) }
@@ -74,6 +84,10 @@ router.get('/teachers', async (req, res, next) => {
       conditions.push(`u.is_active=$${params.length}`)
     }
 
+    const syLabel = await getActiveSYLabel()
+    params.push(syLabel)
+    const syIdx = params.length
+
     const result = await query(
       `SELECT u.id, u.email, u.surname, u.first_name, u.middle_name, u.full_name,
               u.phone, u.is_active, u.created_at,
@@ -82,7 +96,7 @@ router.get('/teachers', async (req, res, next) => {
            'subject',ta.subject,'school_year',ta.school_year
          )) FILTER (WHERE ta.id IS NOT NULL),'[]') AS assignments
        FROM users u
-       LEFT JOIN teacher_assignments ta ON ta.teacher_id=u.id
+       LEFT JOIN teacher_assignments ta ON ta.teacher_id=u.id AND ta.school_year=$${syIdx}
        WHERE ${conditions.join(' AND ')}
        GROUP BY u.id ORDER BY u.surname, u.first_name`,
       params
@@ -106,6 +120,19 @@ router.get('/teachers/:id', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// GET /api/accounts/teachers/:id/assignment-history — All assignments across school years
+router.get('/teachers/:id/assignment-history', async (req, res, next) => {
+  try {
+    const result = await query(
+      `SELECT id, grade_level, section, subject, school_year
+       FROM teacher_assignments WHERE teacher_id=$1
+       ORDER BY school_year DESC, grade_level, section, subject`,
+      [req.params.id]
+    )
+    res.json({ assignments: result.rows })
+  } catch (err) { next(err) }
+})
+
 // POST /api/accounts/teachers
 router.post('/teachers', async (req, res, next) => {
   try {
@@ -118,13 +145,14 @@ router.post('/teachers', async (req, res, next) => {
     const existing = await query('SELECT id FROM users WHERE email=$1', [email])
     if (existing.rows.length) throw new AppError('Email already registered.', 409)
 
-    // Check for conflicts before creating
+    // Check for conflicts before creating (scoped to active SY)
+    const syLabel = await getActiveSYLabel()
     for (const a of assignments) {
       if (!a.grade_level || !a.section || !a.subject) continue
       const conflict = await query(
         `SELECT u.full_name FROM teacher_assignments ta JOIN users u ON u.id = ta.teacher_id
-         WHERE ta.grade_level=$1 AND ta.section=$2 AND ta.subject=$3`,
-        [a.grade_level, a.section, a.subject]
+         WHERE ta.grade_level=$1 AND ta.section=$2 AND ta.subject=$3 AND ta.school_year=$4`,
+        [a.grade_level, a.section, a.subject, syLabel]
       )
       if (conflict.rows.length) {
         throw new AppError(`${a.grade_level} — ${a.section} — ${a.subject} is already assigned to ${conflict.rows[0].full_name}.`, 409)
@@ -144,9 +172,9 @@ router.post('/teachers', async (req, res, next) => {
 
       for (const a of assignments) {
         await client.query(
-          `INSERT INTO teacher_assignments (teacher_id, grade_level, section, subject)
-           VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
-          [user.id, a.grade_level, a.section, a.subject]
+          `INSERT INTO teacher_assignments (teacher_id, grade_level, section, subject, school_year)
+           VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+          [user.id, a.grade_level, a.section, a.subject, syLabel]
         )
       }
       user.assignments = await getAssignments(user.id)
@@ -191,24 +219,26 @@ router.put('/teachers/:id', async (req, res, next) => {
       }
 
       if (assignments !== undefined) {
-        // Check for conflicts with other teachers
+        const syLabel = await getActiveSYLabel()
+        // Check for conflicts with other teachers (scoped to active SY)
         for (const a of assignments) {
           if (!a.grade_level || !a.section || !a.subject) continue
           const conflict = await client.query(
             `SELECT u.full_name FROM teacher_assignments ta JOIN users u ON u.id = ta.teacher_id
-             WHERE ta.grade_level=$1 AND ta.section=$2 AND ta.subject=$3 AND ta.teacher_id != $4`,
-            [a.grade_level, a.section, a.subject, req.params.id]
+             WHERE ta.grade_level=$1 AND ta.section=$2 AND ta.subject=$3 AND ta.school_year=$4 AND ta.teacher_id != $5`,
+            [a.grade_level, a.section, a.subject, syLabel, req.params.id]
           )
           if (conflict.rows.length) {
             throw new AppError(`${a.grade_level} — ${a.section} — ${a.subject} is already assigned to ${conflict.rows[0].full_name}.`, 409)
           }
         }
-        await client.query('DELETE FROM teacher_assignments WHERE teacher_id=$1', [req.params.id])
+        // Only delete assignments for the active SY (preserve historical)
+        await client.query('DELETE FROM teacher_assignments WHERE teacher_id=$1 AND school_year=$2', [req.params.id, syLabel])
         for (const a of assignments) {
           await client.query(
-            `INSERT INTO teacher_assignments (teacher_id, grade_level, section, subject)
-             VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
-            [req.params.id, a.grade_level, a.section, a.subject]
+            `INSERT INTO teacher_assignments (teacher_id, grade_level, section, subject, school_year)
+             VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+            [req.params.id, a.grade_level, a.section, a.subject, syLabel]
           )
         }
       }

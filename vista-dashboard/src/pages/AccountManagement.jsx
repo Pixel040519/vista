@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   UserCog, Plus, Search, Pencil, Trash2, ShieldOff,
-  ShieldCheck, Eye, EyeOff, X, BookOpen, ChevronDown
+  ShieldCheck, Eye, EyeOff, X, BookOpen, ChevronDown, History
 } from 'lucide-react'
 import { accountApi, curriculumApi } from '../api/client'
 import { LoadingSpinner, EmptyState, Modal, PhoneInput } from '../components/UI'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
+import { useAuth } from '../context/AuthContext'
 
 // ── School Data ───────────────────────────────────────────────
 const GRADE_LEVELS = [
@@ -86,12 +87,13 @@ function AssignmentRow({ row, index, onChange, onRemove, takenAssignments = [] }
         onChange={e => set('subject', e.target.value)}
         disabled={!row.grade_level || !row.section}
       >
-        <option value="">Subject</option>
+        <option value="" style={{ color: '#334155' }}>Subject</option>
         {subjects.map(s => {
           const taken = row.section && isTaken(row.grade_level, row.section, s.name)
           const takenBy = taken ? getTakenBy(row.grade_level, row.section, s.name) : ''
           return (
-            <option key={s.id} value={s.name} disabled={taken}>
+            <option key={s.id} value={s.name} disabled={taken}
+              style={{ color: taken ? '#dc2626' : '#334155' }}>
               {s.name}{taken ? ` (${takenBy})` : ''}
             </option>
           )
@@ -114,6 +116,8 @@ const emptyRow = () => ({ grade_level: '', section: '', subject: '' })
 
 // ── Teacher Form (shared by create + edit) ────────────────────
 function TeacherForm({ initial, onSubmit, onClose, mode }) {
+  const { user } = useAuth()
+  const activeSY = user?.active_school_year || ''
   const teacherId = initial?.id || null
   const [form, setForm] = useState({
     surname:     initial?.surname     || '',
@@ -133,15 +137,29 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
   const [showPw, setShowPw]   = useState(false)
   const [saving, setSaving]   = useState(false)
   const [takenAssignments, setTakenAssignments] = useState([])
+  const [pastYears, setPastYears] = useState({}) // { "2024-2025": [{grade_level,section,subject},...] }
 
   useEffect(() => {
     accountApi.getAssignments()
       .then(res => {
-        // Exclude current teacher's own assignments (they can keep theirs)
         const all = res.data.assignments || []
         setTakenAssignments(teacherId ? all.filter(a => a.teacher_id !== teacherId) : all)
       })
       .catch(() => setTakenAssignments([]))
+
+    // Fetch assignment history for "Copy from" (edit mode only)
+    if (mode === 'edit' && teacherId) {
+      accountApi.assignmentHistory(teacherId)
+        .then(res => {
+          const grouped = {}
+          for (const a of (res.data.assignments || [])) {
+            if (!grouped[a.school_year]) grouped[a.school_year] = []
+            grouped[a.school_year].push({ grade_level: a.grade_level, section: a.section, subject: a.subject })
+          }
+          setPastYears(grouped)
+        })
+        .catch(() => setPastYears({}))
+    }
   }, [])
 
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
@@ -238,7 +256,7 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
 
       {/* Assignments */}
       <div>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
           <div>
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
               Teaching Assignments
@@ -247,10 +265,42 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
               Grade level, section and subject this teacher handles
             </p>
           </div>
-          <button type="button" onClick={addRow}
-            className="flex items-center gap-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors">
-            <Plus size={13} /> Add Row
-          </button>
+          <div className="flex items-center gap-2">
+            {mode === 'edit' && (() => {
+              const copyableYears = Object.keys(pastYears)
+                .filter(sy => pastYears[sy].length > 0 && sy !== activeSY)
+                .sort((a, b) => b.localeCompare(a))
+              if (!copyableYears.length) return null
+              return (
+                <select
+                  className="input text-xs py-1.5 w-auto pr-7"
+                  value=""
+                  onChange={e => {
+                    const sy = e.target.value
+                    if (!sy || !pastYears[sy]) return
+                    const copied = pastYears[sy].map(a => ({
+                      grade_level: a.grade_level,
+                      section: a.section,
+                      subject: a.subject,
+                    }))
+                    setForm(p => ({ ...p, assignments: copied }))
+                    toast.success(`Copied ${copied.length} assignment${copied.length !== 1 ? 's' : ''} from SY ${sy}`)
+                  }}
+                >
+                  <option value="">
+                    Copy from...
+                  </option>
+                  {copyableYears.map(sy => (
+                    <option key={sy} value={sy}>SY {sy} ({pastYears[sy].length})</option>
+                  ))}
+                </select>
+              )
+            })()}
+            <button type="button" onClick={addRow}
+              className="flex items-center gap-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors">
+              <Plus size={13} /> Add Row
+            </button>
+          </div>
         </div>
 
         <div className="space-y-2">
@@ -390,6 +440,67 @@ function DeleteConfirm({ teacher, onConfirm, onClose }) {
   )
 }
 
+// ── Assignment History Modal Content ─────────────────────────
+function AssignmentHistory({ teacher, onClose }) {
+  const [history, setHistory]   = useState([])
+  const [loading, setLoading]   = useState(true)
+
+  useEffect(() => {
+    accountApi.assignmentHistory(teacher.id)
+      .then(res => setHistory(res.data.assignments || []))
+      .catch(() => setHistory([]))
+      .finally(() => setLoading(false))
+  }, [teacher.id])
+
+  // Group by school year
+  const grouped = {}
+  for (const a of history) {
+    if (!grouped[a.school_year]) grouped[a.school_year] = []
+    grouped[a.school_year].push(a)
+  }
+  const years = Object.keys(grouped).sort((a, b) => b.localeCompare(a))
+
+  return (
+    <div className="space-y-4">
+      <div className="p-4 bg-slate-50 rounded-xl flex items-center gap-3">
+        <div className="w-10 h-10 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold">
+          {nameInitial(teacher)}
+        </div>
+        <div>
+          <p className="font-semibold text-slate-800">{formatName(teacher)}</p>
+          <p className="text-xs text-slate-500">{teacher.email}</p>
+        </div>
+      </div>
+
+      {loading ? <LoadingSpinner /> : years.length === 0 ? (
+        <p className="text-sm text-slate-400 text-center py-6">No assignment history found.</p>
+      ) : (
+        <div className="space-y-4 max-h-[400px] overflow-y-auto">
+          {years.map(sy => (
+            <div key={sy}>
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+                SY {sy}
+              </h3>
+              <div className="space-y-1.5">
+                {grouped[sy].map(a => (
+                  <div key={a.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-100">
+                    <BookOpen size={12} className="text-teal-500 flex-shrink-0" />
+                    <span className="text-sm text-slate-700">
+                      {a.grade_level} &middot; {a.section} &middot; <span className="font-medium">{a.subject}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <button onClick={onClose} className="btn-secondary w-full">Close</button>
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────
 export default function AccountManagement() {
   const [teachers, setTeachers]   = useState([])
@@ -400,6 +511,7 @@ export default function AccountManagement() {
   const [showCreate, setShowCreate] = useState(false)
   const [editTarget, setEditTarget] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [historyTarget, setHistoryTarget] = useState(null)
 
   const fetch_ = useCallback(async () => {
     setLoading(true)
@@ -575,6 +687,14 @@ export default function AccountManagement() {
                     <td>
                       <div className="flex items-center gap-1 justify-start">
                         <button
+                          onClick={() => setHistoryTarget(t)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                          title="Assignment History"
+                        >
+                          <History size={15} />
+                        </button>
+
+                        <button
                           onClick={() => setEditTarget(t)}
                           className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors"
                           title="Edit"
@@ -640,6 +760,17 @@ export default function AccountManagement() {
             teacher={deleteTarget}
             onConfirm={handleDelete}
             onClose={() => setDeleteTarget(null)}
+          />
+        )}
+      </Modal>
+
+      {/* ── Assignment History Modal ──────────────────────── */}
+      <Modal open={!!historyTarget} onClose={() => setHistoryTarget(null)}
+        title="Assignment History">
+        {historyTarget && (
+          <AssignmentHistory
+            teacher={historyTarget}
+            onClose={() => setHistoryTarget(null)}
           />
         )}
       </Modal>
