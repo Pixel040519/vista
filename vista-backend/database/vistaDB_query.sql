@@ -69,8 +69,9 @@ CREATE TABLE attendance (
     status VARCHAR(20) NOT NULL CHECK (status IN ('Present', 'Absent', 'Late', 'Excused')),
     remarks TEXT,
     recorded_by UUID REFERENCES users(id),
+    subject_id UUID REFERENCES subjects(id),
     created_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(student_id, date)
+    UNIQUE(student_id, date, subject_id)
 );
 
 -- ============================================================

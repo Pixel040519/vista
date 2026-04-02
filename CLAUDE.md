@@ -64,7 +64,7 @@ React Dashboard → Node.js API (/api/*) → PostgreSQL
 
 ### FastAPI AI Service (`vista-backend/fastapi-ai/`)
 - `main.py` — Entry point, router registration
-- Routers: `/analyze` (VADER sentiment), `/predict` (grade prediction via Linear Regression), `/classify` (risk assessment), `/dashboard` (aggregated stats)
+- Routers: `/analyze` (VADER sentiment), `/predict` (grade prediction via Linear Regression), `/classify` (risk assessment), `/dashboard` (aggregated stats — attendance counts use distinct students, not raw records, with priority Present > Late > Excused > Absent when a student has multiple subject records)
 
 ### React Dashboard (`vista-dashboard/src/`)
 - `main.jsx` — Router setup, AuthContext provider
@@ -82,7 +82,7 @@ Key tables and relationships:
 - `students` — Student profiles with LRN, grade_level, section, QR code for SecurePass
 - `parent_student` — Many-to-many guardian↔student relationships
 - `class_assignments` / `teacher_assignments` — Teacher to class/subject mappings scoped to a school year; each (grade_level, section, subject, school_year) combination can only be assigned to one teacher (enforced by backend validation on create/update). Assignments are created under the active school year label (resolved via `getActiveSYLabel()`). When editing a teacher, only assignments for the active SY are deleted and replaced — historical assignments from prior years are preserved. Teacher assignments are copied when creating a new school year with "copy from".
-- `attendance` — Daily records per student (Present/Absent/Late/Excused)
+- `attendance` — Per-subject daily records per student (Present/Absent/Late/Excused); has `subject_id` FK to `subjects`; unique on `(student_id, date, subject_id)` so each teacher records attendance independently per subject
 - `subjects` — Curriculum subjects scoped to grade level and school year
 - `grades` — Per-subject, per-quarter grades (auto-computed from score entry); `score` column = initial grade (weighted average), `grade` column = DepEd transmuted grade, `remarks` = "Passed"/"Failed"
 - `grading_structure` — Configurable grading categories and components per subject (self-referencing via `category_id`); top-level rows (`category_id IS NULL`) are categories (e.g., Written Tasks 30%), child rows are components (e.g., Quizzes 15%)
@@ -115,7 +115,7 @@ Supported grade levels: Pre-Nursery, Nursery, Pre-Kinder, Kinder, Grades 1–6.
 ## Role-Based Access
 
 - **Admin**: Full access to all pages except Attendance and Score Entry (teacher-only). Can manage accounts, curriculum, students, and view student details.
-- **Teacher**: The `/api/auth/me` and `/api/auth/login` endpoints return `assignments` (grade_level, section, subject, school_year) and `active_school_year` (label of the active SY) for teachers. The `AuthContext` exposes `activeAssignments` — assignments filtered to the active school year. Teacher-facing pages (Students, Attendance, Score Entry) use `activeAssignments` to show a "Class" dropdown filtered to their assigned sections instead of open grade/section filters. Attendance and Score Entry are teacher-only in both sidebar and route guards. Attendance backend: GET is open to admin+teacher (student detail page uses it), POST is teacher-only.
+- **Teacher**: The `/api/auth/me` and `/api/auth/login` endpoints return `assignments` (grade_level, section, subject, school_year) and `active_school_year` (label of the active SY) for teachers. The `AuthContext` exposes `activeAssignments` — assignments filtered to the active school year. Teacher-facing pages (Students, Attendance, Score Entry) use `activeAssignments` to show a "Class" dropdown filtered to their assigned sections instead of open grade/section filters. Attendance and Score Entry are teacher-only in both sidebar and route guards. Attendance backend: GET is open to admin+teacher (student detail page uses it), POST is teacher-only and requires `subject_id`.
 - **Parent**: Limited access; students endpoint filters to linked students via `parent_student` table.
 - Teacher assignments are unique per (grade_level, section, subject, school_year) — the backend rejects duplicates on create/update scoped to the active school year, and the frontend disables already-taken subjects in the assignment dropdown (showing the assigned teacher's name). In the subject dropdown, available subjects use normal color; taken subjects are red with inline `style` to override the parent `<select>` color.
 
@@ -147,5 +147,5 @@ Supported grade levels: Pre-Nursery, Nursery, Pre-Kinder, Kinder, Grades 1–6.
 - The body has `select-none` and `cursor-default` globally; `user-select: text` and `cursor: text` are re-enabled on text-type `input` and `textarea` elements; `checkbox` and `radio` inputs use `cursor: pointer`; `select` elements use `cursor: pointer`. This prevents the text caret from appearing on non-interactive elements like titles, headers, and hints.
 - All input fields use `onKeyDown` to blur on Enter key press for consistent UX across the app.
 - Drag-and-drop reordering (via HTML5 DnD API + grip handle) is used in the grading config modal for categories and in the score items modal for items.
-- Attendance page: teacher sees a "Class" dropdown (assigned sections), a date picker, and a subject pills bar above the student table. Changing the date loads existing attendance records via `GET /api/attendance/bulk` and auto-selects the saved statuses. Clicking an already-selected status deselects it. The `POST /api/attendance` endpoint upserts (ON CONFLICT DO UPDATE) so re-saving updates existing records.
+- Attendance page: teacher sees a "Class" dropdown (assigned sections), a "Subject" dropdown (filtered to the teacher's assignments for that class, auto-selected if only one), and a date picker. Attendance is scoped per subject — each teacher records attendance independently for their assigned subject. The subject dropdown resolves subject names to UUIDs via `curriculumApi.getSubjects`. Changing the date or subject loads existing attendance records via `GET /api/attendance/bulk` (with `subject_id` filter) and auto-selects the saved statuses. Clicking an already-selected status deselects it. The `POST /api/attendance` endpoint requires `subject_id` in each record and upserts on `(student_id, date, subject_id)` so re-saving updates existing records without overwriting other teachers' records.
 - Students page: teachers see a "Class" dropdown and search with labels; Grade Level and Section columns are hidden (redundant). Admin sees full grade/section filter dropdowns.

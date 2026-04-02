@@ -3,7 +3,7 @@
 // ============================================================
 import { formatName, nameInitial } from '../utils/nameHelper'
 import { useState, useEffect, useMemo } from 'react'
-import { attendanceApi, studentApi } from '../api/client'
+import { attendanceApi, studentApi, curriculumApi } from '../api/client'
 import { LoadingSpinner, EmptyState } from '../components/UI'
 import { useAuth } from '../context/AuthContext'
 import { ClipboardCheck, Search } from 'lucide-react'
@@ -33,6 +33,8 @@ export function Attendance() {
   const [search, setSearch]     = useState('')
   const [saving, setSaving]     = useState(false)
   const [loading, setLoading]   = useState(false)
+  const [subjects, setSubjects]           = useState([])
+  const [selectedSubject, setSelectedSubject] = useState('')
 
   // Auto-select first section
   useEffect(() => {
@@ -41,9 +43,9 @@ export function Attendance() {
     }
   }, [sections])
 
-  // Load students when section changes
+  // Load students and subjects when section changes
   useEffect(() => {
-    if (!selectedSection) { setStudents([]); return }
+    if (!selectedSection) { setStudents([]); setSubjects([]); setSelectedSubject(''); return }
     const [grade_level, section] = selectedSection.split('|||')
     setLoading(true)
     setRecords({})
@@ -51,16 +53,26 @@ export function Attendance() {
       .then(res => setStudents(res.data.students))
       .catch(() => setStudents([]))
       .finally(() => setLoading(false))
+
+    const allowedSubjects = sections.find(s => s.grade_level === grade_level && s.section === section)?.subjects || []
+    curriculumApi.getSubjects({ grade_level })
+      .then(res => {
+        const list = res.data.subjects || []
+        const filtered = list.filter(s => allowedSubjects.includes(s.name))
+        setSubjects(filtered)
+        setSelectedSubject(filtered.length === 1 ? filtered[0].id : '')
+      })
+      .catch(() => { setSubjects([]); setSelectedSubject('') })
   }, [selectedSection])
 
-  // Load existing attendance records when date or section changes
+  // Load existing attendance records when date, section, or subject changes
   useEffect(() => {
-    if (!selectedSection || !date) return
+    if (!selectedSection || !date || !selectedSubject) { setRecords({}); return }
     const [grade_level, section] = selectedSection.split('|||')
-    attendanceApi.bulk({ date, grade_level, section })
+    attendanceApi.bulk({ date, grade_level, section, subject_id: selectedSubject })
       .then(res => setRecords(res.data.records || {}))
       .catch(() => setRecords({}))
-  }, [selectedSection, date])
+  }, [selectedSection, date, selectedSubject])
 
   const filtered = students.filter(s =>
     formatName(s).toLowerCase().includes(search.toLowerCase()) ||
@@ -74,7 +86,7 @@ export function Attendance() {
 
   const handleSave = async () => {
     const toSubmit = Object.entries(records).map(([student_id, status]) => ({
-      student_id, date, status
+      student_id, date, status, subject_id: selectedSubject
     }))
     if (toSubmit.length === 0) return toast.error('No attendance marked yet.')
     setSaving(true)
@@ -93,7 +105,6 @@ export function Attendance() {
   ]
 
   const currentSection = selectedSection ? selectedSection.split('|||') : []
-  const currentSubjects = sections.find(s => `${s.grade_level}|||${s.section}` === selectedSection)?.subjects || []
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -104,7 +115,7 @@ export function Attendance() {
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <input type="date" className="input w-auto" value={date} onChange={e => setDate(e.target.value)} />
-          <button onClick={handleSave} disabled={saving || !selectedSection} className="btn-primary">
+          <button onClick={handleSave} disabled={saving || !selectedSection || !selectedSubject} className="btn-primary">
             {saving ? 'Saving...' : 'Save Attendance'}
           </button>
         </div>
@@ -119,6 +130,16 @@ export function Attendance() {
               <option key={`${s.grade_level}|||${s.section}`} value={`${s.grade_level}|||${s.section}`}>
                 {s.grade_level} — {s.section}
               </option>
+            ))}
+          </select>
+        </div>
+        <div className="sm:w-48 min-w-0 flex-shrink-0">
+          <label className="block text-xs font-medium text-slate-500 mb-1">Subject</label>
+          <select className="input truncate" value={selectedSubject} onChange={e => setSelectedSubject(e.target.value)}>
+            {subjects.length === 0 && <option value="">No subjects</option>}
+            {subjects.length > 1 && <option value="">Select subject...</option>}
+            {subjects.map(s => (
+              <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </select>
         </div>
@@ -137,15 +158,9 @@ export function Attendance() {
         </div>
       ) : (
       <div className="card overflow-hidden">
-        {currentSubjects.length > 0 && (
-          <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2 flex-wrap">
-            <span className="text-xs font-medium text-slate-400">Subject:</span>
-            {currentSubjects.map(s => (
-              <span key={s} className="px-2.5 py-0.5 rounded-full bg-teal-50 text-teal-700 text-xs font-medium">{s}</span>
-            ))}
-          </div>
-        )}
-        {loading ? <LoadingSpinner /> : filtered.length === 0 ? (
+        {!selectedSubject ? (
+          <EmptyState icon={ClipboardCheck} title="Select a subject" description="Choose a subject from the dropdown above to mark attendance." />
+        ) : loading ? <LoadingSpinner /> : filtered.length === 0 ? (
           <EmptyState icon={ClipboardCheck} title="No students found"
             description={search ? 'No students match your search.' : `No students in ${currentSection[0]} — ${currentSection[1]}.`} />
         ) : (

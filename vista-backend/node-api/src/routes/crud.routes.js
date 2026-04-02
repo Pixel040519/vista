@@ -18,9 +18,10 @@ attendanceRouter.get('/', async (req, res, next) => {
     if (!student_id) throw new AppError('student_id is required.', 400);
 
     const result = await query(
-      `SELECT a.*, u.full_name as recorded_by_name
+      `SELECT a.*, u.full_name as recorded_by_name, sub.name as subject_name
        FROM attendance a
        LEFT JOIN users u ON u.id = a.recorded_by
+       LEFT JOIN subjects sub ON sub.id = a.subject_id
        WHERE a.student_id = $1
          AND ($2::date IS NULL OR a.date >= $2::date)
          AND ($3::date IS NULL OR a.date <= $3::date)
@@ -44,7 +45,7 @@ attendanceRouter.get('/', async (req, res, next) => {
 // GET /api/attendance/bulk?date=&grade_level=&section=
 attendanceRouter.get('/bulk', async (req, res, next) => {
   try {
-    const { date, grade_level, section } = req.query;
+    const { date, grade_level, section, subject_id } = req.query;
     if (!date) throw new AppError('date is required.', 400);
 
     const conditions = ['a.date = $1'];
@@ -57,6 +58,10 @@ attendanceRouter.get('/bulk', async (req, res, next) => {
     if (section) {
       params.push(section);
       conditions.push(`s.section = $${params.length}`);
+    }
+    if (subject_id) {
+      params.push(subject_id);
+      conditions.push(`a.subject_id = $${params.length}`);
     }
 
     const result = await query(
@@ -80,20 +85,21 @@ attendanceRouter.get('/bulk', async (req, res, next) => {
 // POST /api/attendance — Log attendance (single or batch)
 attendanceRouter.post('/', authorize('teacher'), async (req, res, next) => {
   try {
-    const { records } = req.body; // [{ student_id, date, status, remarks }]
+    const { records } = req.body; // [{ student_id, date, status, remarks, subject_id }]
     if (!Array.isArray(records) || records.length === 0) {
       throw new AppError('records array is required.', 400);
     }
 
     const inserted = [];
     for (const record of records) {
+      if (!record.subject_id) throw new AppError('subject_id is required for each record.', 400);
       const result = await query(
-        `INSERT INTO attendance (student_id, date, status, remarks, recorded_by)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (student_id, date)
-         DO UPDATE SET status = EXCLUDED.status, remarks = EXCLUDED.remarks
+        `INSERT INTO attendance (student_id, date, status, remarks, recorded_by, subject_id)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (student_id, date, subject_id)
+         DO UPDATE SET status = EXCLUDED.status, remarks = EXCLUDED.remarks, recorded_by = EXCLUDED.recorded_by
          RETURNING *`,
-        [record.student_id, record.date, record.status, record.remarks, req.user.id]
+        [record.student_id, record.date, record.status, record.remarks, req.user.id, record.subject_id]
       );
       inserted.push(result.rows[0]);
     }

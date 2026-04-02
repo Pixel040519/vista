@@ -31,12 +31,23 @@ async def get_dashboard_summary(db: AsyncSession = Depends(get_db)):
 
     # ── Today's Attendance ──
     attendance = await db.execute(text("""
+        WITH per_student AS (
+            SELECT student_id,
+                   MIN(CASE status
+                       WHEN 'Present' THEN 1
+                       WHEN 'Late'    THEN 2
+                       WHEN 'Excused' THEN 3
+                       ELSE 4
+                   END) AS best
+            FROM attendance WHERE date = :today
+            GROUP BY student_id
+        )
         SELECT
             COUNT(*) AS total_logged,
-            SUM(CASE WHEN status = 'Present' THEN 1 ELSE 0 END) AS present,
-            SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) AS absent,
-            SUM(CASE WHEN status = 'Late' THEN 1 ELSE 0 END) AS late
-        FROM attendance WHERE date = :today
+            SUM(CASE WHEN best = 1 THEN 1 ELSE 0 END) AS present,
+            SUM(CASE WHEN best = 4 THEN 1 ELSE 0 END) AS absent,
+            SUM(CASE WHEN best = 2 THEN 1 ELSE 0 END) AS late
+        FROM per_student
     """), {"today": today})
     att_row = attendance.fetchone()
 
