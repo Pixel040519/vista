@@ -2,6 +2,10 @@
 node_modules/
 vista-backend/fastapi-ai/venv/
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 # Environment
 .env
 *.env.local
