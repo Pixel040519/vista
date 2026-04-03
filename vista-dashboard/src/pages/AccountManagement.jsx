@@ -265,15 +265,24 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
               Grade level, section and subject this teacher handles
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            {mode === 'edit' && (() => {
-              const copyableYears = Object.keys(pastYears)
-                .filter(sy => pastYears[sy].length > 0 && sy !== activeSY)
-                .sort((a, b) => b.localeCompare(a))
-              if (!copyableYears.length) return null
-              return (
+          <button type="button" onClick={addRow}
+            className="flex items-center gap-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors">
+            <Plus size={13} /> Add Row
+          </button>
+        </div>
+
+        {mode === 'edit' && (() => {
+          const copyableYears = Object.keys(pastYears)
+            .filter(sy => pastYears[sy].length > 0 && sy !== activeSY)
+            .sort((a, b) => b.localeCompare(a))
+          if (!copyableYears.length) return null
+          return (
+            <div className="flex items-center gap-3 mb-3 px-3 py-2 bg-slate-50 rounded-lg border border-slate-200">
+              <History size={14} className="text-slate-400 shrink-0" />
+              <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
+                <span className="text-xs text-slate-500 whitespace-nowrap">Copy assignments from a previous school year</span>
                 <select
-                  className="input text-xs py-1.5 w-auto pr-7"
+                  className="input text-xs py-1 w-auto pr-7"
                   value=""
                   onChange={e => {
                     const sy = e.target.value
@@ -287,21 +296,15 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
                     toast.success(`Copied ${copied.length} assignment${copied.length !== 1 ? 's' : ''} from SY ${sy}`)
                   }}
                 >
-                  <option value="">
-                    Copy from...
-                  </option>
+                  <option value="">Select year...</option>
                   {copyableYears.map(sy => (
                     <option key={sy} value={sy}>SY {sy} ({pastYears[sy].length})</option>
                   ))}
                 </select>
-              )
-            })()}
-            <button type="button" onClick={addRow}
-              className="flex items-center gap-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors">
-              <Plus size={13} /> Add Row
-            </button>
-          </div>
-        </div>
+              </div>
+            </div>
+          )
+        })()}
 
         <div className="space-y-2">
           {/* Header */}

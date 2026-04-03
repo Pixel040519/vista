@@ -117,7 +117,7 @@ const insertGuardian = async (client, studentId, g) => {
     parentId = g.link_parent_id
     // Pull contact info from the existing user account
     const existing = await client.query(
-      'SELECT surname, first_name, middle_name, email, phone, home_address FROM users WHERE id=$1',
+      'SELECT surname, first_name, middle_name, email, phone FROM users WHERE id=$1',
       [g.link_parent_id]
     )
     if (existing.rows.length) {
@@ -129,7 +129,7 @@ const insertGuardian = async (client, studentId, g) => {
          ON CONFLICT DO NOTHING`,
         [parentId, studentId, u.surname, u.first_name, u.middle_name,
          u.email, u.phone, g.relationship,
-         g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, u.home_address || g.home_address || null]
+         g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, g.home_address || null]
       )
       return
     }
@@ -142,9 +142,9 @@ const insertGuardian = async (client, studentId, g) => {
     parentId = exist.rows.length
       ? exist.rows[0].id
       : (await client.query(
-          `INSERT INTO users (email, password_hash, surname, first_name, middle_name, role, phone, home_address)
-           VALUES ($1,$2,$3,$4,$5,'parent',$6,$7) RETURNING id`,
-          [g.email, hash, surname, first_name, middle_name || null, g.phone || null, g.home_address || null]
+          `INSERT INTO users (email, password_hash, surname, first_name, middle_name, role, phone)
+           VALUES ($1,$2,$3,$4,$5,'parent',$6) RETURNING id`,
+          [g.email, hash, surname, first_name, middle_name || null, g.phone || null]
         )).rows[0].id
   } else if (g.email) {
     const found = await client.query('SELECT id FROM users WHERE email=$1 AND role=$2', [g.email,'parent'])
@@ -170,7 +170,7 @@ router.get('/parents/search', authorize('admin'), async (req, res, next) => {
     const result = await query(
       `SELECT u.id, u.surname, u.first_name, u.middle_name, u.full_name,
               u.email, u.phone,
-              COALESCE(u.home_address, MAX(ps.home_address)) AS home_address,
+              MAX(ps.home_address) AS home_address,
               COUNT(ps.student_id) AS linked_students
        FROM users u
        LEFT JOIN parent_student ps ON ps.parent_id = u.id
