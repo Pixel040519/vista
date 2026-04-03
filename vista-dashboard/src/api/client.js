@@ -125,6 +125,7 @@ export const aiApi = {
   dashboard:   ()        => api.get('/ai/dashboard-summary'),
   predict:     (data)    => api.post('/ai/predict-performance', data),
   risk:        (data)    => api.post('/ai/risk-assessment', data),
+  riskAll:     ()        => api.get('/ai/risk-all'),
   sentiment:   (text)    => api.post('/ai/sentiment', { text }),
 }
 

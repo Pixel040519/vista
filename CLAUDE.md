@@ -64,7 +64,8 @@ React Dashboard → Node.js API (/api/*) → PostgreSQL
 
 ### FastAPI AI Service (`vista-backend/fastapi-ai/`)
 - `main.py` — Entry point, router registration
-- Routers: `/analyze` (VADER sentiment), `/predict` (grade prediction via Linear Regression), `/classify` (risk assessment), `/dashboard` (aggregated stats — attendance counts use distinct students, not raw records, with priority Present > Late > Excused > Absent when a student has multiple subject records)
+- Routers: `/analyze` (VADER sentiment), `/predict` (grade prediction via Linear Regression), `/classify` (risk assessment including `/classify/risk/all` for all students), `/dashboard` (aggregated stats — attendance counts use distinct students, not raw records, with priority Present > Late > Excused > Absent when a student has multiple subject records)
+- Uses SQLAlchemy asyncpg dialect — **do not use Postgres `::type` cast syntax** (e.g., `:param::jsonb`, `:param::uuid`) in `text()` queries as it conflicts with SQLAlchemy's `:name` parameter binding. Use `CAST(:param AS type)` instead. Also avoid passing NULL parameters to `CAST()` — use conditional query building instead.
 
 ### React Dashboard (`vista-dashboard/src/`)
 - `main.jsx` — Router setup, AuthContext provider
@@ -89,7 +90,7 @@ Key tables and relationships:
 - `score_items` — Individual assessments (e.g., Quiz 1, Long Test 2) under a grading component, scoped to subject + quarter; has `highest_possible_score` (HPS) and `component_id` FK to `grading_structure`
 - `student_scores` — Per-student raw scores for each score item; unique on `(score_item_id, student_id)`
 - `behavior_logs` — Teacher observations with VADER sentiment compound score
-- `risk_assessments` — AI risk classification (Stable/Moderate/High)
+- `risk_assessments` — AI risk classification (Stable/Moderate/High); factor columns (`attendance_factor`, `academic_factor`, `behavioral_factor`) are `DECIMAL(5,4)` (range 0–9.9999) — values must be normalized to 0–1 scale before insert (e.g., avg_grade 92 → 0.92)
 - `academic_predictions` — Grade forecasts with confidence scores
 - `dismissal_logs` — SecurePass QR scan/authorization records
 - `school_years` — School year management; status is controlled by `is_active` (one at a time) and `is_upcoming` (one at a time); no `is_current` column
@@ -100,7 +101,7 @@ Supported grade levels: Pre-Nursery, Nursery, Pre-Kinder, Kinder, Grades 1–6.
 ## Key Conventions
 
 - Authentication uses JWT (access + refresh tokens); the Node API validates tokens before all protected routes.
-- The AI service is called by Node.js internally — the frontend never calls FastAPI directly.
+- The AI service is called by Node.js internally — the frontend never calls FastAPI directly. All AI endpoints are proxied through `ai.routes.js`: `POST /api/ai/predict-performance`, `POST /api/ai/risk-assessment`, `GET /api/ai/risk-all`, `POST /api/ai/sentiment`, `GET /api/ai/dashboard-summary`. The frontend uses `aiApi` methods from `api/client.js`.
 - Behavior logs store a `vader_compound` score (−1 to 1) alongside the teacher's raw observation text. Behavior logs support edit (PUT) and delete (DELETE) via `/api/behavior/:id`.
 - SecurePass uses QR codes generated per-student; dismissal requires matching an authorized guardian.
 - All name fields use `surname`, `first_name`, `middle_name` (not a single `full_name` field).

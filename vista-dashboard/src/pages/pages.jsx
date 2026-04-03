@@ -652,21 +652,17 @@ export function RiskOverview() {
   const fetchRisk = async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/ai/classify/risk/all', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('accessToken')}` }
-      })
-      // Actually call through Node proxy or directly to FastAPI
-      const aiRes = await aiApi.dashboard()
-      // Use dashboard data for now
-      setData(aiRes.data)
+      const res = await aiApi.riskAll()
+      setData(res.data)
     } catch {}
     setLoading(false)
   }
 
   useEffect(() => { fetchRisk() }, [])
 
-  const alerts = data?.high_risk_alerts || []
-  const risk   = data?.risk_distribution || {}
+  const summary  = data?.summary || {}
+  const students = data?.students || []
+  const highRisk = students.filter(s => s.risk_level === 'High Risk')
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -683,9 +679,9 @@ export function RiskOverview() {
       {/* Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
-          { label: 'Stable',         count: risk.stable,        color: 'text-emerald-700 bg-emerald-50', dot: 'bg-emerald-500' },
-          { label: 'Moderate Risk',  count: risk.moderate_risk, color: 'text-amber-700 bg-amber-50',     dot: 'bg-amber-500'   },
-          { label: 'High Risk',      count: risk.high_risk,     color: 'text-red-700 bg-red-50',         dot: 'bg-red-500'     },
+          { label: 'Stable',         count: summary.stable,   color: 'text-emerald-700 bg-emerald-50', dot: 'bg-emerald-500' },
+          { label: 'Moderate Risk',  count: summary.moderate, color: 'text-amber-700 bg-amber-50',     dot: 'bg-amber-500'   },
+          { label: 'High Risk',      count: summary.high,     color: 'text-red-700 bg-red-50',         dot: 'bg-red-500'     },
         ].map(r => (
           <div key={r.label} className={`card p-5 ${r.color}`}>
             <div className="flex items-center gap-2 mb-2">
@@ -704,26 +700,26 @@ export function RiskOverview() {
           <AlertTriangle size={15} className="text-red-500" />
           <h3 className="text-sm font-semibold text-slate-800">High Risk Students</h3>
         </div>
-        {loading ? <LoadingSpinner /> : alerts.length === 0 ? (
+        {loading ? <LoadingSpinner /> : highRisk.length === 0 ? (
           <EmptyState icon={AlertTriangle} title="No high-risk students" description="All students are currently stable." />
         ) : (
           <div className="overflow-x-auto">
           <table className="table-base">
-            <thead><tr><th>Student</th><th>Grade</th><th>Risk Score</th><th>Last Assessed</th></tr></thead>
+            <thead><tr><th>Student</th><th>Grade &amp; Section</th><th>Risk Score</th><th>Last Assessed</th></tr></thead>
             <tbody>
-              {alerts.map((a, i) => (
-                <tr key={i}>
-                  <td className="font-medium">{a.student_name}</td>
-                  <td className="text-slate-500">{a.grade_level}</td>
+              {highRisk.map(s => (
+                <tr key={s.student_id}>
+                  <td className="font-medium">{s.full_name}</td>
+                  <td className="text-slate-500">{s.grade_level} – {s.section}</td>
                   <td>
                     <div className="flex items-center gap-2">
                       <div className="w-20 h-2 bg-slate-100 rounded-full">
-                        <div className="h-full bg-red-500 rounded-full" style={{ width: `${a.risk_score * 100}%` }} />
+                        <div className="h-full bg-red-500 rounded-full" style={{ width: `${s.risk_score * 100}%` }} />
                       </div>
-                      <span className="text-xs font-mono font-semibold text-red-600">{(a.risk_score * 100).toFixed(0)}%</span>
+                      <span className="text-xs font-mono font-semibold text-red-600">{(s.risk_score * 100).toFixed(0)}%</span>
                     </div>
                   </td>
-                  <td className="text-xs text-slate-400">{a.assessed_at ? fmt(new Date(a.assessed_at), 'MMM d, h:mm a') : '—'}</td>
+                  <td className="text-xs text-slate-400">{s.assessed_at ? fmt(new Date(s.assessed_at), 'MMM d, h:mm a') : '—'}</td>
                 </tr>
               ))}
             </tbody>

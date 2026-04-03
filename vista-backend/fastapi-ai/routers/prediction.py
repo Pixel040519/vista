@@ -124,20 +124,21 @@ async def predict_performance(
         raise HTTPException(status_code=404, detail="Student not found.")
 
     # 2. Fetch grade history
-    grade_query = """
+    subject_filter = "AND g.subject_id = CAST(:subject_id AS uuid)" if request.subject_id else ""
+    grade_query = f"""
         SELECT g.subject_id, s.name as subject_name,
                g.quarter, g.school_year, g.grade
         FROM grades g
         JOIN subjects s ON s.id = g.subject_id
         WHERE g.student_id = :sid
-          AND (:subject_id IS NULL OR g.subject_id = :subject_id::uuid)
+          {subject_filter}
           AND g.grade IS NOT NULL
         ORDER BY g.subject_id, g.school_year, g.quarter
     """
-    grades_result = await db.execute(
-        text(grade_query),
-        {"sid": request.student_id, "subject_id": request.subject_id}
-    )
+    params = {"sid": request.student_id}
+    if request.subject_id:
+        params["subject_id"] = request.subject_id
+    grades_result = await db.execute(text(grade_query), params)
     grade_rows = grades_result.fetchall()
 
     if not grade_rows:

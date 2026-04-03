@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 import numpy as np
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
@@ -222,15 +223,15 @@ async def classify_risk(
         INSERT INTO risk_assessments
             (student_id, risk_level, risk_score, attendance_factor,
              academic_factor, behavioral_factor, contributing_factors, model_version)
-        VALUES (:sid, :level, :score, :att, :acad, :beh, :factors::jsonb, :ver)
+        VALUES (:sid, :level, :score, :att, :acad, :beh, CAST(:factors AS jsonb), :ver)
     """), {
         "sid": request.student_id,
         "level": risk_level,
         "score": risk_score,
         "att": features["attendance_rate"],
-        "acad": features["avg_grade"],
+        "acad": round(features["avg_grade"] / 100, 4) if features["avg_grade"] is not None else None,
         "beh": features["behavioral_score"],
-        "factors": str([f.model_dump() for f in factors]),
+        "factors": json.dumps([f.model_dump() for f in factors]),
         "ver": "rule-v1.0"
     })
     await db.commit()

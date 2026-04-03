@@ -19,7 +19,7 @@ const proxyToAI = async (endpoint, data) => {
     if (err.code === 'ECONNREFUSED') {
       throw new AppError('AI service is currently unavailable.', 503);
     }
-    throw new AppError(err.response?.data?.detail || 'AI service error.', 500);
+    throw new AppError(err.response?.data?.detail || 'AI service error.', err.response?.status || 500);
   }
 };
 
@@ -62,6 +62,17 @@ router.post('/sentiment', authorize('admin', 'teacher'), async (req, res, next) 
     res.json(result);
   } catch (err) {
     next(err);
+  }
+});
+
+// ─── GET /api/ai/risk-all ─────────────────────────────────────
+// Get latest risk assessments for all active students
+router.get('/risk-all', authorize('admin', 'teacher'), async (req, res, next) => {
+  try {
+    const response = await axios.get(`${AI_URL}/classify/risk/all`, { timeout: 15000 });
+    res.json(response.data);
+  } catch (err) {
+    next(new AppError('Could not fetch risk assessments.', 503));
   }
 });
 
