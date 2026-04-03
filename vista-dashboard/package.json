@@ -19,6 +19,7 @@
     "react-hot-toast": "^2.4.1",
     "react-router-dom": "^6.21.0",
     "recharts": "^2.10.3",
+    "stream-browserify": "^3.0.0",
     "xlsx-js-style": "^1.2.0"
   },
   "devDependencies": {

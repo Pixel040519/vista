@@ -9,7 +9,6 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
-import XLSX from 'xlsx-js-style'
 
 const QUARTERS = [1, 2, 3, 4]
 
@@ -55,7 +54,7 @@ function usePersistedFilter(key, fallback = '') {
 }
 
 export default function ScoreEntry() {
-  const { activeAssignments } = useAuth()
+  const { user, activeAssignments } = useAuth()
   const assignments = activeAssignments
 
   // ── Filter state (persisted in sessionStorage) ────────────
@@ -376,8 +375,9 @@ export default function ScoreEntry() {
   const quarterLabels = { 1: 'FIRST GRADING', 2: 'SECOND GRADING', 3: 'THIRD GRADING', 4: 'FOURTH GRADING' }
 
   // ── Excel export ──────────────────────────────────────────
-  const exportToExcel = () => {
+  const exportToExcel = async () => {
     if (!categories.length || !students.length) return
+    const XLSX = (await import('xlsx-js-style')).default
 
     const thin = { style: 'thin', color: { rgb: '000000' } }
     const border = { top: thin, bottom: thin, left: thin, right: thin }
@@ -688,8 +688,11 @@ export default function ScoreEntry() {
           <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Filters</span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <div className="input bg-slate-50 flex items-center text-slate-700 font-semibold cursor-default">
-            {syLabel ? `SY ${syLabel}` : 'No active school year'}
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">School Year</label>
+            <div className="input bg-slate-50 flex items-center text-slate-700 font-semibold cursor-default">
+              {syLabel ? `SY ${syLabel}` : 'No active school year'}
+            </div>
           </div>
 
           <div>

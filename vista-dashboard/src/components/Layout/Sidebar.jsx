@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 import { formatName, nameInitial } from '../../utils/nameHelper'
+import nrysLogo from '../../assets/NRYS_logo.png'
 
 const navGroups = [
   {
@@ -64,15 +65,13 @@ export default function Sidebar({ open, onClose }) {
       open ? 'translate-x-0' : '-translate-x-full'
     )}>
       {/* Logo + mobile close */}
-      <div className="px-5 py-6 border-b border-white/10">
+      <div className="px-5 py-5 border-b border-white/10">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-teal-500 flex items-center justify-center shadow-lg shadow-teal-500/30">
-              <GraduationCap size={20} className="text-white" />
-            </div>
+            <img src={nrysLogo} alt="NRYS Logo" width={40} height={40} className="w-10 h-10 rounded-full flex-shrink-0" style={{ objectFit: 'cover', display: 'block' }} />
             <div>
               <h1 className="text-white font-bold text-lg leading-none tracking-wide font-sans">VISTA</h1>
-              <p className="text-slate-400 text-xs mt-0.5">Student Monitor</p>
+              <p className="text-slate-400 text-[10px] mt-0.5">Northern Rizal Yorklin School</p>
             </div>
           </div>
           <button

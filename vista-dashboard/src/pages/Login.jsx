@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { GraduationCap, Eye, EyeOff, LogIn } from 'lucide-react'
+import { Eye, EyeOff, LogIn, BookOpen, Shield, QrCode, Users } from 'lucide-react'
 import toast from 'react-hot-toast'
+import nrysLogo from '../assets/NRYS_logo.png'
 
 export default function Login() {
   const { login } = useAuth()
@@ -25,74 +26,102 @@ export default function Login() {
     }
   }
 
+  const features = [
+    { icon: BookOpen, label: 'AI Predictions', desc: 'Smart grade forecasting' },
+    { icon: Shield, label: 'Risk Detection', desc: 'Early warning system' },
+    { icon: QrCode, label: 'SecurePass QR', desc: 'Safe dismissal tracking' },
+    { icon: Users, label: 'Parent Connect', desc: 'Guardian portal access' },
+  ]
+
   return (
     <div className="min-h-screen bg-navy-950 flex">
       {/* Left branding panel */}
-      <div className="hidden lg:flex flex-col justify-between w-[44%] p-12 relative overflow-hidden">
-        {/* Background grid pattern */}
+      <div className="hidden lg:flex flex-col w-[46%] relative overflow-hidden">
+        {/* Background layers */}
         <div className="absolute inset-0"
           style={{
-            backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.06) 1px, transparent 0)',
-            backgroundSize: '32px 32px'
+            backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.04) 1px, transparent 0)',
+            backgroundSize: '40px 40px'
           }}
         />
-        {/* Glow */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-teal-500/10 rounded-full blur-3xl" />
+        <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-b from-teal-500/5 via-transparent to-blue-500/5" />
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-teal-500/8 rounded-full blur-[100px]" />
 
-        <div className="relative flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-teal-500 flex items-center justify-center shadow-lg shadow-teal-500/40">
-            <GraduationCap size={22} className="text-white" />
-          </div>
-          <div>
-            <span className="text-white font-bold text-xl tracking-wide">VISTA</span>
-          </div>
-        </div>
-
-        <div className="relative space-y-6">
-          <div className="space-y-3">
-            <h1 className="text-4xl font-bold text-white leading-tight" style={{ fontFamily: 'DM Serif Display, serif' }}>
-              Empowering<br />
-              <span className="text-teal-400">Educators.</span><br />
-              Protecting<br />
-              <span className="text-teal-400">Students.</span>
-            </h1>
-            <p className="text-slate-400 text-base leading-relaxed max-w-sm">
-              AI-driven student monitoring and decision support for Northern Rizal Yorklin School.
-            </p>
+        {/* Content */}
+        <div className="relative flex flex-col items-center justify-center flex-1 px-12 py-16">
+          {/* School seal */}
+          <div className="relative">
+            <div className="absolute inset-0 rounded-full bg-teal-400/20 blur-2xl scale-110" />
+            <div className="relative p-2 rounded-full bg-gradient-to-b from-white/15 to-white/5 border border-white/10">
+              <img src={nrysLogo} alt="NRYS Logo" className="w-32 h-32 rounded-full object-cover" />
+            </div>
           </div>
 
-          {/* Feature chips */}
-          <div className="flex flex-wrap gap-2">
-            {['AI Predictions', 'Risk Detection', 'SecurePass QR', 'Parent Connect'].map(f => (
-              <span key={f} className="px-3 py-1.5 rounded-full bg-white/8 border border-white/10 text-white/70 text-xs font-medium">
-                {f}
-              </span>
+          {/* School identity */}
+          <div className="text-center mt-7 space-y-2">
+            <h1 className="text-white font-bold text-2xl tracking-wide">Northern Rizal Yorklin School</h1>
+            <div className="flex items-center justify-center gap-3">
+              <div className="h-px w-10 bg-gradient-to-r from-transparent to-teal-400/60" />
+              <span className="text-teal-400 text-xs font-semibold uppercase tracking-[0.25em]">VISTA Student Monitor</span>
+              <div className="h-px w-10 bg-gradient-to-l from-transparent to-teal-400/60" />
+            </div>
+          </div>
+
+          {/* Motto */}
+          <p className="text-slate-400 text-sm text-center mt-6 max-w-xs leading-relaxed">
+            Knowledge &middot; Benevolence &middot; Courage
+          </p>
+
+          {/* Divider */}
+          <div className="w-16 h-px bg-white/10 mt-8 mb-8" />
+
+          {/* Feature grid */}
+          <div className="grid grid-cols-2 gap-3 w-full max-w-sm">
+            {features.map(f => (
+              <div key={f.label} className="flex items-start gap-3 px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.06]">
+                <div className="w-8 h-8 rounded-lg bg-teal-500/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <f.icon size={15} className="text-teal-400" />
+                </div>
+                <div>
+                  <p className="text-white text-sm font-medium leading-tight">{f.label}</p>
+                  <p className="text-slate-500 text-xs mt-0.5">{f.desc}</p>
+                </div>
+              </div>
             ))}
           </div>
         </div>
 
-        <p className="relative text-slate-600 text-xs">
-          © 2025 VISTA · Northern Rizal Yorklin School
-        </p>
+        {/* Footer */}
+        <div className="relative px-12 py-5 border-t border-white/[0.06]">
+          <p className="text-slate-600 text-xs text-center">
+            &copy; 2026 VISTA &middot; Northern Rizal Yorklin School
+          </p>
+        </div>
       </div>
 
       {/* Right login form */}
       <div className="flex-1 flex items-center justify-center p-4 sm:p-8 bg-slate-50">
-        <div className="w-full max-w-md">
+        <div className="w-full max-w-sm">
           {/* Mobile logo */}
-          <div className="lg:hidden flex items-center gap-3 mb-8 justify-center">
-            <div className="w-10 h-10 rounded-xl bg-teal-500 flex items-center justify-center">
-              <GraduationCap size={22} className="text-white" />
+          <div className="lg:hidden flex flex-col items-center mb-10">
+            <div className="p-1.5 rounded-full bg-white border border-slate-200 shadow-md shadow-slate-200/50">
+              <img src={nrysLogo} alt="NRYS Logo" className="rounded-full object-cover" style={{ width: '80px', height: '80px' }} />
             </div>
-            <span className="text-slate-900 font-bold text-xl">VISTA</span>
+            <h2 className="text-slate-900 font-bold text-lg mt-3">Northern Rizal Yorklin School</h2>
+            <div className="flex items-center gap-2 mt-1.5">
+              <div className="h-px w-5 bg-teal-500/40" />
+              <span className="text-teal-600 text-[11px] font-semibold uppercase tracking-[0.15em]">VISTA Student Monitor</span>
+              <div className="h-px w-5 bg-teal-500/40" />
+            </div>
           </div>
 
-          <div className="mb-8">
-            <h2 className="text-2xl font-bold text-slate-900">Sign in to your account</h2>
-            <p className="text-slate-500 text-sm mt-1">Enter your credentials to continue</p>
+          {/* Form header */}
+          <div className="mb-7">
+            <h2 className="text-2xl font-bold text-slate-900">Welcome back</h2>
+            <p className="text-slate-500 text-sm mt-1">Sign in to your account to continue</p>
           </div>
 
-          <form onSubmit={handle} className="space-y-4">
+          <form onSubmit={handle} className="space-y-5">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">Email address</label>
               <input
@@ -130,7 +159,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full btn-primary justify-center py-3 text-base mt-2 disabled:opacity-60 disabled:cursor-not-allowed"
+              className="w-full btn-primary justify-center py-3 text-base mt-1 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {loading ? (
                 <span className="flex items-center gap-2">
@@ -146,7 +175,7 @@ export default function Login() {
             </button>
           </form>
 
-          <p className="mt-6 text-center text-xs text-slate-400">
+          <p className="mt-8 text-center text-xs text-slate-400">
             Contact your school administrator to reset your password.
           </p>
         </div>
