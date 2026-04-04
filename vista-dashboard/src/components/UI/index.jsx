@@ -3,7 +3,7 @@ import clsx from 'clsx'
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
 
 // ── Stat Card ─────────────────────────────────────────────────
-export function StatCard({ title, value, subtitle, icon: Icon, color = 'teal', trend }) {
+export function StatCard({ title, value, subtitle, icon: Icon, color = 'teal', trend, onClick }) {
   const colorMap = {
     teal:    'bg-teal-50 text-teal-600',
     blue:    'bg-blue-50 text-blue-600',
@@ -13,7 +13,13 @@ export function StatCard({ title, value, subtitle, icon: Icon, color = 'teal', t
     purple:  'bg-purple-50 text-purple-600',
   }
   return (
-    <div className="stat-card">
+    <div
+      className={clsx('stat-card', onClick && 'cursor-pointer hover:ring-2 hover:ring-teal-200 transition-shadow')}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
+    >
       <div className="flex items-start justify-between">
         <div className={clsx('w-10 h-10 rounded-xl flex items-center justify-center', colorMap[color])}>
           {Icon && <Icon size={20} />}

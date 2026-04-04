@@ -83,9 +83,10 @@ export const studentApi = {
 
 // ── Attendance ────────────────────────────────────────────────
 export const attendanceApi = {
-  get:    (params)  => api.get('/attendance', { params }),
-  bulk:   (params)  => api.get('/attendance/bulk', { params }),
-  submit: (records) => api.post('/attendance', { records }),
+  get:         (params)  => api.get('/attendance', { params }),
+  bulk:        (params)  => api.get('/attendance/bulk', { params }),
+  dailyDetail: (date)    => api.get('/attendance/daily-detail', { params: { date } }),
+  submit:      (records) => api.post('/attendance', { records }),
 }
 
 // ── Grades ────────────────────────────────────────────────────

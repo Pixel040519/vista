@@ -8,6 +8,7 @@ import {
 import { aiApi } from '../api/client'
 import { StatCard, RiskBadge, LoadingSpinner } from '../components/UI'
 import { useAuth } from '../context/AuthContext'
+import AttendanceDetailModal from '../components/AttendanceDetailModal'
 
 const SENTIMENT_COLORS = { Positive: '#14b8a6', Neutral: '#94a3b8', Negative: '#f43f5e' }
 const RISK_COLORS = { stable: '#22c55e', moderate_risk: '#f59e0b', high_risk: '#ef4444' }
@@ -22,6 +23,7 @@ export default function Dashboard() {
   const { user } = useAuth()
   const [data, setData]   = useState(null)
   const [loading, setLoading] = useState(true)
+  const [attModal, setAttModal] = useState({ open: false, filter: 'present' })
 
   useEffect(() => {
     aiApi.dashboard()
@@ -76,10 +78,11 @@ export default function Dashboard() {
             />
             <StatCard
               title="Present Today"
-              value={att.present || 0}
-              subtitle={`${att.total_logged ? Math.round((att.present/att.total_logged)*100) : 0}% attendance rate`}
+              value={(att.present || 0) + (att.late || 0)}
+              subtitle={`${att.total_logged ? Math.round(((att.present + att.late)/att.total_logged)*100) : 0}% attendance rate`}
               icon={UserCheck}
               color="emerald"
+              onClick={() => setAttModal({ open: true, filter: 'present' })}
             />
             <StatCard
               title="Absent Today"
@@ -87,6 +90,7 @@ export default function Dashboard() {
               subtitle="Need follow-up"
               icon={UserX}
               color="amber"
+              onClick={() => setAttModal({ open: true, filter: 'absent' })}
             />
             <StatCard
               title="High Risk Alerts"
@@ -267,6 +271,13 @@ export default function Dashboard() {
           )}
         </>
       )}
+
+      <AttendanceDetailModal
+        open={attModal.open}
+        onClose={() => setAttModal(prev => ({ ...prev, open: false }))}
+        filter={attModal.filter}
+        date={new Date().toISOString().split('T')[0]}
+      />
     </div>
   )
 }

@@ -82,6 +82,29 @@ attendanceRouter.get('/bulk', async (req, res, next) => {
   }
 });
 
+// GET /api/attendance/daily-detail?date= — Per-student, per-subject attendance for a date
+attendanceRouter.get('/daily-detail', async (req, res, next) => {
+  try {
+    const { date } = req.query;
+    if (!date) throw new AppError('date is required.', 400);
+
+    const result = await query(
+      `SELECT a.student_id, s.full_name, s.grade_level, s.section,
+              sub.name AS subject_name, a.status
+       FROM attendance a
+       JOIN students s ON s.id = a.student_id AND s.is_active = TRUE
+       JOIN subjects sub ON sub.id = a.subject_id
+       WHERE a.date = $1
+       ORDER BY s.grade_level, s.section, s.full_name, sub.name`,
+      [date]
+    );
+
+    res.json({ date, records: result.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/attendance — Log attendance (single or batch)
 attendanceRouter.post('/', authorize('teacher'), async (req, res, next) => {
   try {

@@ -71,7 +71,7 @@ React Dashboard → Node.js API (/api/*) → PostgreSQL
 - `main.jsx` — Router setup, AuthContext provider
 - `api/client.js` — Axios instance with JWT interceptors
 - `pages/` — One component per route
-- `components/` — Shared UI components (`GradingConfigModal.jsx` for per-subject grading structure config)
+- `components/` — Shared UI components (`GradingConfigModal.jsx` for per-subject grading structure config, `AttendanceDetailModal.jsx` for drill-down attendance detail from dashboard stat cards)
 - Routes: `/login`, `/` (dashboard), `/students`, `/students/:id`, `/attendance`, `/grades`, `/score-entry`, `/behavior`, `/securepass`, `/risk`, `/announcements`
 
 ## Database
@@ -152,4 +152,5 @@ Supported grade levels: Pre-Nursery, Nursery, Pre-Kinder, Kinder, Grades 1–6.
 - All input fields use `onKeyDown` to blur on Enter key press for consistent UX across the app.
 - Drag-and-drop reordering (via HTML5 DnD API + grip handle) is used in the grading config modal for categories and in the score items modal for items.
 - Attendance page: teacher sees a "Class" dropdown (assigned sections), a "Subject" dropdown (filtered to the teacher's assignments for that class, auto-selected if only one), and a date picker. Attendance is scoped per subject — each teacher records attendance independently for their assigned subject. The subject dropdown resolves subject names to UUIDs via `curriculumApi.getSubjects`. Changing the date or subject loads existing attendance records via `GET /api/attendance/bulk` (with `subject_id` filter) and auto-selects the saved statuses. Clicking an already-selected status deselects it. The `POST /api/attendance` endpoint requires `subject_id` in each record and upserts on `(student_id, date, subject_id)` so re-saving updates existing records without overwriting other teachers' records.
+- Dashboard attendance stats: the "Present Today" stat card counts students whose best status is Present or Late (i.e., attended at least one subject). The "Absent Today" card counts students absent in all logged subjects. Both cards are clickable — they open `AttendanceDetailModal` with Present/Absent tabs. The modal fetches `GET /api/attendance/daily-detail?date=` (returns per-student, per-subject rows) and groups students by Grade Level → Section (both collapsible, sections collapsed by default). Each student row shows per-subject status badges (P/L/E/A). Students present in some subjects but absent in others are flagged with a "Possible skipping class" amber badge. The `StatCard` component accepts an optional `onClick` prop for clickable cards.
 - Students page: teachers see a "Class" dropdown and search with labels; Grade Level and Section columns are hidden (redundant). Admin sees full grade/section filter dropdowns.
