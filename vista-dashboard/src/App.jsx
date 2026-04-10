@@ -69,7 +69,7 @@ export default function App() {
             } />
 
             <Route path="risk" element={
-              <PrivateRoute roles={['admin']}><RiskOverview /></PrivateRoute>
+              <PrivateRoute roles={['admin', 'teacher']}><RiskOverview /></PrivateRoute>
             } />
 
             <Route path="announcements" element={<Announcements />} />

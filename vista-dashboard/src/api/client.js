@@ -91,8 +91,9 @@ export const attendanceApi = {
 
 // ── Grades ────────────────────────────────────────────────────
 export const gradesApi = {
-  get:    (params)  => api.get('/grades', { params }),
-  submit: (records) => api.post('/grades', { records }),
+  get:         (params)  => api.get('/grades', { params }),
+  getBySubject:(params)  => api.get('/grades/by-subject', { params }),
+  submit:      (records) => api.post('/grades', { records }),
 }
 
 // ── Behavior ──────────────────────────────────────────────────
@@ -123,7 +124,8 @@ export const notificationApi = {
 
 // ── AI ────────────────────────────────────────────────────────
 export const aiApi = {
-  dashboard:   ()        => api.get('/ai/dashboard-summary'),
+  dashboard:        ()    => api.get('/ai/dashboard-summary'),
+  teacherDashboard: ()    => api.get('/ai/teacher-dashboard'),
   predict:     (data)    => api.post('/ai/predict-performance', data),
   risk:        (data)    => api.post('/ai/risk-assessment', data),
   riskAll:     ()        => api.get('/ai/risk-all'),

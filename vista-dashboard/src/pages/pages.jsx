@@ -219,34 +219,160 @@ export function Attendance() {
 // ============================================================
 // GRADES PAGE
 // ============================================================
-import { gradesApi } from '../api/client'
-import { GradeChip } from '../components/UI'
-import { BookOpen } from 'lucide-react'
+import { gradesApi, scoreApi } from '../api/client'
+import { BookOpen, Filter } from 'lucide-react'
+import { Fragment } from 'react'
+import clsx from 'clsx'
 
 export function Grades() {
-  const [studentId, setStudentId] = useState('')
-  const [students, setStudentsG]  = useState([])
-  const [gradeData, setGradeData] = useState(null)
-  const [loading, setLoading]     = useState(false)
+  const { user, activeAssignments } = useAuth()
+  const isTeacher = user?.role === 'teacher'
+  const assignments = activeAssignments || []
 
+  // ── Tab state ──────────────────────────────────────────────
+  const [activeTab, setActiveTab]           = useState('grading')
+
+  // ── Filter state ──────────────────────────────────────────
+  const [syId, setSyId]                     = useState('')
+  const [schoolYears, setSchoolYears]       = useState([])
+  const [selectedClass, setSelectedClass]   = useState('')
+  const [subjectId, setSubjectId]           = useState('')
+  const [subjects, setSubjects]             = useState([])
+  const [sectionsGrouped, setSectionsGrouped] = useState({})
+  const [loading, setLoading]               = useState(false)
+  const [data, setData]                     = useState(null)
+
+  // ── Class Record state ────────────────────────────────────
+  const [classQuarter, setClassQuarter]     = useState(1)
+  const [breakdownData, setBreakdownData]   = useState(null)
+  const [breakdownLoading, setBreakdownLoading] = useState(false)
+
+  // Derived from selectedClass for admin ("gradeLevel|||section") or teacher same pattern
+  const [gradeLevel, section] = selectedClass ? selectedClass.split('|||') : ['', '']
+
+  // ── Teacher: derive class options from assignments ────────
+  const classOptions = useMemo(() => {
+    if (!isTeacher) return []
+    const map = new Map()
+    for (const a of assignments) {
+      const key = `${a.grade_level}|||${a.section}`
+      if (!map.has(key)) map.set(key, { grade_level: a.grade_level, section: a.section, subjects: [] })
+      const entry = map.get(key)
+      if (!entry.subjects.includes(a.subject)) entry.subjects.push(a.subject)
+    }
+    return [...map.values()].sort((a, b) => a.grade_level.localeCompare(b.grade_level) || a.section.localeCompare(b.section))
+  }, [isTeacher, assignments])
+
+  const allowedSubjects = useMemo(() => {
+    if (!isTeacher || !selectedClass) return []
+    return classOptions.find(c => `${c.grade_level}|||${c.section}` === selectedClass)?.subjects || []
+  }, [isTeacher, classOptions, selectedClass])
+
+  // ── Admin: derive grade levels and sections from sectionsGrouped ──
+  const adminGradeLevels = useMemo(() => Object.keys(sectionsGrouped).filter(k => sectionsGrouped[k].length > 0), [sectionsGrouped])
+  const adminSections = useMemo(() => {
+    if (isTeacher || !gradeLevel) return []
+    return sectionsGrouped[gradeLevel] || []
+  }, [isTeacher, sectionsGrouped, gradeLevel])
+
+  // ── Load school years on mount ────────────────────────────
   useEffect(() => {
-    studentApi.list({ limit: 200 })
-      .then(res => setStudentsG(res.data.students))
-      .catch(() => {})
+    curriculumApi.getSchoolYears().then(res => {
+      const syList = res.data.school_years || res.data
+      setSchoolYears(syList)
+      const active = syList.find(sy => sy.is_active)
+      if (active) setSyId(active.id)
+    }).catch(() => {})
   }, [])
 
-  const fetchGrades = async (sid) => {
-    setStudentId(sid)
-    if (!sid) return setGradeData(null)
-    setLoading(true)
-    try {
-      const res = await gradesApi.get({ student_id: sid })
-      setGradeData(res.data)
-    } catch {}
-    setLoading(false)
-  }
+  // ── Admin: load sections grouped when SY changes ──────────
+  useEffect(() => {
+    if (isTeacher || !syId) return
+    setSectionsGrouped({})
+    setSelectedClass('')
+    setSubjectId('')
+    setSubjects([])
+    setData(null)
+    curriculumApi.getSectionsGrouped(syId).then(res => setSectionsGrouped(res.data.grouped || {})).catch(() => {})
+  }, [isTeacher, syId])
 
-  const grouped = gradeData?.byQuarter || {}
+  // ── Admin: load subjects when grade level changes ─────────
+  useEffect(() => {
+    if (isTeacher || !syId || !gradeLevel) return
+    setSubjectId('')
+    setSubjects([])
+    setData(null)
+    curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel }).then(res => {
+      setSubjects(res.data.subjects || res.data)
+    }).catch(() => {})
+  }, [isTeacher, syId, gradeLevel])
+
+  // ── Teacher: load subjects matching allowed names ─────────
+  useEffect(() => {
+    if (!isTeacher || !syId || !gradeLevel) return
+    setSubjectId('')
+    setSubjects([])
+    setData(null)
+    curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel }).then(res => {
+      const all = res.data.subjects || res.data
+      setSubjects(all.filter(s => allowedSubjects.includes(s.name)))
+    }).catch(() => {})
+  }, [isTeacher, syId, gradeLevel, allowedSubjects])
+
+  // Reset downstream when class changes
+  useEffect(() => { setSubjectId(''); setData(null) }, [selectedClass])
+
+  // ── Resolve SY label ──────────────────────────────────────
+  const syLabel = schoolYears.find(sy => sy.id === syId)?.label || ''
+
+  // ── Fetch grading sheet data ──────────────────────────────
+  const filtersReady = syId && gradeLevel && section && subjectId
+  useEffect(() => {
+    if (!filtersReady) { setData(null); return }
+    setLoading(true)
+    gradesApi.getBySubject({ subject_id: subjectId, grade_level: gradeLevel, section, school_year: syLabel })
+      .then(res => setData(res.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [subjectId, gradeLevel, section, syLabel])
+
+  // ── Fetch breakdown for Class Record tab ───────────────────
+  useEffect(() => {
+    if (activeTab !== 'class' || !filtersReady) { setBreakdownData(null); return }
+    setBreakdownLoading(true)
+    scoreApi.getBreakdown({ subject_id: subjectId, quarter: classQuarter, grade_level: gradeLevel, section })
+      .then(res => setBreakdownData(res.data))
+      .catch(() => setBreakdownData(null))
+      .finally(() => setBreakdownLoading(false))
+  }, [activeTab, classQuarter, subjectId, gradeLevel, section])
+
+  // ── Breakdown gender groups ───────────────────────────────
+  const breakdownGroups = useMemo(() => {
+    if (!breakdownData?.breakdown?.length) return []
+    const groups = []
+    for (const g of ['Male', 'Female', 'Other']) {
+      const list = breakdownData.breakdown.filter(b => (b.student.gender || 'Other') === g)
+      if (list.length) groups.push({ label: g.toUpperCase(), students: list })
+    }
+    return groups
+  }, [breakdownData])
+
+  // Category headers from first student's breakdown
+  const breakdownCategories = useMemo(() => {
+    if (!breakdownData?.breakdown?.length) return []
+    return breakdownData.breakdown[0].categories.map(c => ({ id: c.id, name: c.name, weight: c.weight }))
+  }, [breakdownData])
+
+  // ── Gender groups for rendering ───────────────────────────
+  const genderGroups = useMemo(() => {
+    if (!data?.students) return []
+    const groups = []
+    for (const g of ['Male', 'Female', 'Other']) {
+      const list = data.students.filter(s => (s.gender || 'Other') === g)
+      if (list.length) groups.push({ label: g.toUpperCase(), students: list })
+    }
+    return groups
+  }, [data])
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -255,49 +381,251 @@ export function Grades() {
         <p className="page-subtitle">View academic performance records</p>
       </div>
 
+      {/* ── Filter Bar ─────────────────────────────────────── */}
       <div className="card p-4">
-        <label className="block text-sm font-medium text-slate-700 mb-1.5">Select Student</label>
-        <select className="input" value={studentId} onChange={e => fetchGrades(e.target.value)}>
-          <option value="">— Choose a student —</option>
-          {students.map(s => (
-            <option key={s.id} value={s.id}>{formatName(s)} ({s.lrn})</option>
-          ))}
-        </select>
-      </div>
-
-      {loading ? <LoadingSpinner /> : gradeData && (
-        <div className="card overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100">
-            <h3 className="text-sm font-semibold text-slate-800">Grade Records</h3>
-          </div>
-          {gradeData.grades.length === 0 ? (
-            <EmptyState icon={BookOpen} title="No grades recorded" description="Grades will appear here once submitted by teachers." />
+        <div className="flex items-center gap-2 mb-3">
+          <Filter size={15} className="text-slate-400" />
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Filters</span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* School Year */}
+          {isTeacher ? (
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">School Year</label>
+              <div className="input bg-slate-50 text-slate-500 cursor-default">SY {syLabel || '—'}</div>
+            </div>
           ) : (
-            <div className="overflow-x-auto">
-            <table className="table-base">
-              <thead>
-                <tr><th>Subject</th><th>Quarter</th><th>Grade</th><th>Score</th><th>School Year</th></tr>
-              </thead>
-              <tbody>
-                {gradeData.grades.map(g => (
-                  <tr key={g.id}>
-                    <td className="font-medium">{g.subject_name}</td>
-                    <td className="text-slate-500">Q{g.quarter}</td>
-                    <td><GradeChip grade={g.grade} /></td>
-                    <td className="font-mono text-xs text-slate-400">{g.score || '—'}</td>
-                    <td className="text-slate-400 text-xs">{g.school_year}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">School Year</label>
+              <select className="input" value={syId} onChange={e => setSyId(e.target.value)}>
+                <option value="">— Select —</option>
+                {schoolYears.map(sy => <option key={sy.id} value={sy.id}>{sy.label}</option>)}
+              </select>
             </div>
           )}
-        </div>
-      )}
 
-      {!studentId && !loading && (
+          {/* Class (teacher) OR Grade Level + Section (admin) */}
+          {isTeacher ? (
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Class</label>
+              <select className="input" value={selectedClass} onChange={e => setSelectedClass(e.target.value)}>
+                <option value="">— Select —</option>
+                {classOptions.map(c => (
+                  <option key={`${c.grade_level}|||${c.section}`} value={`${c.grade_level}|||${c.section}`}>
+                    {c.grade_level} - {c.section}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Grade Level</label>
+                <select className="input" value={gradeLevel} onChange={e => setSelectedClass(e.target.value ? `${e.target.value}|||` : '')}>
+                  <option value="">— Select —</option>
+                  {adminGradeLevels.map(gl => <option key={gl} value={gl}>{gl}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Section</label>
+                <select className="input" value={section} onChange={e => setSelectedClass(gradeLevel ? `${gradeLevel}|||${e.target.value}` : '')} disabled={!gradeLevel}>
+                  <option value="">— Select —</option>
+                  {adminSections.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                </select>
+              </div>
+            </>
+          )}
+
+          {/* Subject */}
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Subject</label>
+            <select className="input" value={subjectId} onChange={e => setSubjectId(e.target.value)} disabled={!gradeLevel || !section}>
+              <option value="">— Select —</option>
+              {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Tabs ────────────────────────────────────────────── */}
+      {loading ? <LoadingSpinner /> : data ? (
+        <div className="card overflow-hidden">
+          {/* Tab bar */}
+          <div className="flex border-b border-slate-200">
+            {[{ key: 'grading', label: 'Grading Sheet' }, { key: 'class', label: 'Grade Summary' }].map(tab => (
+              <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+                className={clsx('px-5 py-3 text-sm font-medium transition-colors relative',
+                  activeTab === tab.key
+                    ? 'text-teal-600 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-teal-500'
+                    : 'text-slate-400 hover:text-slate-600'
+                )}>
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === 'grading' ? (
+            <>
+              {/* Sheet header */}
+              <div className="px-5 pt-4 pb-3 border-b border-slate-200">
+                <div className="flex flex-wrap items-center justify-between gap-y-2 text-[11px] text-slate-500 uppercase tracking-wider">
+                  <span><span className="font-semibold">Learning Area:</span> <span className="normal-case text-slate-700 text-xs font-medium">{data.subject_name}</span></span>
+                  <span><span className="font-semibold">Grade & Section:</span> <span className="normal-case text-slate-700 text-xs font-medium">{gradeLevel} - {section}</span></span>
+                  <span><span className="font-semibold">Subject Teacher:</span> <span className="normal-case text-slate-700 text-xs font-medium">{data.teacher_name || '—'}</span></span>
+                </div>
+              </div>
+
+              {data.students.length === 0 ? (
+                <EmptyState icon={BookOpen} title="No students enrolled" description="No students found in this class." />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="table-base">
+                    <thead>
+                      <tr>
+                        <th className="whitespace-nowrap w-10 text-center">#</th>
+                        <th className="whitespace-nowrap">Name of Students</th>
+                        <th className="whitespace-nowrap text-center">1st</th>
+                        <th className="whitespace-nowrap text-center">2nd</th>
+                        <th className="whitespace-nowrap text-center">3rd</th>
+                        <th className="whitespace-nowrap text-center">4th</th>
+                        <th className="whitespace-nowrap text-center">AVE</th>
+                        <th className="whitespace-nowrap text-center">Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {genderGroups.map(group => (
+                        <Fragment key={group.label}>
+                          <tr>
+                            <td colSpan={8} className="bg-slate-50 px-5 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-widest border-y border-slate-200">
+                              {group.label}
+                            </td>
+                          </tr>
+                          {group.students.map((student, idx) => {
+                            const sg = data.grades[student.id] || {}
+                            const quarters = [1,2,3,4].map(q => sg[q]?.grade != null ? Number(sg[q].grade) : null)
+                            const available = quarters.filter(g => g !== null)
+                            const avg = available.length ? available.reduce((a,b) => a+b, 0) / available.length : null
+                            const passed = avg !== null && avg >= 75
+                            return (
+                              <tr key={student.id} className="hover:bg-slate-50/60">
+                                <td className="text-xs text-slate-400 text-center">{idx + 1}</td>
+                                <td className="font-medium text-sm whitespace-nowrap">{formatName(student)}</td>
+                                {quarters.map((g, qi) => (
+                                  <td key={qi} className="text-left font-mono text-sm" style={{ color: g !== null && g < 75 ? '#ef4444' : g !== null ? '#0d9488' : '#cbd5e1' }}>
+                                    {g !== null ? <span className={g < 75 ? 'font-semibold' : ''}>{g}</span> : '—'}
+                                  </td>
+                                ))}
+                                <td className="text-left font-mono text-sm font-bold" style={{ color: avg !== null && avg < 75 ? '#ef4444' : avg !== null ? '#0d9488' : '#cbd5e1' }}>
+                                  {avg !== null ? avg.toFixed(2) : '—'}
+                                </td>
+                                <td className="text-left">
+                                  {avg !== null ? (
+                                    <span className={clsx('inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
+                                      passed ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'
+                                    )}>
+                                      {passed ? 'PASSED' : 'FAILED'}
+                                    </span>
+                                  ) : <span className="text-slate-300 text-xs">—</span>}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {/* Quarter selector */}
+              <div className="px-5 pt-4 pb-3 border-b border-slate-200 flex items-center gap-2">
+                <span className="text-xs font-medium text-slate-500 mr-1">Quarter:</span>
+                {[1, 2, 3, 4].map(q => (
+                  <button key={q} onClick={() => setClassQuarter(q)}
+                    className={clsx('px-3 py-1 rounded-full text-xs font-medium transition-colors',
+                      classQuarter === q
+                        ? 'bg-teal-500 text-white'
+                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                    )}>
+                    Q{q}
+                  </button>
+                ))}
+              </div>
+
+              {breakdownLoading ? <div className="py-8"><LoadingSpinner /></div> : breakdownGroups.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="table-base">
+                    <thead>
+                      <tr>
+                        <th className="whitespace-nowrap w-10 text-center">#</th>
+                        <th className="whitespace-nowrap">Name of Students</th>
+                        {breakdownCategories.map(cat => (
+                          <th key={cat.id} className="text-center">
+                            <div className="whitespace-nowrap text-center">{cat.name}</div>
+                            <div className="font-normal text-slate-400 text-center">({cat.weight}%)</div>
+                          </th>
+                        ))}
+                        <th className="whitespace-nowrap text-center">Initial</th>
+                        <th className="whitespace-nowrap text-center">Final</th>
+                        <th className="whitespace-nowrap text-center">Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {breakdownGroups.map(group => (
+                        <Fragment key={group.label}>
+                          <tr>
+                            <td colSpan={breakdownCategories.length + 5} className="bg-slate-50 px-5 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-widest border-y border-slate-200">
+                              {group.label}
+                            </td>
+                          </tr>
+                          {group.students.map((entry, idx) => {
+                            const fg = entry.final_grade != null ? Number(entry.final_grade) : null
+                            const passed = fg !== null && fg >= 75
+                            return (
+                              <tr key={entry.student.id} className="hover:bg-slate-50/60">
+                                <td className="text-xs text-slate-400 text-center">{idx + 1}</td>
+                                <td className="font-medium text-sm whitespace-nowrap">{formatName(entry.student)}</td>
+                                {entry.categories.map(cat => (
+                                  <td key={cat.id} className="text-center font-mono text-sm" style={{ color: cat.ws > 0 ? '#334155' : '#cbd5e1' }}>
+                                    {cat.ws != null ? Number(cat.ws).toFixed(2) : '—'}
+                                  </td>
+                                ))}
+                                <td className="text-center font-mono text-sm" style={{ color: entry.initial_grade > 0 ? '#334155' : '#cbd5e1' }}>
+                                  {entry.initial_grade != null ? Number(entry.initial_grade).toFixed(2) : '—'}
+                                </td>
+                                <td className="text-center font-mono text-sm font-bold" style={{ color: fg !== null && fg < 75 ? '#ef4444' : fg !== null ? '#0d9488' : '#cbd5e1' }}>
+                                  {fg !== null ? fg : '—'}
+                                </td>
+                                <td className="text-center">
+                                  {fg !== null ? (
+                                    <span className={clsx('inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
+                                      passed ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'
+                                    )}>
+                                      {passed ? 'PASSED' : 'FAILED'}
+                                    </span>
+                                  ) : <span className="text-slate-300 text-xs">—</span>}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="py-8">
+                  <EmptyState icon={BookOpen} title="No scores recorded" description="No score data found for this quarter." />
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      ) : !loading && (
         <div className="card">
-          <EmptyState icon={BookOpen} title="Select a student" description="Choose a student above to view their grade records." />
+          <EmptyState icon={BookOpen} title="Select filters" description="Choose school year, class, and subject to view the grading sheet." />
         </div>
       )}
     </div>
@@ -643,11 +971,34 @@ export function SecurePass() {
 // RISK OVERVIEW PAGE
 // ============================================================
 import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { Link } from 'react-router-dom'
+
+const RISK_FILTERS = [
+  { key: 'all',      label: 'All',           match: () => true },
+  { key: 'high',     label: 'High Risk',     match: s => s.risk_level === 'High Risk'     },
+  { key: 'moderate', label: 'Moderate Risk', match: s => s.risk_level === 'Moderate Risk' },
+  { key: 'stable',   label: 'Stable',        match: s => s.risk_level === 'Stable'        },
+]
+
+const FACTOR_LABELS = {
+  attendance: 'Attendance',
+  academic:   'Academic',
+  behavioral: 'Behavioral',
+}
+
+function riskRowColor(level) {
+  if (level === 'High Risk')     return { bar: 'bg-red-500',     text: 'text-red-600'    }
+  if (level === 'Moderate Risk') return { bar: 'bg-amber-500',   text: 'text-amber-600'  }
+  return                                { bar: 'bg-emerald-500', text: 'text-emerald-600' }
+}
 
 export function RiskOverview() {
-  const [data, setData]         = useState(null)
-  const [loading, setLoading]   = useState(true)
-  const [filter, setFilter]     = useState('all')
+  const { user } = useAuth()
+  const isTeacher = user?.role === 'teacher'
+
+  const [data, setData]       = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter]   = useState('all')
 
   const fetchRisk = async () => {
     setLoading(true)
@@ -662,14 +1013,23 @@ export function RiskOverview() {
 
   const summary  = data?.summary || {}
   const students = data?.students || []
-  const highRisk = students.filter(s => s.risk_level === 'High Risk')
+
+  const activeFilter = RISK_FILTERS.find(f => f.key === filter) || RISK_FILTERS[0]
+  const visible = students
+    .filter(activeFilter.match)
+    .slice()
+    .sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0))
 
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="page-title">Risk Overview</h1>
-          <p className="page-subtitle">AI-generated student risk assessment</p>
+          <p className="page-subtitle">
+            {isTeacher
+              ? 'AI risk assessment for students in your assigned classes'
+              : 'AI-generated student risk assessment'}
+          </p>
         </div>
         <button onClick={fetchRisk} className="btn-secondary">
           <RefreshCw size={15} /> Refresh
@@ -694,34 +1054,107 @@ export function RiskOverview() {
         ))}
       </div>
 
-      {/* High risk table */}
+      {/* Students table with filter tabs */}
       <div className="card overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
-          <AlertTriangle size={15} className="text-red-500" />
-          <h3 className="text-sm font-semibold text-slate-800">High Risk Students</h3>
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={15} className="text-red-500" />
+            <h3 className="text-sm font-semibold text-slate-800">Students</h3>
+            <span className="text-xs text-slate-400">({visible.length})</span>
+          </div>
+          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+            {RISK_FILTERS.map(f => (
+              <button
+                key={f.key}
+                onClick={() => setFilter(f.key)}
+                className={clsx(
+                  'px-3 py-1 text-xs font-medium rounded-md transition-colors',
+                  filter === f.key
+                    ? 'bg-white text-slate-800 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                )}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
         </div>
-        {loading ? <LoadingSpinner /> : highRisk.length === 0 ? (
-          <EmptyState icon={AlertTriangle} title="No high-risk students" description="All students are currently stable." />
+        {loading ? <LoadingSpinner /> : visible.length === 0 ? (
+          <EmptyState
+            icon={AlertTriangle}
+            title={
+              students.length === 0
+                ? (isTeacher ? 'No risk data for your classes' : 'No risk assessments yet')
+                : `No students in this category`
+            }
+            description={
+              students.length === 0
+                ? (isTeacher
+                    ? 'Once risk assessments run for students in your sections, they will appear here.'
+                    : 'Run risk assessments to populate this page.')
+                : 'Try a different filter above.'
+            }
+          />
         ) : (
           <div className="overflow-x-auto">
           <table className="table-base">
-            <thead><tr><th>Student</th><th>Grade &amp; Section</th><th>Risk Score</th><th>Last Assessed</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Grade &amp; Section</th>
+                <th>Risk Level</th>
+                <th>Risk Score</th>
+                <th>Top Factor</th>
+                <th>Last Assessed</th>
+              </tr>
+            </thead>
             <tbody>
-              {highRisk.map(s => (
-                <tr key={s.student_id}>
-                  <td className="font-medium">{s.full_name}</td>
-                  <td className="text-slate-500">{s.grade_level} – {s.section}</td>
-                  <td>
-                    <div className="flex items-center gap-2">
-                      <div className="w-20 h-2 bg-slate-100 rounded-full">
-                        <div className="h-full bg-red-500 rounded-full" style={{ width: `${s.risk_score * 100}%` }} />
+              {visible.map(s => {
+                const c = riskRowColor(s.risk_level)
+                return (
+                  <tr
+                    key={s.student_id}
+                    className="hover:bg-slate-50 cursor-pointer"
+                    onClick={() => { window.location.href = `/students/${s.student_id}` }}
+                  >
+                    <td className="font-medium">
+                      <Link
+                        to={`/students/${s.student_id}`}
+                        className="text-slate-800 hover:text-teal-600"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        {s.full_name}
+                      </Link>
+                    </td>
+                    <td className="text-slate-500">{s.grade_level} – {s.section}</td>
+                    <td>
+                      <span className={clsx(
+                        'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium',
+                        s.risk_level === 'High Risk'     && 'bg-red-50 text-red-700',
+                        s.risk_level === 'Moderate Risk' && 'bg-amber-50 text-amber-700',
+                        s.risk_level === 'Stable'        && 'bg-emerald-50 text-emerald-700',
+                      )}>
+                        <span className={clsx('w-1.5 h-1.5 rounded-full', c.bar)} />
+                        {s.risk_level}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <div className="w-20 h-2 bg-slate-100 rounded-full">
+                          <div className={clsx('h-full rounded-full', c.bar)} style={{ width: `${(s.risk_score || 0) * 100}%` }} />
+                        </div>
+                        <span className={clsx('text-xs font-mono font-semibold', c.text)}>
+                          {((s.risk_score || 0) * 100).toFixed(0)}%
+                        </span>
                       </div>
-                      <span className="text-xs font-mono font-semibold text-red-600">{(s.risk_score * 100).toFixed(0)}%</span>
-                    </div>
-                  </td>
-                  <td className="text-xs text-slate-400">{s.assessed_at ? fmt(new Date(s.assessed_at), 'MMM d, h:mm a') : '—'}</td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="text-xs text-slate-500">
+                      {s.top_factor ? FACTOR_LABELS[s.top_factor] : <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="text-xs text-slate-400">{s.assessed_at ? fmt(new Date(s.assessed_at), 'MMM d, h:mm a') : '—'}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
           </div>

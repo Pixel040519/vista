@@ -9,7 +9,7 @@ import clsx from 'clsx'
 import { formatName, nameInitial } from '../../utils/nameHelper'
 import nrysLogo from '../../assets/NRYS_logo.png'
 
-const navGroups = [
+const adminNavGroups = [
   {
     label: 'Overview',
     items: [
@@ -39,6 +39,38 @@ const navGroups = [
     items: [
       { to: '/accounts',     icon: UserCog,        label: 'Accounts',      roles: ['admin'] },
       { to: '/curriculum',   icon: GraduationCap,  label: 'Curriculum',    roles: ['admin'] },
+    ]
+  }
+]
+
+const teacherNavGroups = [
+  {
+    label: 'Overview',
+    items: [
+      { to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true },
+    ]
+  },
+  {
+    label: "Today's Work",
+    items: [
+      { to: '/attendance',  icon: ClipboardCheck, label: 'Attendance'  },
+      { to: '/score-entry', icon: PenLine,        label: 'Score Entry' },
+    ]
+  },
+  {
+    label: 'My Students',
+    items: [
+      { to: '/students', icon: Users,         label: 'Students'      },
+      { to: '/behavior', icon: Heart,         label: 'Behavior'      },
+      { to: '/grades',   icon: BookOpen,      label: 'Grades'        },
+      { to: '/risk',     icon: AlertTriangle, label: 'Risk Overview' },
+    ]
+  },
+  {
+    label: 'Tools',
+    items: [
+      { to: '/securepass',    icon: QrCode,    label: 'SecurePass QR' },
+      { to: '/announcements', icon: Megaphone, label: 'Announcements' },
     ]
   }
 ]
@@ -85,7 +117,7 @@ export default function Sidebar({ open, onClose }) {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
-        {navGroups.map(group => {
+        {(user?.role === 'teacher' ? teacherNavGroups : adminNavGroups).map(group => {
           const visibleItems = group.items.filter(
             item => !item.roles || item.roles.includes(user?.role)
           )

@@ -197,6 +197,76 @@ gradeRouter.post('/', authorize('admin', 'teacher'), async (req, res, next) => {
   }
 });
 
+// GET /api/grades/by-subject?subject_id=&grade_level=&section=&school_year=
+gradeRouter.get('/by-subject', async (req, res, next) => {
+  try {
+    const { subject_id, grade_level, section, school_year } = req.query;
+    if (!subject_id || !grade_level || !section || !school_year)
+      throw new AppError('subject_id, grade_level, section, and school_year are all required.', 400);
+
+    // Teacher authorization: must have matching assignment (admin bypasses)
+    if (req.user.role === 'teacher') {
+      const subjectRow = await query('SELECT name FROM subjects WHERE id=$1', [subject_id]);
+      if (!subjectRow.rows.length) throw new AppError('Subject not found.', 404);
+      const subjectName = subjectRow.rows[0].name;
+      const assignCheck = await query(
+        `SELECT id FROM teacher_assignments
+         WHERE teacher_id=$1 AND grade_level=$2 AND section=$3 AND subject=$4 AND school_year=$5
+         LIMIT 1`,
+        [req.user.id, grade_level, section, subjectName, school_year]
+      );
+      if (!assignCheck.rows.length) throw new AppError('You are not assigned to this class/subject.', 403);
+    }
+
+    // 1. Students in this class
+    const studentsResult = await query(
+      `SELECT id, lrn, surname, first_name, middle_name, gender
+       FROM students
+       WHERE grade_level=$1 AND section=$2 AND is_active=TRUE
+       ORDER BY gender DESC NULLS LAST, surname, first_name`,
+      [grade_level, section]
+    );
+    const students = studentsResult.rows;
+    const studentIds = students.map(s => s.id);
+
+    // 2. Quarterly grades for these students + subject
+    const gradesMap = {};
+    if (studentIds.length) {
+      const gradesResult = await query(
+        `SELECT student_id, quarter, grade, score, remarks
+         FROM grades
+         WHERE subject_id=$1 AND school_year=$2 AND student_id = ANY($3)
+         ORDER BY quarter`,
+        [subject_id, school_year, studentIds]
+      );
+      for (const row of gradesResult.rows) {
+        if (!gradesMap[row.student_id]) gradesMap[row.student_id] = {};
+        gradesMap[row.student_id][row.quarter] = { grade: parseFloat(row.grade), score: parseFloat(row.score), remarks: row.remarks };
+      }
+    }
+
+    // 3. Subject name
+    const subjectResult = await query('SELECT name FROM subjects WHERE id=$1', [subject_id]);
+    const subject_name = subjectResult.rows[0]?.name || '';
+
+    // 4. Teacher name
+    const teacherResult = await query(
+      `SELECT u.surname, u.first_name, u.middle_name
+       FROM teacher_assignments ta
+       JOIN users u ON u.id = ta.teacher_id
+       WHERE ta.grade_level=$1 AND ta.section=$2 AND ta.subject=$3 AND ta.school_year=$4
+       LIMIT 1`,
+      [grade_level, section, subject_name, school_year]
+    );
+    const t = teacherResult.rows[0];
+    const teacher_name = t ? `${t.surname}, ${t.first_name}${t.middle_name ? ' ' + t.middle_name : ''}` : null;
+
+    res.json({ students, grades: gradesMap, subject_name, teacher_name });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports.gradeRouter = gradeRouter;
 
 

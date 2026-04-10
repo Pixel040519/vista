@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
 
-from routers import sentiment, prediction, risk, dashboard
+from routers import sentiment, prediction, risk, dashboard, teacher_dashboard
 from services.db import init_db
 
 logging.basicConfig(level=logging.INFO)
@@ -38,6 +38,7 @@ app.include_router(sentiment.router, prefix="/analyze", tags=["Sentiment"])
 app.include_router(prediction.router, prefix="/predict", tags=["Prediction"])
 app.include_router(risk.router, prefix="/classify", tags=["Risk"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
+app.include_router(teacher_dashboard.router, prefix="/teacher-dashboard", tags=["Teacher Dashboard"])
 
 
 @app.get("/health")

@@ -258,13 +258,23 @@ async def get_all_risk_levels(db: AsyncSession = Depends(get_db)):
     result = await db.execute(text("""
         SELECT DISTINCT ON (ra.student_id)
             ra.student_id, s.full_name, s.grade_level, s.section,
-            ra.risk_level, ra.risk_score, ra.assessed_at
+            ra.risk_level, ra.risk_score, ra.assessed_at,
+            ra.attendance_factor, ra.academic_factor, ra.behavioral_factor
         FROM risk_assessments ra
         JOIN students s ON s.id = ra.student_id
         WHERE s.is_active = TRUE
         ORDER BY ra.student_id, ra.assessed_at DESC
     """))
     rows = result.fetchall()
+
+    def _top_factor(att, acad, beh):
+        factors = [
+            ("attendance", float(att or 0)),
+            ("academic",   float(acad or 0)),
+            ("behavioral", float(beh or 0)),
+        ]
+        name, val = max(factors, key=lambda f: f[1])
+        return name if val > 0 else None
 
     students = [
         {
@@ -275,7 +285,11 @@ async def get_all_risk_levels(db: AsyncSession = Depends(get_db)):
             "risk_level": r.risk_level,
             "risk_score": float(r.risk_score),
             "risk_color": RISK_COLORS.get(r.risk_level, "#6b7280"),
-            "assessed_at": r.assessed_at.isoformat() if r.assessed_at else None
+            "assessed_at": r.assessed_at.isoformat() if r.assessed_at else None,
+            "attendance_factor": float(r.attendance_factor or 0),
+            "academic_factor":   float(r.academic_factor or 0),
+            "behavioral_factor": float(r.behavioral_factor or 0),
+            "top_factor": _top_factor(r.attendance_factor, r.academic_factor, r.behavioral_factor),
         }
         for r in rows
     ]
