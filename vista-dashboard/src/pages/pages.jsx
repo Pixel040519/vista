@@ -2,7 +2,8 @@
 // ATTENDANCE PAGE
 // ============================================================
 import { formatName, nameInitial } from '../utils/nameHelper'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 import { attendanceApi, studentApi, curriculumApi } from '../api/client'
 import { LoadingSpinner, EmptyState } from '../components/UI'
 import { useAuth } from '../context/AuthContext'
@@ -26,7 +27,14 @@ export function Attendance() {
     return [...map.values()].sort((a, b) => a.grade_level.localeCompare(b.grade_level) || a.section.localeCompare(b.section))
   }, [assignments])
 
-  const [selectedSection, setSelectedSection] = useState('')
+  // Deep-link via React Router location state (set by the dashboard's
+  // "Take attendance" / "Review" buttons). Re-applied on every navigation
+  // so clicking a different row always updates the filters, even if the
+  // Attendance component stays mounted across route visits.
+  const location = useLocation()
+  const initialDeepLink = location.state?.deepLink
+
+  const [selectedSection, setSelectedSection] = useState(initialDeepLink?.selectedSection || '')
   const [students, setStudents] = useState([])
   const [records, setRecords]   = useState({})
   const [date, setDate]         = useState(format(new Date(), 'yyyy-MM-dd'))
@@ -35,8 +43,21 @@ export function Attendance() {
   const [loading, setLoading]   = useState(false)
   const [subjects, setSubjects]           = useState([])
   const [selectedSubject, setSelectedSubject] = useState('')
+  const pendingDeepLinkSubject = useRef(initialDeepLink?.selectedSubject || '')
+  const appliedDeepLinkTs = useRef(initialDeepLink?.ts || 0)
 
-  // Auto-select first section
+  // Apply a fresh deep-link when the dashboard navigates in with new state.
+  // The `ts` check ensures we only apply each deep-link once, even if React
+  // re-runs this effect for unrelated reasons.
+  useEffect(() => {
+    const dl = location.state?.deepLink
+    if (!dl || dl.ts === appliedDeepLinkTs.current) return
+    appliedDeepLinkTs.current = dl.ts
+    setSelectedSection(dl.selectedSection || '')
+    pendingDeepLinkSubject.current = dl.selectedSubject || ''
+  }, [location.state])
+
+  // Auto-select first section (skipped when a deep-link already set one)
   useEffect(() => {
     if (sections.length > 0 && !selectedSection) {
       setSelectedSection(`${sections[0].grade_level}|||${sections[0].section}`)
@@ -60,7 +81,17 @@ export function Attendance() {
         const list = res.data.subjects || []
         const filtered = list.filter(s => allowedSubjects.includes(s.name))
         setSubjects(filtered)
-        setSelectedSubject(filtered.length === 1 ? filtered[0].id : '')
+        // Prefer a pending deep-link subject (from dashboard Take attendance).
+        // Only applied once, then cleared so subsequent manual section changes
+        // fall back to the single-subject auto-select.
+        const pending = pendingDeepLinkSubject.current
+        const match = pending && filtered.find(s => s.id === pending)
+        if (match) {
+          setSelectedSubject(match.id)
+          pendingDeepLinkSubject.current = ''
+        } else {
+          setSelectedSubject(filtered.length === 1 ? filtered[0].id : '')
+        }
       })
       .catch(() => { setSubjects([]); setSelectedSubject('') })
   }, [selectedSection])

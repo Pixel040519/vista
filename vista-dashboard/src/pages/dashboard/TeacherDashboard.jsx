@@ -55,10 +55,18 @@ export default function TeacherDashboard() {
   )
 
   const goToAttendance = (gradeLevel, section, subjectId) => {
-    // Mirror Attendance.jsx sessionStorage keys for deep-linking
-    sessionStorage.setItem('attendance.selectedSection', `${gradeLevel}|||${section}`)
-    if (subjectId) sessionStorage.setItem('attendance.selectedSubject', subjectId)
-    navigate('/attendance')
+    // Pass the deep-link via React Router location state + a fresh key so
+    // the Attendance page re-applies it even when navigating to the same
+    // route repeatedly (the component may stay mounted across navigations).
+    navigate('/attendance', {
+      state: {
+        deepLink: {
+          selectedSection: `${gradeLevel}|||${section}`,
+          selectedSubject: subjectId || '',
+          ts: Date.now(),
+        },
+      },
+    })
   }
 
   const goToScoreEntry = (gradeLevel, section, subjectId, latestQuarter) => {
