@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ClipboardCheck, Heart, QrCode, Brain, TrendingUp, TrendingDown, MapPin } from 'lucide-react'
+import { ArrowLeft, BookOpen, ClipboardCheck, Heart, QrCode, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi } from '../api/client'
 import { RiskBadge, SentimentBadge, LoadingSpinner, GradeChip } from '../components/UI'
 import { format } from 'date-fns'
 import { formatName, nameInitial } from '../utils/nameHelper'
+import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
 
 const calcAge = (dob) => {
@@ -23,16 +24,36 @@ const TABS = ['Overview', 'Grades', 'Attendance', 'Behavior', 'AI Insights']
 export default function StudentDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const isTeacher = user?.role === 'teacher'
   const [student, setStudent]   = useState(null)
   const [grades, setGrades]     = useState([])
   const [attendance, setAttendance] = useState([])
   const [behavior, setBehavior] = useState([])
   const [prediction, setPrediction] = useState(null)
   const [risk, setRisk]         = useState(null)
+  const [classHealth, setClassHealth] = useState(null)
+  const [classHealthError, setClassHealthError] = useState(null)
   const [loading, setLoading]   = useState(true)
   const [tab, setTab]           = useState('Overview')
   const [qr, setQr]             = useState(null)
   const [generatingQr, setGeneratingQr] = useState(false)
+  const [expandedSYs, setExpandedSYs] = useState(() => new Set())
+  const [expandedAttMonths, setExpandedAttMonths] = useState(() => new Set())
+  const [expandedBehMonths, setExpandedBehMonths] = useState(() => new Set())
+  const [behaviorFilter, setBehaviorFilter] = useState('All')
+
+  const toggleInSet = (setter) => (key) => {
+    setter(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+  const toggleSY       = toggleInSet(setExpandedSYs)
+  const toggleAttMonth = toggleInSet(setExpandedAttMonths)
+  const toggleBehMonth = toggleInSet(setExpandedBehMonths)
 
   useEffect(() => {
     Promise.all([
@@ -52,12 +73,33 @@ export default function StudentDetail() {
   const fetchAI = async () => {
     if (prediction) return // Already loaded
     try {
-      const [pred, riskRes] = await Promise.all([
-        aiApi.predict({ student_id: id }),
-        aiApi.risk({ student_id: id }),
-      ])
-      setPrediction(pred.data)
-      setRisk(riskRes.data)
+      if (isTeacher) {
+        const [predRes, chRes] = await Promise.allSettled([
+          aiApi.predict({ student_id: id }),
+          aiApi.classHealth(id),
+        ])
+        if (predRes.status === 'fulfilled') setPrediction(predRes.value.data)
+        if (chRes.status === 'fulfilled') {
+          setClassHealth(chRes.value.data)
+        } else {
+          const status = chRes.reason?.response?.status
+          setClassHealthError(
+            status === 404
+              ? 'You are not assigned to this student in the current school year.'
+              : 'Could not load class health.'
+          )
+        }
+        if (predRes.status === 'rejected' && chRes.status === 'rejected') {
+          toast.error('AI service unavailable.')
+        }
+      } else {
+        const [pred, riskRes] = await Promise.all([
+          aiApi.predict({ student_id: id }),
+          aiApi.risk({ student_id: id }),
+        ])
+        setPrediction(pred.data)
+        setRisk(riskRes.data)
+      }
     } catch {
       toast.error('AI service unavailable.')
     }
@@ -66,6 +108,35 @@ export default function StudentDetail() {
   const handleTabChange = t => {
     setTab(t)
     if (t === 'AI Insights') fetchAI()
+  }
+
+  // DSS deep-link dispatcher — mirrors the patterns used by TeacherDashboard
+  // (sessionStorage for Score Entry, React Router location state for Attendance).
+  const runSuggestionAction = (action) => {
+    if (!action || !classHealth?.scope) return
+    const { grade_level, section } = classHealth.scope
+    if (action.type === 'score-entry') {
+      const STORAGE_KEY = 'vista_score_entry_filters'
+      let cur = {}
+      try { cur = JSON.parse(sessionStorage.getItem(STORAGE_KEY)) || {} } catch { cur = {} }
+      cur.selectedClass = `${grade_level}|||${section}`
+      if (action.subject_id) cur.subjectId = action.subject_id
+      cur.quarter = String(action.quarter || 1)
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(cur))
+      navigate('/score-entry')
+    } else if (action.type === 'attendance') {
+      navigate('/attendance', {
+        state: {
+          deepLink: {
+            selectedSection: `${grade_level}|||${section}`,
+            selectedSubject: action.subject_id || '',
+            ts: Date.now(),
+          },
+        },
+      })
+    } else if (action.type === 'behavior') {
+      navigate('/behavior')
+    }
   }
 
   const handleGenerateQR = async () => {
@@ -82,6 +153,68 @@ export default function StudentDetail() {
     a[r.status] = (a[r.status] || 0) + 1
     return a
   }, {})
+
+  // Group grades by school year → subject (most recent SY first)
+  const gradesBySY = grades.reduce((acc, g) => {
+    const sy = g.school_year || '—'
+    if (!acc[sy]) acc[sy] = {}
+    if (!acc[sy][g.subject_name]) acc[sy][g.subject_name] = {}
+    acc[sy][g.subject_name][g.quarter] = g.grade
+    return acc
+  }, {})
+  const sortedSYs = Object.keys(gradesBySY).sort().reverse()
+
+  useEffect(() => {
+    if (sortedSYs.length && expandedSYs.size === 0) {
+      setExpandedSYs(new Set([sortedSYs[0]]))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grades])
+
+  // Group attendance by month (yyyy-MM key, most recent first)
+  const monthKey = (d) => {
+    const dt = new Date(d)
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`
+  }
+  const attByMonth = attendance.reduce((acc, r) => {
+    const k = monthKey(r.date)
+    if (!acc[k]) acc[k] = { records: [], summary: { Present: 0, Absent: 0, Late: 0, Excused: 0 } }
+    acc[k].records.push(r)
+    acc[k].summary[r.status] = (acc[k].summary[r.status] || 0) + 1
+    return acc
+  }, {})
+  const sortedAttMonths = Object.keys(attByMonth).sort().reverse()
+
+  useEffect(() => {
+    if (sortedAttMonths.length && expandedAttMonths.size === 0) {
+      setExpandedAttMonths(new Set([sortedAttMonths[0]]))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attendance])
+
+  // Behavior: filter by sentiment, then group by month
+  const filteredBehavior = behaviorFilter === 'All'
+    ? behavior
+    : behavior.filter(b => b.sentiment === behaviorFilter)
+  const behByMonth = filteredBehavior.reduce((acc, b) => {
+    const k = monthKey(b.observed_at)
+    if (!acc[k]) acc[k] = []
+    acc[k].push(b)
+    return acc
+  }, {})
+  const sortedBehMonths = Object.keys(behByMonth).sort().reverse()
+
+  useEffect(() => {
+    if (sortedBehMonths.length && expandedBehMonths.size === 0) {
+      setExpandedBehMonths(new Set([sortedBehMonths[0]]))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [behavior, behaviorFilter])
+
+  const formatMonth = (k) => {
+    const [y, m] = k.split('-').map(Number)
+    return format(new Date(y, m - 1, 1), 'MMMM yyyy')
+  }
 
   if (loading) return <LoadingSpinner />
   if (!student) return <div className="text-slate-500 text-sm">Student not found.</div>
@@ -107,14 +240,16 @@ export default function StudentDetail() {
               </div>
             </div>
           </div>
-          <button
-            onClick={handleGenerateQR}
-            disabled={generatingQr}
-            className="btn-secondary"
-          >
-            <QrCode size={16} />
-            {generatingQr ? 'Generating...' : 'Generate QR'}
-          </button>
+          {!isTeacher && (
+            <button
+              onClick={handleGenerateQR}
+              disabled={generatingQr}
+              className="btn-secondary"
+            >
+              <QrCode size={16} />
+              {generatingQr ? 'Generating...' : 'Generate QR'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -224,11 +359,13 @@ export default function StudentDetail() {
                             <span className="text-xs px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700 font-medium">✓ Pickup</span>
                           )}
                         </div>
-                        <div className="mt-1 space-y-0.5">
-                          {g.email && <p className="text-xs text-slate-400 truncate">✉ {g.email}</p>}
-                          {g.phone && <p className="text-xs text-slate-400">📞 {g.phone}</p>}
-                          {g.home_address && <p className="text-xs text-slate-400">📍 {g.home_address}</p>}
-                        </div>
+                        {!isTeacher && (
+                          <div className="mt-1 space-y-0.5">
+                            {g.email && <p className="text-xs text-slate-400 truncate">✉ {g.email}</p>}
+                            {g.phone && <p className="text-xs text-slate-400">📞 {g.phone}</p>}
+                            {g.home_address && <p className="text-xs text-slate-400">📍 {g.home_address}</p>}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -240,167 +377,405 @@ export default function StudentDetail() {
         </div>
 
         {/* Home Address card — full width */}
-        <div className="card p-5">
-          <h3 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
-            <MapPin size={15} className="text-teal-500" /> Home Address
-          </h3>
-          {student.home_address ? (
-            <p className="text-sm text-slate-700 leading-relaxed">{student.home_address}</p>
-          ) : (
-            <p className="text-sm text-slate-400 italic">No home address recorded.</p>
-          )}
-        </div>
+        {!isTeacher && (
+          <div className="card p-5">
+            <h3 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+              <MapPin size={15} className="text-teal-500" /> Home Address
+            </h3>
+            {student.home_address ? (
+              <p className="text-sm text-slate-700 leading-relaxed">{student.home_address}</p>
+            ) : (
+              <p className="text-sm text-slate-400 italic">No home address recorded.</p>
+            )}
+          </div>
+        )}
       </div>
       )}
 
       {tab === 'Grades' && (
-        <div className="card overflow-hidden">
-          {grades.length === 0 ? (
-            <div className="p-8 text-center text-sm text-slate-400">No grade records found.</div>
-          ) : (
-            <div className="overflow-x-auto">
-            <table className="table-base">
-              <thead>
-                <tr>
-                  <th>Subject</th>
-                  <th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th>
-                  <th>School Year</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(
-                  grades.reduce((acc, g) => {
-                    const key = `${g.subject_name}|||${g.school_year}`
-                    if (!acc[key]) acc[key] = { subject: g.subject_name, year: g.school_year, quarters: {} }
-                    acc[key].quarters[g.quarter] = g.grade
-                    return acc
-                  }, {})
-                ).map(([key, row]) => (
-                  <tr key={key}>
-                    <td className="font-medium">{row.subject}</td>
-                    <td><GradeChip grade={row.quarters[1]} /></td>
-                    <td><GradeChip grade={row.quarters[2]} /></td>
-                    <td><GradeChip grade={row.quarters[3]} /></td>
-                    <td><GradeChip grade={row.quarters[4]} /></td>
-                    <td className="text-slate-400 text-xs">{row.year}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-          )}
-        </div>
+        grades.length === 0 ? (
+          <div className="card p-8 text-center text-sm text-slate-400">No grade records found.</div>
+        ) : (
+          <div className="space-y-3">
+            {sortedSYs.map(sy => {
+              const isOpen = expandedSYs.has(sy)
+              const subjects = Object.entries(gradesBySY[sy])
+              return (
+                <div key={sy} className="card overflow-hidden">
+                  <button
+                    onClick={() => toggleSY(sy)}
+                    className="w-full flex items-center gap-2 px-5 py-3 hover:bg-slate-50 transition-colors"
+                  >
+                    {isOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                    <span className="text-sm font-semibold text-slate-800">{sy}</span>
+                    <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                      {subjects.length} {subjects.length === 1 ? 'subject' : 'subjects'}
+                    </span>
+                  </button>
+                  {isOpen && (
+                    <div className="overflow-x-auto border-t border-slate-100">
+                      <table className="table-base">
+                        <thead>
+                          <tr>
+                            <th>Subject</th>
+                            <th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {subjects.map(([subject, quarters]) => (
+                            <tr key={subject}>
+                              <td className="font-medium">{subject}</td>
+                              <td><GradeChip grade={quarters[1]} /></td>
+                              <td><GradeChip grade={quarters[2]} /></td>
+                              <td><GradeChip grade={quarters[3]} /></td>
+                              <td><GradeChip grade={quarters[4]} /></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )
       )}
 
       {tab === 'Attendance' && (
-        <div className="card overflow-hidden">
-          {attendance.length === 0 ? (
-            <div className="p-8 text-center text-sm text-slate-400">No attendance records found.</div>
-          ) : (
-            <div className="overflow-x-auto">
-            <table className="table-base">
-              <thead><tr><th>Date</th><th>Status</th><th>Remarks</th><th>Recorded By</th></tr></thead>
-              <tbody>
-                {attendance.slice(0, 50).map(a => (
-                  <tr key={a.id}>
-                    <td className="font-mono text-xs">{format(new Date(a.date), 'MMM d, yyyy')}</td>
-                    <td>
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                        a.status === 'Present' ? 'bg-emerald-50 text-emerald-700' :
-                        a.status === 'Absent'  ? 'bg-red-50 text-red-700' :
-                        a.status === 'Late'    ? 'bg-amber-50 text-amber-700' :
-                                                 'bg-blue-50 text-blue-700'
-                      }`}>{a.status}</span>
-                    </td>
-                    <td className="text-slate-500 text-xs">{a.remarks || '—'}</td>
-                    <td className="text-slate-400 text-xs">{a.recorded_by_name || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-          )}
-        </div>
+        attendance.length === 0 ? (
+          <div className="card p-8 text-center text-sm text-slate-400">No attendance records found.</div>
+        ) : (
+          <div className="space-y-3">
+            {sortedAttMonths.map(mk => {
+              const isOpen = expandedAttMonths.has(mk)
+              const { records, summary } = attByMonth[mk]
+              return (
+                <div key={mk} className="card overflow-hidden">
+                  <button
+                    onClick={() => toggleAttMonth(mk)}
+                    className="w-full flex items-center gap-2 px-5 py-3 hover:bg-slate-50 transition-colors"
+                  >
+                    {isOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                    <span className="text-sm font-semibold text-slate-800">{formatMonth(mk)}</span>
+                    <div className="ml-auto flex items-center gap-1.5 flex-wrap justify-end">
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">P {summary.Present || 0}</span>
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">L {summary.Late || 0}</span>
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">E {summary.Excused || 0}</span>
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">A {summary.Absent || 0}</span>
+                    </div>
+                  </button>
+                  {isOpen && (
+                    <div className="overflow-x-auto border-t border-slate-100">
+                      <table className="table-base">
+                        <thead><tr><th>Date</th><th>Status</th><th>Remarks</th><th>Recorded By</th></tr></thead>
+                        <tbody>
+                          {records.map(a => (
+                            <tr key={a.id}>
+                              <td className="font-mono text-xs">{format(new Date(a.date), 'MMM d, yyyy')}</td>
+                              <td>
+                                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                  a.status === 'Present' ? 'bg-emerald-50 text-emerald-700' :
+                                  a.status === 'Absent'  ? 'bg-red-50 text-red-700' :
+                                  a.status === 'Late'    ? 'bg-amber-50 text-amber-700' :
+                                                           'bg-blue-50 text-blue-700'
+                                }`}>{a.status}</span>
+                              </td>
+                              <td className="text-slate-500 text-xs">{a.remarks || '—'}</td>
+                              <td className="text-slate-400 text-xs">{a.recorded_by_name || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )
       )}
 
       {tab === 'Behavior' && (
-        <div className="space-y-3">
-          {behavior.length === 0 ? (
-            <div className="card p-8 text-center text-sm text-slate-400">No behavior logs yet.</div>
-          ) : behavior.map(b => (
-            <div key={b.id} className="card p-4 flex gap-4">
-              <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center flex-shrink-0 text-sm font-bold text-slate-500">
-                {b.teacher_name?.[0] || 'T'}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <p className="text-sm font-medium text-slate-800">{b.teacher_name}</p>
-                  <div className="flex items-center gap-2">
-                    <SentimentBadge sentiment={b.sentiment} />
-                    {b.category && <span className="text-xs text-slate-400 bg-slate-50 px-2 py-0.5 rounded-full">{b.category}</span>}
-                  </div>
-                </div>
-                <p className="text-sm text-slate-600 mt-1.5">{b.observation}</p>
-                <p className="text-xs text-slate-400 mt-1.5">{format(new Date(b.observed_at), 'MMM d, yyyy · h:mm a')}</p>
-                {b.sentiment_score !== null && (
-                  <div className="mt-2 flex items-center gap-2">
-                    <div className="flex-1 h-1.5 bg-slate-100 rounded-full max-w-24">
-                      <div
-                        className={`h-full rounded-full ${b.sentiment === 'Positive' ? 'bg-teal-500' : b.sentiment === 'Negative' ? 'bg-red-500' : 'bg-slate-400'}`}
-                        style={{ width: `${Math.abs(b.sentiment_score) * 100}%` }}
-                      />
-                    </div>
-                    <span className="text-xs font-mono text-slate-400">score: {Number(b.sentiment_score).toFixed(3)}</span>
-                  </div>
-                )}
-              </div>
+        behavior.length === 0 ? (
+          <div className="card p-8 text-center text-sm text-slate-400">No behavior logs yet.</div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
+              {['All', 'Positive', 'Neutral', 'Negative'].map(f => {
+                const count = f === 'All' ? behavior.length : behavior.filter(b => b.sentiment === f).length
+                return (
+                  <button
+                    key={f}
+                    onClick={() => setBehaviorFilter(f)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap flex items-center gap-1.5 ${
+                      behaviorFilter === f ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    {f}
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${behaviorFilter === f ? 'bg-slate-100 text-slate-600' : 'bg-slate-200 text-slate-500'}`}>{count}</span>
+                  </button>
+                )
+              })}
             </div>
-          ))}
-        </div>
+            {sortedBehMonths.length === 0 ? (
+              <div className="card p-8 text-center text-sm text-slate-400">No {behaviorFilter.toLowerCase()} logs in this view.</div>
+            ) : sortedBehMonths.map(mk => {
+              const isOpen = expandedBehMonths.has(mk)
+              const logs = behByMonth[mk]
+              return (
+                <div key={mk} className="card overflow-hidden">
+                  <button
+                    onClick={() => toggleBehMonth(mk)}
+                    className="w-full flex items-center gap-2 px-5 py-3 hover:bg-slate-50 transition-colors"
+                  >
+                    {isOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                    <span className="text-sm font-semibold text-slate-800">{formatMonth(mk)}</span>
+                    <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                      {logs.length} {logs.length === 1 ? 'log' : 'logs'}
+                    </span>
+                  </button>
+                  {isOpen && (
+                    <div className="border-t border-slate-100 p-3 space-y-2">
+                      {logs.map(b => (
+                        <div key={b.id} className="p-3 bg-slate-50 rounded-xl flex gap-4">
+                          <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center flex-shrink-0 text-sm font-bold text-slate-500">
+                            {b.teacher_name?.[0] || 'T'}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <p className="text-sm font-medium text-slate-800">{b.teacher_name}</p>
+                              <div className="flex items-center gap-2">
+                                <SentimentBadge sentiment={b.sentiment} />
+                                {b.category && <span className="text-xs text-slate-400 bg-white px-2 py-0.5 rounded-full">{b.category}</span>}
+                              </div>
+                            </div>
+                            <p className="text-sm text-slate-600 mt-1.5">{b.observation}</p>
+                            <p className="text-xs text-slate-400 mt-1.5">{format(new Date(b.observed_at), 'MMM d, yyyy · h:mm a')}</p>
+                            {b.sentiment_score !== null && (
+                              <div className="mt-2 flex items-center gap-2">
+                                <div className="flex-1 h-1.5 bg-slate-200 rounded-full max-w-24">
+                                  <div
+                                    className={`h-full rounded-full ${b.sentiment === 'Positive' ? 'bg-teal-500' : b.sentiment === 'Negative' ? 'bg-red-500' : 'bg-slate-400'}`}
+                                    style={{ width: `${Math.abs(b.sentiment_score) * 100}%` }}
+                                  />
+                                </div>
+                                <span className="text-xs font-mono text-slate-400">score: {Number(b.sentiment_score).toFixed(3)}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )
       )}
 
       {tab === 'AI Insights' && (
         <div className="space-y-5">
-          {/* Risk Assessment */}
-          {risk ? (
-            <div className="card p-5">
-              <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                <Brain size={15} className="text-teal-500" /> Risk Assessment
-              </h3>
-              <div className="flex items-center gap-4 mb-4 flex-wrap">
-                <RiskBadge level={risk.risk_level} />
-                <div className="flex items-center gap-2">
-                  <div className="w-32 h-2 bg-slate-100 rounded-full">
-                    <div
-                      className={`h-full rounded-full ${risk.risk_level === 'High Risk' ? 'bg-red-500' : risk.risk_level === 'Moderate Risk' ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                      style={{ width: `${risk.risk_score * 100}%` }}
-                    />
-                  </div>
-                  <span className="text-sm font-mono font-semibold">{(risk.risk_score * 100).toFixed(0)}%</span>
-                </div>
+          {isTeacher && (
+            <div className="rounded-xl border border-teal-100 bg-teal-50 px-4 py-3 text-xs text-teal-800">
+              <span className="font-semibold">Scoped view:</span> AI insights below are limited to the subjects you teach
+              {student.section && <> in <span className="font-semibold">{student.grade_level} · {student.section}</span></>}.
+            </div>
+          )}
+
+          {/* In Your Class — teacher-scoped health card */}
+          {isTeacher && (
+            classHealthError ? (
+              <div className="card p-5 text-sm text-slate-500">{classHealthError}</div>
+            ) : !classHealth ? (
+              <div className="card p-8 text-center">
+                <LoadingSpinner size="sm" />
+                <p className="text-sm text-slate-400 mt-2">Computing in-class signals...</p>
               </div>
-              <div className="bg-slate-50 rounded-xl p-3 text-sm text-slate-600 mb-4">{risk.recommendation}</div>
-              {risk.factors?.length > 0 && (
-                <div className="space-y-2 overflow-y-auto flex-1">
-                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Contributing Factors</p>
-                  {risk.factors.map((f, i) => (
-                    <div key={i} className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
-                      <span className={`px-2 py-0.5 rounded text-xs font-semibold mt-0.5 ${f.severity === 'High' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
-                        {f.severity}
+            ) : (
+              (() => {
+                const bandStyles = {
+                  ok:           'bg-emerald-50 text-emerald-700',
+                  watch:        'bg-amber-50 text-amber-700',
+                  urgent:       'bg-red-50 text-red-700',
+                  insufficient: 'bg-slate-100 text-slate-500',
+                }
+                const bandLabels = {
+                  ok:           'OK',
+                  watch:        'Watch',
+                  urgent:       'Urgent',
+                  insufficient: 'More data needed',
+                }
+                const { scope, overall_band, metrics } = classHealth
+                const fmtRate = (r) => r === null ? '—' : `${Math.round(r * 100)}%`
+                const fmtSent = (s) => s === null || s === undefined ? '—' : (s >= 0 ? `+${s.toFixed(2)}` : s.toFixed(2))
+                const fmtGrade = (g) => g === null ? '—' : g.toFixed(1)
+                return (
+                  <div className="card p-5">
+                    <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+                      <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                        <Brain size={15} className="text-teal-500" /> In Your Class
+                      </h3>
+                      <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${bandStyles[overall_band]}`}>
+                        {bandLabels[overall_band]}
                       </span>
-                      <div>
-                        <p className="text-sm font-medium text-slate-800">{f.factor}</p>
-                        <p className="text-xs text-slate-500">{f.description}</p>
+                    </div>
+                    <p className="text-xs text-slate-500 mb-4">
+                      Your signals for this student across {scope.subjects.map(s => s.name).join(', ')}
+                    </p>
+
+                    <div className="space-y-2">
+                      {/* Academic */}
+                      <div className="flex items-start justify-between gap-3 p-3 bg-slate-50 rounded-xl">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-800">Academic</p>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {metrics.academic.sample_count === 0
+                              ? 'No grades recorded yet this school year.'
+                              : `Based on ${metrics.academic.sample_count} ${metrics.academic.sample_count === 1 ? 'subject' : 'subjects'} · latest quarter each`}
+                          </p>
+                          {metrics.academic.per_subject.length > 0 && (
+                            <div className="mt-1.5 flex flex-wrap gap-1">
+                              {metrics.academic.per_subject.map(p => (
+                                <span key={p.subject_name} className="text-[11px] font-mono bg-white text-slate-600 px-1.5 py-0.5 rounded">
+                                  {p.subject_name}: {p.grade} (Q{p.quarter})
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <span className="text-lg font-bold text-slate-800">{fmtGrade(metrics.academic.avg_grade)}</span>
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[metrics.academic.band]}`}>
+                            {bandLabels[metrics.academic.band]}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Attendance */}
+                      <div className="flex items-start justify-between gap-3 p-3 bg-slate-50 rounded-xl">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-800">Attendance</p>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {metrics.attendance.total === 0
+                              ? 'No attendance recorded in your subject sessions yet.'
+                              : `${metrics.attendance.present} of ${metrics.attendance.total} classes · last 30 days`}
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <span className="text-lg font-bold text-slate-800">{fmtRate(metrics.attendance.rate)}</span>
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[metrics.attendance.band]}`}>
+                            {bandLabels[metrics.attendance.band]}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Behavior */}
+                      <div className="flex items-start justify-between gap-3 p-3 bg-slate-50 rounded-xl">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-slate-800">Behavior</p>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {metrics.behavior.log_count === 0
+                              ? "You haven't logged any behavior notes this month."
+                              : `${metrics.behavior.log_count} ${metrics.behavior.log_count === 1 ? 'log' : 'logs'} you recorded this month`}
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <span className="text-lg font-bold text-slate-800">{fmtSent(metrics.behavior.avg_sentiment)}</span>
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[metrics.behavior.band]}`}>
+                            {bandLabels[metrics.behavior.band]}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  ))}
+
+                    {/* DSS — rule-based suggestions */}
+                    {classHealth.suggestions?.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-slate-100">
+                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                          Suggested next steps
+                        </p>
+                        <ul className="space-y-2">
+                          {classHealth.suggestions.map((s, i) => (
+                            <li key={i} className="flex items-start gap-2 text-sm text-slate-600">
+                              <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                                s.severity === 'urgent'       ? 'bg-red-500'     :
+                                s.severity === 'watch'        ? 'bg-amber-500'   :
+                                s.severity === 'ok'           ? 'bg-emerald-500' :
+                                                                'bg-slate-300'
+                              }`} />
+                              <div className="flex-1 min-w-0">
+                                <span>{s.text}</span>
+                                {s.action && (
+                                  <button
+                                    onClick={() => runSuggestionAction(s.action)}
+                                    className="ml-2 inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800 hover:underline"
+                                  >
+                                    {s.action.label || 'Open'} →
+                                  </button>
+                                )}
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()
+            )
+          )}
+
+          {/* Risk Assessment — admin only */}
+          {!isTeacher && (
+            risk ? (
+              <div className="card p-5">
+                <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                  <Brain size={15} className="text-teal-500" /> Risk Assessment
+                </h3>
+                <div className="flex items-center gap-4 mb-4 flex-wrap">
+                  <RiskBadge level={risk.risk_level} />
+                  <div className="flex items-center gap-2">
+                    <div className="w-32 h-2 bg-slate-100 rounded-full">
+                      <div
+                        className={`h-full rounded-full ${risk.risk_level === 'High Risk' ? 'bg-red-500' : risk.risk_level === 'Moderate Risk' ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                        style={{ width: `${risk.risk_score * 100}%` }}
+                      />
+                    </div>
+                    <span className="text-sm font-mono font-semibold">{(risk.risk_score * 100).toFixed(0)}%</span>
+                  </div>
                 </div>
-              )}
-            </div>
-          ) : (
-            <div className="card p-8 text-center">
-              <LoadingSpinner size="sm" />
-              <p className="text-sm text-slate-400 mt-2">Analyzing student data...</p>
+                <div className="bg-slate-50 rounded-xl p-3 text-sm text-slate-600 mb-4">{risk.recommendation}</div>
+                {risk.factors?.length > 0 && (
+                  <div className="space-y-2 overflow-y-auto flex-1">
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Contributing Factors</p>
+                    {risk.factors.map((f, i) => (
+                      <div key={i} className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                        <span className={`px-2 py-0.5 rounded text-xs font-semibold mt-0.5 ${f.severity === 'High' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                          {f.severity}
+                        </span>
+                        <div>
+                          <p className="text-sm font-medium text-slate-800">{f.factor}</p>
+                          <p className="text-xs text-slate-500">{f.description}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="card p-8 text-center">
+                <LoadingSpinner size="sm" />
+                <p className="text-sm text-slate-400 mt-2">Analyzing student data...</p>
+              </div>
+            )
+          )}
+
+          {/* Empty state for teachers with no subjects/predictions */}
+          {isTeacher && prediction && (!prediction.subjects || prediction.subjects.length === 0) && (
+            <div className="card p-8 text-center text-sm text-slate-400">
+              No predictions available for the subjects you teach this student yet. Record more grades to enable forecasts.
             </div>
           )}
 

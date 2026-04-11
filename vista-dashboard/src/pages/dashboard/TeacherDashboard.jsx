@@ -4,8 +4,9 @@ import {
   Users, UserCheck, UserX, AlertTriangle, ClipboardCheck, CheckCircle2,
   ChevronRight, MessageSquare, BookOpen, Sparkles, Clock, ArrowRight,
 } from 'lucide-react'
+import clsx from 'clsx'
 import { aiApi } from '../../api/client'
-import { StatCard, RiskBadge, LoadingSpinner } from '../../components/UI'
+import { StatCard, LoadingSpinner } from '../../components/UI'
 import { useAuth } from '../../context/AuthContext'
 
 const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
@@ -16,25 +17,44 @@ const SENTIMENT_DOT = {
   Negative: 'bg-red-500',
 }
 
-const FACTOR_LABEL = {
-  attendance: 'Attendance',
+const TOP_CONCERN_LABEL = {
   academic:   'Academic',
-  behavioral: 'Behavior',
+  attendance: 'Attendance',
+  behavior:   'Behavior',
+}
+
+const BAND_PILL = {
+  urgent:       'bg-red-50 text-red-700',
+  watch:        'bg-amber-50 text-amber-700',
+  ok:           'bg-emerald-50 text-emerald-700',
+  insufficient: 'bg-slate-50 text-slate-500',
+}
+
+const BAND_LABEL = {
+  urgent:       'Urgent',
+  watch:        'Watch',
+  ok:           'On track',
+  insufficient: 'No data',
 }
 
 export default function TeacherDashboard() {
   const { user, activeAssignments } = useAuth()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
+  const [classHealth, setClassHealth] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
     const load = () => {
-      aiApi.teacherDashboard()
-        .then(res => { if (!cancelled) setData(res.data) })
-        .catch(() => {})
-        .finally(() => { if (!cancelled) setLoading(false) })
+      Promise.allSettled([
+        aiApi.teacherDashboard(),
+        aiApi.classHealthAll(),
+      ]).then(([dashRes, chRes]) => {
+        if (cancelled) return
+        if (dashRes.status === 'fulfilled') setData(dashRes.value.data)
+        if (chRes.status   === 'fulfilled') setClassHealth(chRes.value.data)
+      }).finally(() => { if (!cancelled) setLoading(false) })
     }
     load()
     const onFocus = () => load()
@@ -83,11 +103,56 @@ export default function TeacherDashboard() {
 
   const att = data?.todays_attendance_rollup || {}
   const my  = data?.my_students || { total: 0, sections: 0, subjects: 0 }
-  const risk = data?.risk_in_my_sections || { stable: 0, moderate_risk: 0, high_risk: 0 }
-  const atRiskCount = (risk.moderate_risk || 0) + (risk.high_risk || 0)
+  const chSummary = classHealth?.summary || { total: 0, ok: 0, watch: 0, urgent: 0, insufficient: 0 }
+  const atRiskCount = (chSummary.urgent || 0) + (chSummary.watch || 0)
   const attRate = att.total_logged
     ? Math.round(((att.present + att.late) / att.total_logged) * 100)
     : 0
+
+  // My Classes grid — group class-health students by (grade, section) and
+  // merge with the scope.sections subject list.
+  const mySectionsHealth = useMemo(() => {
+    if (!classHealth) return []
+    const groups = new Map()
+    for (const s of classHealth.students || []) {
+      const key = `${s.grade_level}|||${s.section}`
+      if (!groups.has(key)) {
+        groups.set(key, {
+          grade_level: s.grade_level,
+          section:     s.section,
+          enrollment:  0,
+          ok: 0, watch: 0, urgent: 0, insufficient: 0,
+          subjects:    [],
+        })
+      }
+      const g = groups.get(key)
+      g.enrollment += 1
+      g[s.overall_band] += 1
+    }
+    for (const scopeSec of classHealth.scope?.sections || []) {
+      const key = `${scopeSec.grade_level}|||${scopeSec.section}`
+      if (!groups.has(key)) {
+        groups.set(key, {
+          grade_level: scopeSec.grade_level,
+          section:     scopeSec.section,
+          enrollment:  0,
+          ok: 0, watch: 0, urgent: 0, insufficient: 0,
+          subjects:    scopeSec.subjects || [],
+        })
+      } else {
+        groups.get(key).subjects = scopeSec.subjects || []
+      }
+    }
+    return Array.from(groups.values())
+  }, [classHealth])
+
+  // Students to Watch — urgent first, then watch; cap at 5 for the sidebar card.
+  const studentsToWatch = useMemo(() => {
+    if (!classHealth) return []
+    return (classHealth.students || [])
+      .filter(s => s.overall_band === 'urgent' || s.overall_band === 'watch')
+      .slice(0, 5)
+  }, [classHealth])
 
   const todayStatus = data?.today_attendance_status || []
   const pendingCount = todayStatus.filter(t => t.pending).length
@@ -141,9 +206,9 @@ export default function TeacherDashboard() {
               color="amber"
             />
             <StatCard
-              title="At-Risk Students"
+              title="Needs Attention"
               value={atRiskCount}
-              subtitle={`${risk.high_risk || 0} high · ${risk.moderate_risk || 0} moderate`}
+              subtitle={`${chSummary.urgent || 0} urgent · ${chSummary.watch || 0} watch`}
               icon={AlertTriangle}
               color="red"
               onClick={() => navigate('/risk')}
@@ -208,19 +273,15 @@ export default function TeacherDashboard() {
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-800">My Classes</h3>
-                  <p className="text-xs text-slate-400">Risk distribution per section</p>
+                  <p className="text-xs text-slate-400">Class-health bands per section</p>
                 </div>
               </div>
-              {(data?.my_sections || []).length === 0 ? (
+              {mySectionsHealth.length === 0 ? (
                 <div className="text-center py-6 text-sm text-slate-400">No sections assigned.</div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {data.my_sections.map((sec, i) => {
+                  {mySectionsHealth.map((sec, i) => {
                     const total = sec.enrollment || 1
-                    const stable = sec.risk.stable || 0
-                    const moderate = sec.risk.moderate_risk || 0
-                    const high = sec.risk.high_risk || 0
-                    const unassessed = sec.risk.unassessed || 0
                     return (
                       <div key={i} className="border border-slate-200 rounded-xl p-3 hover:border-teal-300 transition-colors">
                         <div className="flex items-start justify-between gap-2 mb-2">
@@ -234,16 +295,18 @@ export default function TeacherDashboard() {
                           </div>
                         </div>
                         <div className="flex h-2 rounded-full overflow-hidden bg-slate-100 mb-2">
-                          {stable > 0    && <div className="bg-emerald-500" style={{ width: `${(stable/total)*100}%` }} />}
-                          {moderate > 0  && <div className="bg-amber-500"   style={{ width: `${(moderate/total)*100}%` }} />}
-                          {high > 0      && <div className="bg-red-500"     style={{ width: `${(high/total)*100}%` }} />}
-                          {unassessed > 0 && <div className="bg-slate-300"  style={{ width: `${(unassessed/total)*100}%` }} />}
+                          {sec.urgent       > 0 && <div className="bg-red-500"     style={{ width: `${(sec.urgent      /total)*100}%` }} />}
+                          {sec.watch        > 0 && <div className="bg-amber-500"   style={{ width: `${(sec.watch       /total)*100}%` }} />}
+                          {sec.ok           > 0 && <div className="bg-emerald-500" style={{ width: `${(sec.ok          /total)*100}%` }} />}
+                          {sec.insufficient > 0 && <div className="bg-slate-300"   style={{ width: `${(sec.insufficient/total)*100}%` }} />}
                         </div>
                         <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
-                          <span><span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1" />{stable}</span>
-                          <span><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500   mr-1" />{moderate}</span>
-                          <span><span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500     mr-1" />{high}</span>
-                          {unassessed > 0 && <span><span className="inline-block w-1.5 h-1.5 rounded-full bg-slate-300 mr-1" />{unassessed} unassessed</span>}
+                          <span><span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500     mr-1" />{sec.urgent} urgent</span>
+                          <span><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500   mr-1" />{sec.watch} watch</span>
+                          <span><span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1" />{sec.ok} ok</span>
+                          {sec.insufficient > 0 && (
+                            <span><span className="inline-block w-1.5 h-1.5 rounded-full bg-slate-300 mr-1" />{sec.insufficient} no data</span>
+                          )}
                         </div>
                       </div>
                     )
@@ -263,22 +326,27 @@ export default function TeacherDashboard() {
                   All <ChevronRight size={13} />
                 </Link>
               </div>
-              {(data?.students_to_watch || []).length === 0 ? (
+              {studentsToWatch.length === 0 ? (
                 <div className="text-center py-6 text-xs text-slate-400">
-                  No at-risk students in your classes.
+                  All your students are on track.
                 </div>
               ) : (
                 <ul className="space-y-2">
-                  {data.students_to_watch.map(s => (
-                    <li key={s.id} className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
+                  {studentsToWatch.map(s => (
+                    <li key={s.student_id} className="flex items-center justify-between gap-2">
+                      <Link to={`/students/${s.student_id}`} className="min-w-0 hover:text-teal-700">
                         <p className="text-sm font-medium text-slate-800 truncate">{s.full_name}</p>
                         <p className="text-[11px] text-slate-400">
                           {s.grade_level} · {s.section}
-                          {s.top_factor && <> · {FACTOR_LABEL[s.top_factor]}</>}
+                          {s.top_concern && <> · {TOP_CONCERN_LABEL[s.top_concern]}</>}
                         </p>
-                      </div>
-                      <RiskBadge level={s.risk_level} />
+                      </Link>
+                      <span className={clsx(
+                        'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium shrink-0',
+                        BAND_PILL[s.overall_band]
+                      )}>
+                        {BAND_LABEL[s.overall_band]}
+                      </span>
                     </li>
                   ))}
                 </ul>

@@ -17,6 +17,26 @@ attendanceRouter.get('/', async (req, res, next) => {
     const { student_id, start_date, end_date } = req.query;
     if (!student_id) throw new AppError('student_id is required.', 400);
 
+    const params = [student_id, start_date || null, end_date || null];
+    let teacherFilter = '';
+    if (req.user.role === 'teacher') {
+      const activeSY = await query(
+        `SELECT label FROM school_years WHERE is_active=TRUE LIMIT 1`
+      );
+      const syLabel = activeSY.rows[0]?.label || null;
+      params.push(req.user.id, syLabel);
+      teacherFilter = `
+         AND sub.name IN (
+           SELECT ta.subject
+           FROM teacher_assignments ta
+           JOIN students st ON st.id = $1
+           WHERE ta.teacher_id = $4
+             AND ta.grade_level = st.grade_level
+             AND ta.section = st.section
+             AND ta.school_year = $5
+         )`;
+    }
+
     const result = await query(
       `SELECT a.*, u.full_name as recorded_by_name, sub.name as subject_name
        FROM attendance a
@@ -24,9 +44,9 @@ attendanceRouter.get('/', async (req, res, next) => {
        LEFT JOIN subjects sub ON sub.id = a.subject_id
        WHERE a.student_id = $1
          AND ($2::date IS NULL OR a.date >= $2::date)
-         AND ($3::date IS NULL OR a.date <= $3::date)
+         AND ($3::date IS NULL OR a.date <= $3::date)${teacherFilter}
        ORDER BY a.date DESC`,
-      [student_id, start_date || null, end_date || null]
+      params
     );
 
     // Calculate summary
@@ -149,14 +169,34 @@ gradeRouter.get('/', async (req, res, next) => {
     const { student_id, school_year } = req.query;
     if (!student_id) throw new AppError('student_id is required.', 400);
 
+    const params = [student_id, school_year || null];
+    let teacherFilter = '';
+    if (req.user.role === 'teacher') {
+      const activeSY = await query(
+        `SELECT label FROM school_years WHERE is_active=TRUE LIMIT 1`
+      );
+      const syLabel = activeSY.rows[0]?.label || null;
+      params.push(req.user.id, syLabel);
+      teacherFilter = `
+         AND s.name IN (
+           SELECT ta.subject
+           FROM teacher_assignments ta
+           JOIN students st ON st.id = $1
+           WHERE ta.teacher_id = $3
+             AND ta.grade_level = st.grade_level
+             AND ta.section = st.section
+             AND ta.school_year = $4
+         )`;
+    }
+
     const result = await query(
       `SELECT g.*, s.name as subject_name
        FROM grades g
        JOIN subjects s ON s.id = g.subject_id
        WHERE g.student_id = $1
-         AND ($2::text IS NULL OR g.school_year = $2)
+         AND ($2::text IS NULL OR g.school_year = $2)${teacherFilter}
        ORDER BY g.quarter, s.name`,
-      [student_id, school_year || null]
+      params
     );
 
     // Group by quarter for easy consumption
@@ -284,14 +324,21 @@ behaviorRouter.get('/', async (req, res, next) => {
     const { student_id, limit = 30 } = req.query;
     if (!student_id) throw new AppError('student_id is required.', 400);
 
+    const params = [student_id, limit];
+    let teacherFilter = '';
+    if (req.user.role === 'teacher') {
+      params.push(req.user.id);
+      teacherFilter = ` AND bl.teacher_id = $${params.length}`;
+    }
+
     const result = await query(
       `SELECT bl.*, u.full_name as teacher_name
        FROM behavior_logs bl
        JOIN users u ON u.id = bl.teacher_id
-       WHERE bl.student_id = $1
+       WHERE bl.student_id = $1${teacherFilter}
        ORDER BY bl.observed_at DESC
        LIMIT $2`,
-      [student_id, limit]
+      params
     );
 
     res.json({ logs: result.rows });

@@ -230,6 +230,16 @@ router.get('/:id', async (req, res, next) => {
   try {
     const student = await getStudentWithGuardians(req.params.id)
     if (!student) throw new AppError('Student not found.', 404)
+
+    if (req.user.role === 'teacher') {
+      delete student.home_address
+      for (const g of student.guardians || []) {
+        delete g.email
+        delete g.phone
+        delete g.home_address
+      }
+    }
+
     res.json({ student })
   } catch (err) { next(err) }
 })
@@ -368,7 +378,7 @@ router.delete('/:id/guardians/:guardianId', authorize('admin'), async (req, res,
 })
 
 // POST /api/students/:id/generate-qr
-router.post('/:id/generate-qr', authorize('admin','teacher'), async (req, res, next) => {
+router.post('/:id/generate-qr', authorize('admin'), async (req, res, next) => {
   try {
     const { expiresInMinutes=30 } = req.body
     const token     = uuidv4()

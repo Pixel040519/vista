@@ -1017,10 +1017,187 @@ const FACTOR_LABELS = {
   behavioral: 'Behavioral',
 }
 
+const CLASS_FILTERS = [
+  { key: 'all',          label: 'All',             match: () => true },
+  { key: 'urgent',       label: 'Urgent',          match: s => s.overall_band === 'urgent' },
+  { key: 'watch',        label: 'Watch',           match: s => s.overall_band === 'watch' },
+  { key: 'ok',           label: 'On track',        match: s => s.overall_band === 'ok' },
+  { key: 'insufficient', label: 'Not enough data', match: s => s.overall_band === 'insufficient' },
+]
+
+const BAND_STYLES = {
+  urgent:       { pill: 'bg-red-50 text-red-700',         dot: 'bg-red-500',     label: 'Urgent' },
+  watch:        { pill: 'bg-amber-50 text-amber-700',     dot: 'bg-amber-500',   label: 'Watch' },
+  ok:           { pill: 'bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', label: 'On track' },
+  insufficient: { pill: 'bg-slate-50 text-slate-500',     dot: 'bg-slate-400',   label: 'Not enough data' },
+}
+
+const TOP_CONCERN_LABELS = {
+  academic:   'Academic',
+  attendance: 'Attendance',
+  behavior:   'Behavior',
+}
+
 function riskRowColor(level) {
   if (level === 'High Risk')     return { bar: 'bg-red-500',     text: 'text-red-600'    }
   if (level === 'Moderate Risk') return { bar: 'bg-amber-500',   text: 'text-amber-600'  }
   return                                { bar: 'bg-emerald-500', text: 'text-emerald-600' }
+}
+
+function TeacherRiskOverview({ data, loading, filter, setFilter, onRefresh }) {
+  const summary  = data?.summary || { total: 0, ok: 0, watch: 0, urgent: 0, insufficient: 0 }
+  const students = data?.students || []
+
+  const activeFilter = CLASS_FILTERS.find(f => f.key === filter) || CLASS_FILTERS[0]
+  const visible = students.filter(activeFilter.match)
+
+  const renderChip = (band, text) => {
+    const style = BAND_STYLES[band] || BAND_STYLES.insufficient
+    return (
+      <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-md text-xs font-mono font-semibold', style.pill)}>
+        {band === 'insufficient' ? '—' : text}
+      </span>
+    )
+  }
+
+  return (
+    <div className="space-y-5 animate-fade-in">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="page-title">Risk Overview</h1>
+          <p className="page-subtitle">
+            Computed from your subjects, your attendance sessions, and your behavior logs
+          </p>
+        </div>
+        <button onClick={onRefresh} className="btn-secondary">
+          <RefreshCw size={15} /> Refresh
+        </button>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {[
+          { key: 'urgent',       label: 'Urgent',          color: 'text-red-700 bg-red-50',         dot: 'bg-red-500'     },
+          { key: 'watch',        label: 'Watch',           color: 'text-amber-700 bg-amber-50',     dot: 'bg-amber-500'   },
+          { key: 'ok',           label: 'On track',        color: 'text-emerald-700 bg-emerald-50', dot: 'bg-emerald-500' },
+          { key: 'insufficient', label: 'Not enough data', color: 'text-slate-600 bg-slate-50',     dot: 'bg-slate-400'   },
+        ].map(r => (
+          <div key={r.key} className={`card p-5 ${r.color}`}>
+            <div className="flex items-center gap-2 mb-2">
+              <span className={`w-2.5 h-2.5 rounded-full ${r.dot}`} />
+              <span className="text-sm font-semibold">{r.label}</span>
+            </div>
+            <p className="text-3xl font-bold">{summary[r.key] || 0}</p>
+            <p className="text-xs mt-0.5 opacity-70">students</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Students table with filter tabs */}
+      <div className="card overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={15} className="text-red-500" />
+            <h3 className="text-sm font-semibold text-slate-800">Students</h3>
+            <span className="text-xs text-slate-400">({visible.length})</span>
+          </div>
+          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1 flex-wrap">
+            {CLASS_FILTERS.map(f => (
+              <button
+                key={f.key}
+                onClick={() => setFilter(f.key)}
+                className={clsx(
+                  'px-3 py-1 text-xs font-medium rounded-md transition-colors',
+                  filter === f.key
+                    ? 'bg-white text-slate-800 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                )}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {loading ? <LoadingSpinner /> : visible.length === 0 ? (
+          <EmptyState
+            icon={AlertTriangle}
+            title={
+              students.length === 0
+                ? 'No students in your classes yet'
+                : 'No students in this category'
+            }
+            description={
+              students.length === 0
+                ? 'Once students are assigned to your classes and you record scores, attendance, or behavior logs, their class band will appear here.'
+                : 'Try a different filter above.'
+            }
+          />
+        ) : (
+          <div className="overflow-x-auto">
+          <table className="table-base">
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Grade &amp; Section</th>
+                <th>Class Band</th>
+                <th>Top Concern</th>
+                <th>Academic</th>
+                <th>Attendance</th>
+                <th>Behavior</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map(s => {
+                const bandStyle = BAND_STYLES[s.overall_band] || BAND_STYLES.insufficient
+                const ac = s.metrics.academic
+                const at = s.metrics.attendance
+                const bh = s.metrics.behavior
+                const sentimentText = bh.avg_sentiment !== null
+                  ? (bh.avg_sentiment >= 0 ? `+${bh.avg_sentiment.toFixed(2)}` : bh.avg_sentiment.toFixed(2))
+                  : '—'
+                return (
+                  <tr
+                    key={s.student_id}
+                    className="hover:bg-slate-50 cursor-pointer"
+                    onClick={() => { window.location.href = `/students/${s.student_id}` }}
+                  >
+                    <td className="font-medium">
+                      <Link
+                        to={`/students/${s.student_id}`}
+                        className="text-slate-800 hover:text-teal-600"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        {s.full_name}
+                      </Link>
+                    </td>
+                    <td className="text-slate-500">{s.grade_level} – {s.section}</td>
+                    <td>
+                      <span className={clsx(
+                        'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium',
+                        bandStyle.pill
+                      )}>
+                        <span className={clsx('w-1.5 h-1.5 rounded-full', bandStyle.dot)} />
+                        {bandStyle.label}
+                      </span>
+                    </td>
+                    <td className="text-xs text-slate-500">
+                      {s.top_concern
+                        ? TOP_CONCERN_LABELS[s.top_concern]
+                        : <span className="text-slate-300">—</span>}
+                    </td>
+                    <td>{renderChip(ac.band, ac.avg_grade !== null ? ac.avg_grade.toFixed(1) : '—')}</td>
+                    <td>{renderChip(at.band, at.rate !== null ? `${Math.round(at.rate * 100)}%` : '—')}</td>
+                    <td>{renderChip(bh.band, sentimentText)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 export function RiskOverview() {
@@ -1034,13 +1211,17 @@ export function RiskOverview() {
   const fetchRisk = async () => {
     setLoading(true)
     try {
-      const res = await aiApi.riskAll()
+      const res = isTeacher ? await aiApi.classHealthAll() : await aiApi.riskAll()
       setData(res.data)
     } catch {}
     setLoading(false)
   }
 
-  useEffect(() => { fetchRisk() }, [])
+  useEffect(() => { fetchRisk() }, [isTeacher])
+
+  if (isTeacher) {
+    return <TeacherRiskOverview data={data} loading={loading} filter={filter} setFilter={setFilter} onRefresh={fetchRisk} />
+  }
 
   const summary  = data?.summary || {}
   const students = data?.students || []

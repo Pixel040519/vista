@@ -130,6 +130,8 @@ export const aiApi = {
   risk:        (data)    => api.post('/ai/risk-assessment', data),
   riskAll:     ()        => api.get('/ai/risk-all'),
   sentiment:   (text)    => api.post('/ai/sentiment', { text }),
+  classHealth: (id)      => api.get('/ai/class-health', { params: { student_id: id } }),
+  classHealthAll: ()     => api.get('/ai/class-health/all'),
 }
 
 // ── Account Management (Admin only) ──────────────────────────
