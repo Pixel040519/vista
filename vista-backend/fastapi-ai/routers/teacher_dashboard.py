@@ -247,73 +247,83 @@ async def get_teacher_dashboard_summary(
                 }
             )
 
-    # ── 8. Score-entry progress per teacher subject ──
-    # `total_items` counts every active score item across all quarters so the
-    # number always reflects what's actually in the DB. `latest_quarter` is
-    # shown alongside as the highest-numbered quarter that has any items.
+    # ── 8. Score-entry progress per (subject, section) ──
+    # Score items are scoped per section, so a teacher handling the same
+    # subject in two sections sees independent totals per section.
+    # `components_with_items` and `total_items` are scoped to the latest
+    # quarter that has any items, so adding items in a new quarter resets
+    # those counts to reflect just that quarter's progress.
     score_progress = []
     if subject_ids:
-        sp_rows = await db.execute(
+        # Subject-wide component totals (grading_structure is per subject).
+        comp_rows = await db.execute(
             text(
                 """
-                WITH latest AS (
-                    SELECT s.id AS subject_id, MAX(si.quarter) AS latest_quarter
-                    FROM subjects s
-                    LEFT JOIN grading_structure comp ON comp.subject_id = s.id
-                    LEFT JOIN score_items si
-                           ON si.component_id = comp.id AND si.is_active = TRUE
-                    WHERE s.id = ANY(:subids)
-                    GROUP BY s.id
-                )
-                SELECT
-                    s.id   AS subject_id,
-                    s.name AS subject,
-                    s.grade_level,
-                    COUNT(DISTINCT comp.id) FILTER (WHERE comp.category_id IS NOT NULL) AS components_total,
-                    COUNT(DISTINCT comp.id) FILTER (
-                        WHERE comp.category_id IS NOT NULL
-                          AND EXISTS (
-                              SELECT 1 FROM score_items si
-                              WHERE si.component_id = comp.id AND si.is_active = TRUE
-                          )
-                    ) AS components_with_items,
-                    COUNT(DISTINCT si.id) AS total_items,
-                    l.latest_quarter
-                FROM subjects s
-                JOIN latest l ON l.subject_id = s.id
-                LEFT JOIN grading_structure comp ON comp.subject_id = s.id
-                LEFT JOIN score_items si
-                       ON si.component_id = comp.id AND si.is_active = TRUE
-                WHERE s.id = ANY(:subids)
-                GROUP BY s.id, s.name, s.grade_level, l.latest_quarter
-                ORDER BY s.grade_level, s.name
+                SELECT subject_id,
+                       COUNT(*) FILTER (WHERE category_id IS NOT NULL) AS components_total
+                FROM grading_structure
+                WHERE subject_id = ANY(:subids) AND is_active = TRUE
+                GROUP BY subject_id
                 """
             ),
             {"subids": subject_ids},
         )
-        agg_by_subject = {
-            str(r.subject_id): {
-                "components_total": r.components_total or 0,
-                "components_with_items": r.components_with_items or 0,
+        comp_total_by_subject = {
+            str(r.subject_id): r.components_total or 0 for r in comp_rows.fetchall()
+        }
+
+        # Per (subject, section) aggregates scoped to the latest quarter with items.
+        sp_rows = await db.execute(
+            text(
+                """
+                WITH latest AS (
+                    SELECT subject_id, section, MAX(quarter) AS latest_quarter
+                    FROM score_items
+                    WHERE subject_id = ANY(:subids) AND is_active = TRUE
+                    GROUP BY subject_id, section
+                )
+                SELECT
+                    l.subject_id,
+                    l.section,
+                    l.latest_quarter,
+                    COUNT(DISTINCT si.id)           AS total_items,
+                    COUNT(DISTINCT si.component_id) AS components_with_items
+                FROM latest l
+                LEFT JOIN score_items si
+                       ON si.subject_id = l.subject_id
+                      AND si.section = l.section
+                      AND si.quarter = l.latest_quarter
+                      AND si.is_active = TRUE
+                GROUP BY l.subject_id, l.section, l.latest_quarter
+                """
+            ),
+            {"subids": subject_ids},
+        )
+        agg_by_subject_section = {
+            (str(r.subject_id), r.section): {
                 "total_items": r.total_items or 0,
+                "components_with_items": r.components_with_items or 0,
                 "latest_quarter": r.latest_quarter,
             }
             for r in sp_rows.fetchall()
         }
-        # Unroll one row per (subject, section) so multi-section assignments
-        # each get their own Resume deep-link on the dashboard widget.
+
         for a in assignments:
             sid = a["subject_id"]
-            if not sid or sid not in agg_by_subject:
+            if not sid:
                 continue
-            base = agg_by_subject[sid]
+            base = agg_by_subject_section.get((sid, a["section"]), {
+                "total_items": 0,
+                "components_with_items": 0,
+                "latest_quarter": None,
+            })
             score_progress.append(
                 {
                     "subject_id": sid,
                     "subject": a["subject"],
                     "grade_level": a["grade_level"],
                     "section": a["section"],
-                    "components_total": base["components_total"],
+                    "components_total": comp_total_by_subject.get(sid, 0),
                     "components_with_items": base["components_with_items"],
                     "total_items": base["total_items"],
                     "latest_quarter": base["latest_quarter"],

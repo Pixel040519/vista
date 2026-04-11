@@ -631,6 +631,7 @@ CREATE TABLE IF NOT EXISTS score_items (
     id                     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     component_id           UUID NOT NULL REFERENCES grading_structure(id) ON DELETE CASCADE,
     subject_id             UUID NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    section                VARCHAR(100) NOT NULL,
     quarter                SMALLINT NOT NULL CHECK (quarter BETWEEN 1 AND 4),
     name                   VARCHAR(100) NOT NULL,
     highest_possible_score DECIMAL(7,2) NOT NULL CHECK (highest_possible_score > 0),
@@ -641,9 +642,9 @@ CREATE TABLE IF NOT EXISTS score_items (
     updated_at             TIMESTAMP DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_score_items_unique_active ON score_items(component_id, quarter, name) WHERE is_active=TRUE;
-CREATE INDEX IF NOT EXISTS idx_score_items_component ON score_items(component_id, quarter);
-CREATE INDEX IF NOT EXISTS idx_score_items_subject   ON score_items(subject_id, quarter);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_score_items_unique_active ON score_items(component_id, quarter, section, name) WHERE is_active=TRUE;
+CREATE INDEX IF NOT EXISTS idx_score_items_component ON score_items(component_id, quarter, section);
+CREATE INDEX IF NOT EXISTS idx_score_items_subject   ON score_items(subject_id, quarter, section);
 
 CREATE TABLE IF NOT EXISTS student_scores (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

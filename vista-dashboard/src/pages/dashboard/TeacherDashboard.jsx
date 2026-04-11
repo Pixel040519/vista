@@ -61,9 +61,15 @@ export default function TeacherDashboard() {
     navigate('/attendance')
   }
 
-  const goToScoreEntry = (gradeLevel, section, subjectId) => {
-    sessionStorage.setItem('scoreEntry.selectedClass', `${gradeLevel}|||${section}`)
-    if (subjectId) sessionStorage.setItem('scoreEntry.selectedSubject', subjectId)
+  const goToScoreEntry = (gradeLevel, section, subjectId, latestQuarter) => {
+    // ScoreEntry.jsx persists filters in a single JSON blob under this key.
+    const STORAGE_KEY = 'vista_score_entry_filters'
+    let cur = {}
+    try { cur = JSON.parse(sessionStorage.getItem(STORAGE_KEY)) || {} } catch { cur = {} }
+    cur.selectedClass = `${gradeLevel}|||${section}`
+    if (subjectId) cur.subjectId = subjectId
+    cur.quarter = String(latestQuarter || 1)
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(cur))
     navigate('/score-entry')
   }
 
@@ -328,7 +334,7 @@ export default function TeacherDashboard() {
                           <td className="text-slate-500">{sp.latest_quarter ? `Q${sp.latest_quarter}` : '—'}</td>
                           <td>
                             <button
-                              onClick={() => goToScoreEntry(sp.grade_level, sp.section, sp.subject_id)}
+                              onClick={() => goToScoreEntry(sp.grade_level, sp.section, sp.subject_id, sp.latest_quarter)}
                               className="text-xs text-teal-600 font-medium hover:text-teal-700 flex items-center gap-1"
                             >
                               Resume <ArrowRight size={12} />

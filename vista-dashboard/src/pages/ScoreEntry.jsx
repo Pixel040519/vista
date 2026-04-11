@@ -147,7 +147,7 @@ export default function ScoreEntry() {
     setLoading(true)
     try {
       const [itemsRes, scoresRes] = await Promise.all([
-        scoreApi.getItems({ subject_id: subjectId, quarter }),
+        scoreApi.getItems({ subject_id: subjectId, quarter, grade_level: gradeLevel, section }),
         scoreApi.getScores({ subject_id: subjectId, quarter, grade_level: gradeLevel, section }),
       ])
       setCategories(itemsRes.data.categories || [])
@@ -319,7 +319,6 @@ export default function ScoreEntry() {
 
   const saveEditItems = async () => {
     const filled = editItems.filter(i => i.name.trim())
-    if (filled.length === 0) return toast.error('Add at least one item with a name.')
     const missingHps = filled.find(i => !i.highest_possible_score || Number(i.highest_possible_score) <= 0)
     if (missingHps) return toast.error(`"${missingHps.name}" is missing a valid HPS (must be greater than 0).`)
     const items = filled
@@ -343,6 +342,8 @@ export default function ScoreEntry() {
       await scoreApi.saveItems({
         component_id: editingComp.id,
         subject_id: subjectId,
+        grade_level: gradeLevel,
+        section,
         quarter: parseInt(quarter),
         items,
       })

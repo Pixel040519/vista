@@ -96,22 +96,28 @@ const getStructureTree = async (subjectId) => {
 // SCORE ITEMS
 // ════════════════════════════════════════════════════════════
 
-// GET /api/scores/items?subject_id=&quarter=
-// Returns grading structure tree with score items nested under each component
+// GET /api/scores/items?subject_id=&quarter=&grade_level=&section=
+// Returns grading structure tree with score items nested under each component.
+// Score items are scoped per section so a teacher handling the same subject in
+// multiple sections maintains independent score items per section.
 router.get('/items', async (req, res, next) => {
   try {
-    const { subject_id, quarter } = req.query
-    if (!subject_id || !quarter) throw new AppError('subject_id and quarter are required.', 400)
+    const { subject_id, quarter, grade_level, section } = req.query
+    if (!subject_id || !quarter || !section) {
+      throw new AppError('subject_id, quarter, and section are required.', 400)
+    }
+
+    await verifyTeacherAssignment(req, subject_id, grade_level, section)
 
     const categories = await getStructureTree(subject_id)
 
-    // Fetch all active score items for this subject+quarter
+    // Fetch all active score items for this subject+section+quarter
     const itemsRes = await query(
       `SELECT id, component_id, name, highest_possible_score, sort_order
        FROM score_items
-       WHERE subject_id=$1 AND quarter=$2 AND is_active=TRUE
+       WHERE subject_id=$1 AND section=$2 AND quarter=$3 AND is_active=TRUE
        ORDER BY sort_order, name`,
-      [subject_id, parseInt(quarter)]
+      [subject_id, section, parseInt(quarter)]
     )
 
     // Group items by component_id
@@ -138,6 +144,8 @@ router.post('/items', authorize('admin', 'teacher'), async (req, res, next) => {
     const schema = Joi.object({
       component_id: Joi.string().uuid().required(),
       subject_id:   Joi.string().uuid().required(),
+      grade_level:  Joi.string().optional(),
+      section:      Joi.string().min(1).required(),
       quarter:      Joi.number().integer().min(1).max(4).required(),
       items: Joi.array().items(Joi.object({
         id:                     Joi.string().uuid().optional(),
@@ -149,8 +157,8 @@ router.post('/items', authorize('admin', 'teacher'), async (req, res, next) => {
     const { error, value } = schema.validate(req.body)
     if (error) throw new AppError(error.details[0].message, 422)
 
-    // Verify teacher is assigned to this subject
-    await verifyTeacherAssignment(req, value.subject_id)
+    // Verify teacher is assigned to this class/subject
+    await verifyTeacherAssignment(req, value.subject_id, value.grade_level, value.section)
 
     // Verify component exists and belongs to the subject
     const compCheck = await query(
@@ -168,12 +176,12 @@ router.post('/items', authorize('admin', 'teacher'), async (req, res, next) => {
       // soft-delete items that have scores (should not happen since frontend blocks removal)
       const removedRes = keepIds.length > 0
         ? await client.query(
-            `SELECT id FROM score_items WHERE component_id=$1 AND quarter=$2 AND is_active=TRUE AND id != ALL($3)`,
-            [value.component_id, value.quarter, keepIds]
+            `SELECT id FROM score_items WHERE component_id=$1 AND section=$2 AND quarter=$3 AND is_active=TRUE AND id != ALL($4)`,
+            [value.component_id, value.section, value.quarter, keepIds]
           )
         : await client.query(
-            `SELECT id FROM score_items WHERE component_id=$1 AND quarter=$2 AND is_active=TRUE`,
-            [value.component_id, value.quarter]
+            `SELECT id FROM score_items WHERE component_id=$1 AND section=$2 AND quarter=$3 AND is_active=TRUE`,
+            [value.component_id, value.section, value.quarter]
           )
 
       for (const row of removedRes.rows) {
@@ -198,20 +206,20 @@ router.post('/items', authorize('admin', 'teacher'), async (req, res, next) => {
           // Update existing item in place (preserves student_scores)
           const r = await client.query(
             `UPDATE score_items SET name=$1, highest_possible_score=$2, sort_order=$3, is_active=TRUE, updated_at=NOW()
-             WHERE id=$4 AND component_id=$5 AND quarter=$6
+             WHERE id=$4 AND component_id=$5 AND section=$6 AND quarter=$7
              RETURNING id, component_id, name, highest_possible_score, sort_order`,
             [item.name, item.highest_possible_score, item.sort_order ?? i,
-             item.id, value.component_id, value.quarter]
+             item.id, value.component_id, value.section, value.quarter]
           )
           row = r.rows[0]
         }
         if (!row) {
           // Insert new item
           const r = await client.query(
-            `INSERT INTO score_items (component_id, subject_id, quarter, name, highest_possible_score, sort_order, created_by)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            `INSERT INTO score_items (component_id, subject_id, section, quarter, name, highest_possible_score, sort_order, created_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              RETURNING id, component_id, name, highest_possible_score, sort_order`,
-            [value.component_id, value.subject_id, value.quarter,
+            [value.component_id, value.subject_id, value.section, value.quarter,
              item.name, item.highest_possible_score, item.sort_order ?? i, req.user.id]
           )
           row = r.rows[0]
@@ -271,13 +279,13 @@ router.get('/', authorize('admin', 'teacher'), async (req, res, next) => {
       [grade_level, section]
     )
 
-    // Fetch active score items
+    // Fetch active score items for this section
     const itemsRes = await query(
       `SELECT id, component_id, name, highest_possible_score, sort_order
        FROM score_items
-       WHERE subject_id=$1 AND quarter=$2 AND is_active=TRUE
+       WHERE subject_id=$1 AND section=$2 AND quarter=$3 AND is_active=TRUE
        ORDER BY sort_order, name`,
-      [subject_id, parseInt(quarter)]
+      [subject_id, section, parseInt(quarter)]
     )
 
     // Fetch all student_scores for these items and students
@@ -365,8 +373,8 @@ router.post('/', authorize('admin', 'teacher'), async (req, res, next) => {
     const allItems = await query(
       `SELECT id, component_id, highest_possible_score
        FROM score_items
-       WHERE subject_id=$1 AND quarter=$2 AND is_active=TRUE`,
-      [value.subject_id, value.quarter]
+       WHERE subject_id=$1 AND section=$2 AND quarter=$3 AND is_active=TRUE`,
+      [value.subject_id, value.section, value.quarter]
     )
 
     for (const studentId of studentIds) {
@@ -374,8 +382,8 @@ router.post('/', authorize('admin', 'teacher'), async (req, res, next) => {
         `SELECT ss.score_item_id, ss.score
          FROM student_scores ss
          JOIN score_items si ON si.id = ss.score_item_id
-         WHERE si.subject_id=$1 AND si.quarter=$2 AND si.is_active=TRUE AND ss.student_id=$3`,
-        [value.subject_id, value.quarter, studentId]
+         WHERE si.subject_id=$1 AND si.section=$2 AND si.quarter=$3 AND si.is_active=TRUE AND ss.student_id=$4`,
+        [value.subject_id, value.section, value.quarter, studentId]
       )
       const scoreMap = new Map(studentScores.rows.map(r => [r.score_item_id, parseFloat(r.score)]))
 
@@ -441,12 +449,12 @@ router.get('/breakdown', authorize('admin', 'teacher'), async (req, res, next) =
       [grade_level, section]
     )
 
-    // Fetch all active score items for this subject+quarter
+    // Fetch all active score items for this subject+section+quarter
     const itemsRes = await query(
       `SELECT id, component_id, highest_possible_score
        FROM score_items
-       WHERE subject_id=$1 AND quarter=$2 AND is_active=TRUE`,
-      [subject_id, parseInt(quarter)]
+       WHERE subject_id=$1 AND section=$2 AND quarter=$3 AND is_active=TRUE`,
+      [subject_id, section, parseInt(quarter)]
     )
     const itemsByComp = new Map()
     for (const item of itemsRes.rows) {
