@@ -1,9 +1,12 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from datetime import datetime, date
+from datetime import datetime, date, time
 
 from services.db import get_db
+
+CURFEW_HOUR = 17
+CURFEW_MIN = 30
 
 router = APIRouter()
 
@@ -93,6 +96,117 @@ async def get_dashboard_summary(db: AsyncSession = Depends(get_db)):
         for r in alerts.fetchall()
     ]
 
+    # ── Attendance Trend (last 7 days) ──
+    trend = await db.execute(text("""
+        WITH per_student_day AS (
+            SELECT date, student_id,
+                   MIN(CASE status
+                       WHEN 'Present' THEN 1
+                       WHEN 'Late'    THEN 2
+                       WHEN 'Excused' THEN 3
+                       ELSE 4
+                   END) AS best
+            FROM attendance
+            WHERE date >= CURRENT_DATE - INTERVAL '7 days'
+            GROUP BY date, student_id
+        )
+        SELECT date,
+               COUNT(*) AS total,
+               SUM(CASE WHEN best=1 THEN 1 ELSE 0 END) AS present,
+               SUM(CASE WHEN best=2 THEN 1 ELSE 0 END) AS late,
+               SUM(CASE WHEN best=4 THEN 1 ELSE 0 END) AS absent
+        FROM per_student_day
+        GROUP BY date
+        ORDER BY date
+    """))
+    trend_data = []
+    for r in trend.fetchall():
+        total = r.total or 0
+        attended = (r.present or 0) + (r.late or 0)
+        trend_data.append({
+            "date": r.date.isoformat() if r.date else None,
+            "total": total,
+            "present": r.present or 0,
+            "late": r.late or 0,
+            "absent": r.absent or 0,
+            "rate": round((attended / total) * 100, 1) if total else 0.0,
+        })
+
+    # ── Dismissal Status (today) ──
+    dismissed_row = await db.execute(text("""
+        SELECT COUNT(DISTINCT student_id) AS c
+        FROM dismissal_logs
+        WHERE DATE(scanned_at) = CURRENT_DATE AND status = 'Success'
+    """))
+    today_dismissed = dismissed_row.fetchone().c or 0
+
+    failed_row = await db.execute(text("""
+        SELECT COUNT(*) AS c
+        FROM dismissal_logs
+        WHERE DATE(scanned_at) = CURRENT_DATE AND status IN ('Failed','Expired')
+    """))
+    failed_scans = failed_row.fetchone().c or 0
+
+    # "Still on campus" = students who attended today but haven't been scanned out
+    attended_today = (att_row.present or 0) + (att_row.late or 0)
+    still_on_campus = max(attended_today - today_dismissed, 0)
+    now = datetime.now()
+    past_curfew = (now.hour, now.minute) >= (CURFEW_HOUR, CURFEW_MIN)
+    curfew_breached = past_curfew and still_on_campus > 0
+
+    dismissal_status = {
+        "today_dismissed": today_dismissed,
+        "failed_scans": failed_scans,
+        "still_on_campus": still_on_campus,
+        "curfew_breached": curfew_breached,
+        "curfew_time": f"{CURFEW_HOUR:02d}:{CURFEW_MIN:02d}",
+    }
+
+    # ── Academic Decline Alerts ──
+    declines = await db.execute(text("""
+        WITH ranked AS (
+            SELECT g.student_id, g.subject_id, g.quarter, g.school_year, g.grade,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY g.student_id, g.subject_id
+                       ORDER BY g.school_year DESC, g.quarter DESC
+                   ) AS rn
+            FROM grades g
+            WHERE g.grade IS NOT NULL
+        )
+        SELECT s.id AS student_id,
+               s.full_name AS student_name,
+               s.grade_level,
+               sub.name AS subject_name,
+               latest.grade AS latest_grade,
+               prev.grade   AS prev_grade,
+               (prev.grade - latest.grade) AS drop_points
+        FROM ranked latest
+        JOIN ranked prev
+          ON prev.student_id = latest.student_id
+         AND prev.subject_id = latest.subject_id
+         AND prev.rn = 2
+        JOIN students s ON s.id = latest.student_id
+        JOIN subjects sub ON sub.id = latest.subject_id
+        WHERE latest.rn = 1
+          AND s.is_active = TRUE
+          AND (prev.grade - latest.grade) >= 3
+          AND latest.grade < 80
+        ORDER BY drop_points DESC
+        LIMIT 10
+    """))
+    decline_list = [
+        {
+            "student_id": str(r.student_id),
+            "student_name": r.student_name,
+            "grade_level": r.grade_level,
+            "subject_name": r.subject_name,
+            "latest_grade": float(r.latest_grade),
+            "prev_grade": float(r.prev_grade),
+            "drop": round(float(r.drop_points), 1),
+        }
+        for r in declines.fetchall()
+    ]
+
     return {
         "generated_at": datetime.utcnow().isoformat(),
         "overview": {
@@ -118,5 +232,8 @@ async def get_dashboard_summary(db: AsyncSession = Depends(get_db)):
             "neutral": sentiment_data.get("Neutral", 0),
             "negative": sentiment_data.get("Negative", 0)
         },
-        "high_risk_alerts": alert_list
+        "high_risk_alerts": alert_list,
+        "attendance_trend_7d": trend_data,
+        "dismissal_status": dismissal_status,
+        "academic_declines": decline_list,
     }

@@ -870,93 +870,117 @@ import { QrCode, CheckCircle, XCircle, Clock } from 'lucide-react'
 import { format as fmt } from 'date-fns'
 
 export function SecurePass() {
-  const [qrInput, setQrInput]   = useState('')
-  const [result, setResult]     = useState(null)
-  const [verifying, setVerifying] = useState(false)
   const [logs, setLogs]         = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [manualInput, setManualInput] = useState('')
+  const [manualOpen, setManualOpen] = useState(false)
+  const [manualResult, setManualResult] = useState(null)
+  const [manualBusy, setManualBusy] = useState(false)
 
-  useEffect(() => {
+  const loadLogs = () => {
+    setLoading(true)
     dismissalApi.logs(format(new Date(), 'yyyy-MM-dd'))
       .then(res => setLogs(res.data.logs || []))
       .catch(() => {})
-  }, [])
-
-  const handleVerify = async e => {
-    e.preventDefault()
-    setVerifying(true)
-    setResult(null)
-    try {
-      const res = await dismissalApi.verify({ qrPayload: qrInput })
-      setResult({ success: true, ...res.data })
-      toast.success('Student dismissed successfully!')
-      setQrInput('')
-      dismissalApi.logs(format(new Date(), 'yyyy-MM-dd'))
-        .then(res => setLogs(res.data.logs || []))
-        .catch(() => {})
-    } catch (err) {
-      setResult({ success: false, message: err.response?.data?.error || 'Verification failed.' })
-    }
-    setVerifying(false)
+      .finally(() => setLoading(false))
   }
+
+  useEffect(() => { loadLogs() }, [])
+
+  const handleManualVerify = async e => {
+    e.preventDefault()
+    setManualBusy(true)
+    setManualResult(null)
+    try {
+      const res = await dismissalApi.verify({ qrPayload: manualInput })
+      setManualResult({ success: true, ...res.data })
+      toast.success('Student dismissed!')
+      setManualInput('')
+      loadLogs()
+    } catch (err) {
+      setManualResult({ success: false, message: err.response?.data?.error || 'Verification failed.' })
+    }
+    setManualBusy(false)
+  }
+
+  // Daily counts
+  const successCount = logs.filter(l => l.status === 'Success').length
+  const failedCount = logs.filter(l => l.status === 'Failed' || l.status === 'Expired').length
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div>
-        <h1 className="page-title">SecurePass QR</h1>
-        <p className="page-subtitle">Verify student dismissal via QR code</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="page-title">SecurePass Oversight</h1>
+          <p className="page-subtitle">Monitor today's dismissal activity</p>
+        </div>
+        <Link to="/securepass/scan" className="btn-primary">
+          <QrCode size={16} /> Open Scanner
+        </Link>
+      </div>
+
+      {/* Stat strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+        <div className="card p-4">
+          <p className="text-xs text-slate-400">Dismissed today</p>
+          <p className="text-2xl font-bold text-teal-600 mt-1">{successCount}</p>
+        </div>
+        <div className="card p-4">
+          <p className="text-xs text-slate-400">Failed / Expired</p>
+          <p className={`text-2xl font-bold mt-1 ${failedCount > 0 ? 'text-amber-600' : 'text-slate-700'}`}>{failedCount}</p>
+        </div>
+        <div className="card p-4 col-span-2 sm:col-span-1">
+          <p className="text-xs text-slate-400">Total scans</p>
+          <p className="text-2xl font-bold text-slate-700 mt-1">{logs.length}</p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* QR Verifier */}
+        {/* Manual fallback (collapsed by default) */}
         <div className="card p-6">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 rounded-xl bg-teal-50 flex items-center justify-center">
-              <QrCode size={20} className="text-teal-600" />
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center">
+              <QrCode size={20} className="text-slate-500" />
             </div>
-            <div>
-              <h3 className="font-semibold text-slate-800">Verify QR Code</h3>
-              <p className="text-xs text-slate-400">Paste QR payload or use scanner</p>
+            <div className="flex-1">
+              <h3 className="font-semibold text-slate-800">Manual Verify</h3>
+              <p className="text-xs text-slate-400">Fallback when the camera is unavailable</p>
             </div>
+            <button
+              type="button"
+              onClick={() => setManualOpen(o => !o)}
+              className="text-xs text-teal-600 font-medium hover:text-teal-700"
+            >
+              {manualOpen ? 'Hide' : 'Show'}
+            </button>
           </div>
 
-          <form onSubmit={handleVerify} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">QR Payload</label>
+          {manualOpen && (
+            <form onSubmit={handleManualVerify} className="space-y-3">
               <textarea
-                className="input min-h-28 resize-none font-mono text-xs"
-                placeholder='{"studentId":"...","token":"...","expiresAt":"...","type":"VISTA_SECUREPASS"}'
-                value={qrInput}
-                onChange={e => setQrInput(e.target.value)}
+                className="input min-h-24 resize-none font-mono text-xs"
+                placeholder='Paste QR payload JSON'
+                value={manualInput}
+                onChange={e => setManualInput(e.target.value)}
                 required
               />
-            </div>
-            <button type="submit" disabled={verifying} className="btn-primary w-full justify-center">
-              {verifying ? 'Verifying...' : 'Verify & Release Student'}
-            </button>
-          </form>
-
-          {result && (
-            <div className={`mt-4 p-4 rounded-xl flex items-start gap-3 ${result.success ? 'bg-emerald-50' : 'bg-red-50'}`}>
-              {result.success
-                ? <CheckCircle size={20} className="text-emerald-600 flex-shrink-0 mt-0.5" />
-                : <XCircle size={20} className="text-red-600 flex-shrink-0 mt-0.5" />
-              }
-              <div>
-                {result.success ? (
-                  <>
-                    <p className="text-sm font-semibold text-emerald-800">Student Released</p>
-                    <p className="text-xs text-emerald-700 mt-0.5">
-                      {result.student} → Released to {result.authorizedGuardian}
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-sm font-semibold text-red-800">Verification Failed</p>
-                    <p className="text-xs text-red-700 mt-0.5">{result.message}</p>
-                  </>
-                )}
-              </div>
-            </div>
+              <button type="submit" disabled={manualBusy} className="btn-secondary w-full justify-center">
+                {manualBusy ? 'Verifying...' : 'Verify'}
+              </button>
+              {manualResult && (
+                <div className={`p-3 rounded-xl flex items-start gap-2 ${manualResult.success ? 'bg-emerald-50' : 'bg-red-50'}`}>
+                  {manualResult.success
+                    ? <CheckCircle size={16} className="text-emerald-600 flex-shrink-0 mt-0.5" />
+                    : <XCircle size={16} className="text-red-600 flex-shrink-0 mt-0.5" />
+                  }
+                  <p className={`text-xs ${manualResult.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                    {manualResult.success
+                      ? `${manualResult.student} → ${manualResult.authorizedGuardian}`
+                      : manualResult.message}
+                  </p>
+                </div>
+              )}
+            </form>
           )}
         </div>
 

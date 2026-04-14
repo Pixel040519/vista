@@ -3,7 +3,7 @@ import { useAuth } from '../../context/AuthContext'
 import {
   LayoutDashboard, Users, ClipboardCheck, BookOpen,
   Heart, QrCode, AlertTriangle, Megaphone, UserCog,
-  LogOut, GraduationCap, ChevronRight, X, PenLine
+  LogOut, GraduationCap, ChevronRight, X, PenLine, Baby
 } from 'lucide-react'
 import clsx from 'clsx'
 import { formatName, nameInitial } from '../../utils/nameHelper'
@@ -53,8 +53,9 @@ const teacherNavGroups = [
   {
     label: "Today's Work",
     items: [
-      { to: '/attendance',  icon: ClipboardCheck, label: 'Attendance'  },
-      { to: '/score-entry', icon: PenLine,        label: 'Score Entry' },
+      { to: '/attendance',    icon: ClipboardCheck, label: 'Attendance'  },
+      { to: '/score-entry',   icon: PenLine,        label: 'Score Entry' },
+      { to: '/ece-competency', icon: Baby,           label: 'ECE Competency' },
     ]
   },
   {

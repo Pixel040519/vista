@@ -10,11 +10,13 @@ import Attendance from './pages/Attendance'
 import Grades from './pages/Grades'
 import Behavior from './pages/Behavior'
 import SecurePass from './pages/SecurePass'
+import SecurePassScan from './pages/SecurePassScan'
 import Announcements from './pages/Announcements'
 import RiskOverview from './pages/RiskOverview'
 import AccountManagement from './pages/AccountManagement'
 import CurriculumManagement from './pages/CurriculumManagement'
 import ScoreEntry from './pages/ScoreEntry'
+import EceCompetency from './pages/EceCompetency'
 
 
 function PrivateRoute({ children, roles }) {
@@ -62,10 +64,18 @@ export default function App() {
               <PrivateRoute roles={['teacher']}><ScoreEntry /></PrivateRoute>
             } />
 
+            <Route path="ece-competency" element={
+              <PrivateRoute roles={['teacher']}><EceCompetency /></PrivateRoute>
+            } />
+
             <Route path="behavior" element={<Behavior />} />
 
             <Route path="securepass" element={
               <PrivateRoute roles={['admin', 'teacher']}><SecurePass /></PrivateRoute>
+            } />
+
+            <Route path="securepass/scan" element={
+              <PrivateRoute roles={['admin', 'teacher']}><SecurePassScan /></PrivateRoute>
             } />
 
             <Route path="risk" element={

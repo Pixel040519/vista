@@ -1,23 +1,23 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Users, UserCheck, UserX, AlertTriangle, TrendingUp, Activity, ChevronRight } from 'lucide-react'
+import { Users, UserCheck, UserX, AlertTriangle, TrendingDown, Activity, ChevronRight, Shield } from 'lucide-react'
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts'
 import { aiApi } from '../../api/client'
-import { StatCard, RiskBadge, LoadingSpinner } from '../../components/UI'
+import { StatCard, LoadingSpinner } from '../../components/UI'
 import { useAuth } from '../../context/AuthContext'
 import AttendanceDetailModal from '../../components/AttendanceDetailModal'
 
 const SENTIMENT_COLORS = { Positive: '#14b8a6', Neutral: '#94a3b8', Negative: '#f43f5e' }
 const RISK_COLORS = { stable: '#22c55e', moderate_risk: '#f59e0b', high_risk: '#ef4444' }
 
-// Mock data for charts when AI service is loading
-const MOCK_ATTENDANCE_TREND = [
-  { day: 'Mon', rate: 94 }, { day: 'Tue', rate: 91 }, { day: 'Wed', rate: 96 },
-  { day: 'Thu', rate: 89 }, { day: 'Fri', rate: 93 },
-]
+function formatTrendLabel(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' })
+}
 
 export default function AdminDashboard() {
   const { user } = useAuth()
@@ -36,6 +36,12 @@ export default function AdminDashboard() {
   const risk = data?.risk_distribution  || {}
   const sent = data?.behavioral_sentiment_7d || {}
   const total = data?.overview?.total_students || 0
+  const dismissal = data?.dismissal_status || {}
+  const declines = data?.academic_declines || []
+  const trendData = (data?.attendance_trend_7d || []).map(d => ({
+    ...d,
+    label: formatTrendLabel(d.date),
+  }))
 
   const riskPieData = [
     { name: 'Stable',        value: risk.stable        || 0 },
@@ -112,8 +118,13 @@ export default function AdminDashboard() {
                 </div>
                 <Activity size={16} className="text-slate-300" />
               </div>
+              {trendData.length === 0 ? (
+                <div className="flex items-center justify-center h-[200px] text-slate-400 text-sm">
+                  No attendance recorded in the last 7 days
+                </div>
+              ) : (
               <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={MOCK_ATTENDANCE_TREND}>
+                <AreaChart data={trendData}>
                   <defs>
                     <linearGradient id="attGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#14b8a6" stopOpacity={0.2} />
@@ -121,15 +132,16 @@ export default function AdminDashboard() {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="day" tick={{ fontSize: 12, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                  <YAxis domain={[80, 100]} tick={{ fontSize: 12, fill: '#94a3b8' }} axisLine={false} tickLine={false} unit="%" />
+                  <XAxis dataKey="label" tick={{ fontSize: 12, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                  <YAxis domain={[dataMin => Math.max(0, Math.floor(dataMin - 5)), 100]} tick={{ fontSize: 12, fill: '#94a3b8' }} axisLine={false} tickLine={false} unit="%" />
                   <Tooltip
                     contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 24px rgba(0,0,0,0.1)', fontSize: '12px' }}
-                    formatter={v => [`${v}%`, 'Attendance Rate']}
+                    formatter={(v, _name, p) => [`${v}% (${p.payload.present + p.payload.late}/${p.payload.total})`, 'Attendance']}
                   />
                   <Area type="monotone" dataKey="rate" stroke="#14b8a6" strokeWidth={2.5} fill="url(#attGrad)" dot={{ r: 4, fill: '#14b8a6' }} />
                 </AreaChart>
               </ResponsiveContainer>
+              )}
             </div>
 
             {/* Risk Distribution Pie */}
@@ -178,7 +190,44 @@ export default function AdminDashboard() {
           </div>
 
           {/* Bottom Row */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
+            {/* SecurePass Oversight */}
+            <div className="card p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-800">SecurePass Oversight</h3>
+                  <p className="text-xs text-slate-400">Gate activity today</p>
+                </div>
+                <Shield size={16} className={dismissal.curfew_breached ? 'text-red-400' : 'text-slate-300'} />
+              </div>
+              <div className="flex items-end gap-2">
+                <span className={`text-3xl font-bold ${dismissal.curfew_breached ? 'text-red-600' : 'text-teal-600'}`}>
+                  {dismissal.still_on_campus ?? 0}
+                </span>
+                <span className="text-xs text-slate-500 mb-1">still on campus</span>
+              </div>
+              {dismissal.curfew_breached && (
+                <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
+                  <AlertTriangle size={12} /> Past {dismissal.curfew_time} curfew
+                </p>
+              )}
+              <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t border-slate-100">
+                <div>
+                  <p className="text-xs text-slate-400">Dismissed</p>
+                  <p className="text-lg font-semibold text-slate-700">{dismissal.today_dismissed ?? 0}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-400">Failed scans</p>
+                  <p className={`text-lg font-semibold ${(dismissal.failed_scans ?? 0) > 0 ? 'text-amber-600' : 'text-slate-700'}`}>
+                    {dismissal.failed_scans ?? 0}
+                  </p>
+                </div>
+              </div>
+              <Link to="/securepass" className="text-xs text-teal-600 font-medium hover:text-teal-700 flex items-center gap-1 mt-4">
+                Open SecurePass <ChevronRight size={13} />
+              </Link>
+            </div>
+
             {/* Behavioral Sentiment */}
             <div className="card p-5">
               <div className="mb-4">
@@ -200,52 +249,55 @@ export default function AdminDashboard() {
               </ResponsiveContainer>
             </div>
 
-            {/* High Risk Alerts Table */}
+            {/* Academic Decline Alerts */}
             <div className="card p-5 lg:col-span-2">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-800">High Risk Alerts</h3>
-                  <p className="text-xs text-slate-400">Students needing immediate attention</p>
+                  <h3 className="text-sm font-semibold text-slate-800">Academic Decline Alerts</h3>
+                  <p className="text-xs text-slate-400">Recent grade drops needing review</p>
                 </div>
                 <Link to="/risk" className="text-xs text-teal-600 font-medium hover:text-teal-700 flex items-center gap-1">
                   View all <ChevronRight size={13} />
                 </Link>
               </div>
-              {(data?.high_risk_alerts || []).length === 0 ? (
+              {declines.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-8 text-center">
-                  <TrendingUp size={32} className="text-emerald-300 mb-2" />
-                  <p className="text-sm font-medium text-slate-600">All students are stable</p>
-                  <p className="text-xs text-slate-400 mt-0.5">No high-risk alerts at this time</p>
+                  <Activity size={32} className="text-emerald-300 mb-2" />
+                  <p className="text-sm font-medium text-slate-600">No declining grades detected</p>
+                  <p className="text-xs text-slate-400 mt-0.5">All recent quarters are holding steady</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                <table className="table-base">
-                  <thead>
-                    <tr>
-                      <th>Student</th>
-                      <th>Grade</th>
-                      <th>Risk Level</th>
-                      <th>Score</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.high_risk_alerts.slice(0, 5).map((a, i) => (
-                      <tr key={i}>
-                        <td className="font-medium">{a.student_name}</td>
-                        <td className="text-slate-500">{a.grade_level}</td>
-                        <td><RiskBadge level={a.risk_level} /></td>
-                        <td>
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 h-1.5 bg-slate-100 rounded-full max-w-16">
-                              <div className="h-full bg-red-500 rounded-full" style={{ width: `${a.risk_score * 100}%` }} />
-                            </div>
-                            <span className="text-xs font-mono text-slate-500">{(a.risk_score * 100).toFixed(0)}%</span>
-                          </div>
-                        </td>
+                  <table className="table-base">
+                    <thead>
+                      <tr>
+                        <th>Student</th>
+                        <th>Grade</th>
+                        <th>Subject</th>
+                        <th>Drop</th>
+                        <th>Latest</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {declines.slice(0, 5).map((d, i) => (
+                        <tr key={`${d.student_id}-${i}`}>
+                          <td className="font-medium">
+                            <Link to={`/students/${d.student_id}`} className="text-slate-700 hover:text-teal-600">
+                              {d.student_name}
+                            </Link>
+                          </td>
+                          <td className="text-slate-500">{d.grade_level}</td>
+                          <td className="text-slate-500">{d.subject_name}</td>
+                          <td>
+                            <span className="inline-flex items-center gap-1 text-red-600 font-medium text-xs">
+                              <TrendingDown size={12} /> {d.drop.toFixed(1)}
+                            </span>
+                          </td>
+                          <td className="font-mono text-xs text-slate-600">{d.latest_grade.toFixed(1)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>

@@ -134,6 +134,20 @@ export const aiApi = {
   classHealthAll: ()     => api.get('/ai/class-health/all'),
 }
 
+// ── ECE Competency (Tots School) ─────────────────────────────
+export const eceApi = {
+  getDomains:     ()        => api.get('/ece/domains'),
+  createDomain:   (data)    => api.post('/ece/domains', data),
+  updateDomain:   (id, d)   => api.put(`/ece/domains/${id}`, d),
+  deleteDomain:   (id)      => api.delete(`/ece/domains/${id}`),
+  getSkills:      (params)  => api.get('/ece/skills', { params }),
+  createSkill:    (data)    => api.post('/ece/skills', data),
+  updateSkill:    (id, d)   => api.put(`/ece/skills/${id}`, d),
+  deleteSkill:    (id)      => api.delete(`/ece/skills/${id}`),
+  getRecords:     (params)  => api.get('/ece/records', { params }),
+  saveRecords:    (data)    => api.post('/ece/records', data),
+}
+
 // ── Account Management (Admin only) ──────────────────────────
 export const accountApi = {
   getAssignments: ()       => api.get('/accounts/assignments'),

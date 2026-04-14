@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Plus, Pencil, Trash2, BookOpen, LayoutGrid,
   ChevronDown, ChevronRight, X, Check, CalendarDays,
-  ChevronDown as ChevDown, Copy, SlidersHorizontal
+  ChevronDown as ChevDown, Copy, SlidersHorizontal, Baby
 } from 'lucide-react'
-import { curriculumApi } from '../api/client'
+import { curriculumApi, eceApi } from '../api/client'
 import { LoadingSpinner, Modal } from '../components/UI'
 import GradingConfigModal from '../components/GradingConfigModal'
 import toast from 'react-hot-toast'
@@ -648,6 +648,18 @@ export default function CurriculumManagement() {
             {totalSections}
           </span>
         </button>
+
+        {/* ECE Catalog tab */}
+        <button onClick={() => setTab('ece')}
+          className={clsx(
+            'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all',
+            tab === 'ece'
+              ? 'bg-teal-500 text-white shadow-md shadow-teal-200'
+              : 'bg-white text-slate-600 border border-slate-200 hover:border-teal-300 hover:text-teal-600'
+          )}>
+          <Baby size={15}/>
+          ECE Catalog
+        </button>
       </div>
 
       {/* Hint */}
@@ -691,6 +703,9 @@ export default function CurriculumManagement() {
               ))}
             </div>
           )}
+
+          {/* ── ECE Catalog ──────────────────────────────── */}
+          {tab === 'ece' && <EceCatalogPanel/>}
         </>
       )}
 
@@ -722,6 +737,267 @@ export default function CurriculumManagement() {
         subject={gradingSubject}
         onSaved={fetchContent}
       />
+    </div>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────
+// ECE Competency Catalog Panel (admin CRUD for domains + skills)
+// ──────────────────────────────────────────────────────────────
+function EceCatalogPanel() {
+  const [domains, setDomains]   = useState([])
+  const [skills,  setSkills]    = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [expanded, setExpanded] = useState({})  // domainId -> bool
+  const [adding, setAdding]     = useState(null) // 'domain' | domainId
+  const [newName, setNewName]   = useState('')
+
+  const load = useCallback(() => {
+    setLoading(true)
+    Promise.all([eceApi.getDomains(), eceApi.getSkills()])
+      .then(([dRes, sRes]) => {
+        setDomains(dRes.data.domains || [])
+        setSkills(sRes.data.skills || [])
+      })
+      .catch(() => toast.error('Failed to load catalog'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const handleAddDomain = async () => {
+    if (!newName.trim()) return
+    try {
+      await eceApi.createDomain({ name: newName.trim(), display_order: domains.length + 1 })
+      toast.success('Domain added')
+      setNewName(''); setAdding(null); load()
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to add domain')
+    }
+  }
+
+  const handleAddSkill = async (domainId) => {
+    if (!newName.trim()) return
+    const skillCount = skills.filter(s => s.domain_id === domainId).length
+    try {
+      await eceApi.createSkill({
+        domain_id: domainId,
+        name: newName.trim(),
+        display_order: skillCount + 1,
+      })
+      toast.success('Skill added')
+      setNewName(''); setAdding(null); load()
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to add skill')
+    }
+  }
+
+  const handleUpdateDomain = async (id, name) => {
+    if (!name.trim()) return
+    try {
+      await eceApi.updateDomain(id, { name: name.trim() })
+      toast.success('Updated'); load()
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Update failed')
+    }
+  }
+
+  const handleUpdateSkill = async (id, name) => {
+    if (!name.trim()) return
+    try {
+      await eceApi.updateSkill(id, { name: name.trim() })
+      toast.success('Updated'); load()
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Update failed')
+    }
+  }
+
+  const handleDeleteDomain = async (id) => {
+    if (!window.confirm('Delete this domain? Skills with existing ratings will be archived.')) return
+    try {
+      await eceApi.deleteDomain(id)
+      toast.success('Deleted'); load()
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Delete failed')
+    }
+  }
+
+  const handleDeleteSkill = async (id) => {
+    if (!window.confirm('Delete this skill? If it has ratings it will be archived instead.')) return
+    try {
+      await eceApi.deleteSkill(id)
+      toast.success('Deleted'); load()
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Delete failed')
+    }
+  }
+
+  if (loading) return <LoadingSpinner/>
+
+  return (
+    <div className="space-y-3">
+      <div className="card p-4 flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-800">Competency Domains & Skills</h3>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Used by ECE teachers (Pre-Nursery to Kinder) for quarterly developmental tracking
+          </p>
+        </div>
+        {adding === 'domain' ? (
+          <div className="flex items-center gap-2">
+            <input
+              autoFocus
+              className="input py-1.5 text-sm"
+              placeholder="Domain name"
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleAddDomain()
+                if (e.key === 'Escape') { setAdding(null); setNewName('') }
+              }}
+            />
+            <button onClick={handleAddDomain} className="p-1.5 rounded-lg bg-teal-500 text-white hover:bg-teal-600">
+              <Check size={14}/>
+            </button>
+            <button onClick={() => { setAdding(null); setNewName('') }}
+              className="p-1.5 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200">
+              <X size={14}/>
+            </button>
+          </div>
+        ) : (
+          <button onClick={() => { setAdding('domain'); setNewName('') }} className="btn-primary">
+            <Plus size={15}/> Add Domain
+          </button>
+        )}
+      </div>
+
+      {domains.length === 0 && (
+        <div className="card p-8 text-center text-sm text-slate-400">
+          No domains yet. Click "Add Domain" to start.
+        </div>
+      )}
+
+      {domains.map(domain => {
+        const domainSkills = skills.filter(s => s.domain_id === domain.id)
+        const open = expanded[domain.id] !== false // default open
+        return (
+          <div key={domain.id} className="card overflow-hidden">
+            <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+              <button
+                onClick={() => setExpanded(e => ({ ...e, [domain.id]: !open }))}
+                className="p-1 text-slate-400 hover:text-slate-600"
+              >
+                {open ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
+              </button>
+              <EditableCatalogRow
+                value={domain.name}
+                onSave={name => handleUpdateDomain(domain.id, name)}
+                bold
+              />
+              <span className="ml-auto text-xs text-slate-400">{domainSkills.length} skill{domainSkills.length !== 1 ? 's' : ''}</span>
+              <button onClick={() => handleDeleteDomain(domain.id)}
+                className="p-1 rounded-md text-slate-400 hover:text-red-500 hover:bg-red-50">
+                <Trash2 size={14}/>
+              </button>
+            </div>
+
+            {open && (
+              <div className="p-4 space-y-2">
+                {domainSkills.map(skill => (
+                  <div key={skill.id} className="flex items-center gap-2 py-1.5 border-b border-slate-100 last:border-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-300"/>
+                    <EditableCatalogRow
+                      value={skill.name}
+                      onSave={name => handleUpdateSkill(skill.id, name)}
+                    />
+                    <button onClick={() => handleDeleteSkill(skill.id)}
+                      className="p-1 rounded-md text-slate-300 hover:text-red-500 hover:bg-red-50 ml-auto">
+                      <Trash2 size={13}/>
+                    </button>
+                  </div>
+                ))}
+                {adding === domain.id ? (
+                  <div className="flex items-center gap-2 mt-2">
+                    <input
+                      autoFocus
+                      className="input py-1 text-sm"
+                      placeholder="Skill name (e.g. Counts from 1 to 10)"
+                      value={newName}
+                      onChange={e => setNewName(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') handleAddSkill(domain.id)
+                        if (e.key === 'Escape') { setAdding(null); setNewName('') }
+                      }}
+                    />
+                    <button onClick={() => handleAddSkill(domain.id)}
+                      className="p-1.5 rounded-lg bg-teal-500 text-white hover:bg-teal-600">
+                      <Check size={14}/>
+                    </button>
+                    <button onClick={() => { setAdding(null); setNewName('') }}
+                      className="p-1.5 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200">
+                      <X size={14}/>
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => { setAdding(domain.id); setNewName('') }}
+                    className="text-xs text-teal-600 hover:text-teal-700 font-medium flex items-center gap-1 mt-2"
+                  >
+                    <Plus size={13}/> Add skill
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function EditableCatalogRow({ value, onSave, bold }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft]     = useState(value)
+
+  useEffect(() => { setDraft(value) }, [value])
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        className={clsx(
+          'text-sm text-left hover:text-teal-600',
+          bold ? 'font-semibold text-slate-800' : 'text-slate-600'
+        )}
+      >
+        {value}
+      </button>
+    )
+  }
+  return (
+    <div className="flex items-center gap-2 flex-1">
+      <input
+        autoFocus
+        className="input py-1 text-sm flex-1"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { onSave(draft); setEditing(false) }
+          if (e.key === 'Escape') { setDraft(value); setEditing(false) }
+        }}
+      />
+      <button
+        onClick={() => { onSave(draft); setEditing(false) }}
+        className="p-1 rounded-md text-teal-600 hover:bg-teal-50"
+      >
+        <Check size={14}/>
+      </button>
+      <button
+        onClick={() => { setDraft(value); setEditing(false) }}
+        className="p-1 rounded-md text-slate-400 hover:bg-slate-100"
+      >
+        <X size={14}/>
+      </button>
     </div>
   )
 }
