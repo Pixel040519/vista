@@ -67,9 +67,8 @@ const teacherNavGroups = [
     ]
   },
   {
-    label: 'Tools',
+    label: 'Communication',
     items: [
-      { to: '/securepass',    icon: QrCode,    label: 'SecurePass QR' },
       { to: '/announcements', icon: Megaphone, label: 'Announcements' },
     ]
   }

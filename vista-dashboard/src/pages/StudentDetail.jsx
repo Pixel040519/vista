@@ -468,7 +468,7 @@ export default function StudentDetail() {
                   {isOpen && (
                     <div className="overflow-x-auto border-t border-slate-100">
                       <table className="table-base">
-                        <thead><tr><th>Date</th><th>Status</th><th>Remarks</th><th>Recorded By</th></tr></thead>
+                        <thead><tr><th>Date</th><th>Status</th><th>Subject</th><th>Recorded By</th></tr></thead>
                         <tbody>
                           {records.map(a => (
                             <tr key={a.id}>
@@ -481,7 +481,7 @@ export default function StudentDetail() {
                                                            'bg-blue-50 text-blue-700'
                                 }`}>{a.status}</span>
                               </td>
-                              <td className="text-slate-500 text-xs">{a.remarks || '—'}</td>
+                              <td className="text-slate-500 text-xs">{a.subject_name || '—'}</td>
                               <td className="text-slate-400 text-xs">{a.recorded_by_name || '—'}</td>
                             </tr>
                           ))}
