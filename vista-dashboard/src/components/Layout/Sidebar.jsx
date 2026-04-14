@@ -62,7 +62,6 @@ const teacherNavGroups = [
     items: [
       { to: '/students', icon: Users,         label: 'Students'      },
       { to: '/behavior', icon: Heart,         label: 'Behavior'      },
-      { to: '/grades',   icon: BookOpen,      label: 'Grades'        },
       { to: '/risk',     icon: AlertTriangle, label: 'Risk Overview' },
     ]
   },
