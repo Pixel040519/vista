@@ -318,56 +318,178 @@ const axios = require('axios');
 
 behaviorRouter.use(authenticate);
 
-// GET /api/behavior?student_id=&limit=
+const getActiveSYLabel = async () => {
+  const r = await query(`SELECT label FROM school_years WHERE is_active=TRUE LIMIT 1`);
+  return r.rows[0]?.label || null;
+};
+
+const analyzeSentiment = async (text) => {
+  try {
+    const r = await axios.post(
+      `${process.env.AI_SERVICE_URL || 'http://localhost:8000'}/analyze/sentiment`,
+      { text }
+    );
+    return { sentiment: r.data.sentiment, sentiment_score: r.data.score };
+  } catch (aiErr) {
+    console.warn('AI sentiment service unavailable, skipping:', aiErr.message);
+    return { sentiment: 'Neutral', sentiment_score: 0 };
+  }
+};
+
+// Verify the given student is in one of the teacher's active-SY classes.
+const teacherOwnsStudent = async (teacherId, studentId) => {
+  const syLabel = await getActiveSYLabel();
+  const r = await query(
+    `SELECT 1
+       FROM students st
+       JOIN teacher_assignments ta
+         ON ta.grade_level = st.grade_level
+        AND ta.section = st.section
+      WHERE st.id = $1
+        AND ta.teacher_id = $2
+        AND ta.school_year = $3
+      LIMIT 1`,
+    [studentId, teacherId, syLabel]
+  );
+  return r.rows.length > 0;
+};
+
+// GET /api/behavior
+// Teacher: requires student_id, scoped to own logs for students in own classes.
+// Admin:   student_id optional; supports teacher_id, category, sentiment, date_from, date_to, limit, offset.
 behaviorRouter.get('/', async (req, res, next) => {
   try {
-    const { student_id, limit = 30 } = req.query;
-    if (!student_id) throw new AppError('student_id is required.', 400);
+    const isAdmin = req.user.role === 'admin';
+    const {
+      student_id, teacher_id, category, sentiment,
+      date_from, date_to, grade_level, section,
+    } = req.query;
+    const limit = Math.min(parseInt(req.query.limit, 10) || (isAdmin ? 50 : 30), 200);
+    const offset = parseInt(req.query.offset, 10) || 0;
 
-    const params = [student_id, limit];
-    let teacherFilter = '';
-    if (req.user.role === 'teacher') {
-      params.push(req.user.id);
-      teacherFilter = ` AND bl.teacher_id = $${params.length}`;
+    if (!isAdmin && !student_id) {
+      throw new AppError('student_id is required.', 400);
     }
 
-    const result = await query(
-      `SELECT bl.*, u.full_name as teacher_name
-       FROM behavior_logs bl
-       JOIN users u ON u.id = bl.teacher_id
-       WHERE bl.student_id = $1${teacherFilter}
-       ORDER BY bl.observed_at DESC
-       LIMIT $2`,
-      params
-    );
+    const where = [];
+    const params = [];
+    const add = (sql, val) => { params.push(val); where.push(sql.replace('?', `$${params.length}`)); };
 
-    res.json({ logs: result.rows });
+    if (student_id) add('bl.student_id = ?', student_id);
+    if (category)   add('bl.category = ?', category);
+    if (sentiment)  add('bl.sentiment = ?', sentiment);
+    if (grade_level) add('s.grade_level = ?', grade_level);
+    if (section)    add('s.section = ?', section);
+    if (date_from)  add('bl.observed_at >= ?::date', date_from);
+    if (date_to)    add('bl.observed_at <  (?::date + INTERVAL \'1 day\')', date_to);
+
+    if (req.user.role === 'teacher') {
+      add('bl.teacher_id = ?', req.user.id);
+      // Defense-in-depth: only return logs for students the teacher actually teaches.
+      // (StudentDetail hits this for any student, so fall back to empty rather than 403.)
+      const owns = await teacherOwnsStudent(req.user.id, student_id);
+      if (!owns) return res.json({ logs: [], total: 0 });
+    } else if (teacher_id) {
+      add('bl.teacher_id = ?', teacher_id);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const listParams = [...params, limit, offset];
+    const listSql = `
+      SELECT bl.*,
+             u.full_name AS teacher_name,
+             s.first_name, s.middle_name, s.surname,
+             s.grade_level, s.section,
+             (
+               SELECT STRING_AGG(DISTINCT ta.subject, ', ' ORDER BY ta.subject)
+                 FROM teacher_assignments ta
+                WHERE ta.teacher_id = bl.teacher_id
+                  AND ta.grade_level = s.grade_level
+                  AND ta.section = s.section
+             ) AS subject
+        FROM behavior_logs bl
+        JOIN users u    ON u.id = bl.teacher_id
+        JOIN students s ON s.id = bl.student_id
+        ${whereSql}
+       ORDER BY bl.observed_at DESC
+       LIMIT $${listParams.length - 1} OFFSET $${listParams.length}
+    `;
+
+    const [listResult, countResult] = await Promise.all([
+      query(listSql, listParams),
+      query(
+        `SELECT COUNT(*)::int AS total
+           FROM behavior_logs bl
+           JOIN students s ON s.id = bl.student_id
+           ${whereSql}`,
+        params
+      ),
+    ]);
+
+    res.json({
+      logs: listResult.rows,
+      total: countResult.rows[0]?.total || 0,
+    });
   } catch (err) {
     next(err);
   }
 });
 
-// POST /api/behavior — Log a behavior observation
-behaviorRouter.post('/', authorize('admin', 'teacher'), async (req, res, next) => {
+// GET /api/behavior/summary — admin-only aggregate counts for the current filters.
+behaviorRouter.get('/summary', authorize('admin'), async (req, res, next) => {
+  try {
+    const {
+      student_id, teacher_id, category, sentiment,
+      date_from, date_to, grade_level, section,
+    } = req.query;
+
+    const where = [];
+    const params = [];
+    const add = (sql, val) => { params.push(val); where.push(sql.replace('?', `$${params.length}`)); };
+
+    if (student_id) add('bl.student_id = ?', student_id);
+    if (teacher_id) add('bl.teacher_id = ?', teacher_id);
+    if (category)   add('bl.category = ?', category);
+    if (sentiment)  add('bl.sentiment = ?', sentiment);
+    if (date_from)  add('bl.observed_at >= ?::date', date_from);
+    if (date_to)    add('bl.observed_at <  (?::date + INTERVAL \'1 day\')', date_to);
+    if (grade_level) add('s.grade_level = ?', grade_level);
+    if (section)    add('s.section = ?', section);
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const r = await query(
+      `SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE bl.sentiment = 'Positive')::int AS positive,
+         COUNT(*) FILTER (WHERE bl.sentiment = 'Neutral')::int  AS neutral,
+         COUNT(*) FILTER (WHERE bl.sentiment = 'Negative')::int AS negative,
+         COUNT(*) FILTER (WHERE bl.observed_at >= NOW() - INTERVAL '7 days')::int AS this_week
+       FROM behavior_logs bl
+       JOIN students s ON s.id = bl.student_id
+       ${whereSql}`,
+      params
+    );
+
+    res.json(r.rows[0] || { total: 0, positive: 0, neutral: 0, negative: 0, this_week: 0 });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/behavior — Teacher logs an observation on a student in one of their classes.
+behaviorRouter.post('/', authorize('teacher'), async (req, res, next) => {
   try {
     const { student_id, observation, category, observed_at } = req.body;
     if (!student_id || !observation) {
       throw new AppError('student_id and observation are required.', 400);
     }
 
-    // Call FastAPI AI service for sentiment analysis
-    let sentiment = 'Neutral';
-    let sentiment_score = 0;
-    try {
-      const aiResponse = await axios.post(
-        `${process.env.AI_SERVICE_URL || 'http://localhost:8000'}/analyze/sentiment`,
-        { text: observation }
-      );
-      sentiment = aiResponse.data.sentiment;
-      sentiment_score = aiResponse.data.score;
-    } catch (aiErr) {
-      console.warn('AI sentiment service unavailable, skipping:', aiErr.message);
-    }
+    const owns = await teacherOwnsStudent(req.user.id, student_id);
+    if (!owns) throw new AppError('Student is not in one of your classes.', 403);
+
+    const { sentiment, sentiment_score } = await analyzeSentiment(observation);
 
     const result = await query(
       `INSERT INTO behavior_logs
@@ -388,32 +510,20 @@ behaviorRouter.post('/', authorize('admin', 'teacher'), async (req, res, next) =
   }
 });
 
-// PUT /api/behavior/:id — Update a behavior log
-behaviorRouter.put('/:id', authorize('admin', 'teacher'), async (req, res, next) => {
+// PUT /api/behavior/:id — Teacher updates their own log.
+behaviorRouter.put('/:id', authorize('teacher'), async (req, res, next) => {
   try {
     const { observation, category } = req.body;
     if (!observation) throw new AppError('observation is required.', 400);
 
-    // Re-analyze sentiment
-    let sentiment = 'Neutral';
-    let sentiment_score = 0;
-    try {
-      const aiResponse = await axios.post(
-        `${process.env.AI_SERVICE_URL || 'http://localhost:8000'}/analyze/sentiment`,
-        { text: observation }
-      );
-      sentiment = aiResponse.data.sentiment;
-      sentiment_score = aiResponse.data.score;
-    } catch (aiErr) {
-      console.warn('AI sentiment service unavailable, skipping:', aiErr.message);
-    }
+    const { sentiment, sentiment_score } = await analyzeSentiment(observation);
 
     const result = await query(
       `UPDATE behavior_logs
-       SET observation=$1, category=$2, sentiment=$3, sentiment_score=$4
-       WHERE id=$5
-       RETURNING *`,
-      [observation, category || 'Social', sentiment, sentiment_score, req.params.id]
+          SET observation=$1, category=$2, sentiment=$3, sentiment_score=$4
+        WHERE id=$5 AND teacher_id=$6
+        RETURNING *`,
+      [observation, category || 'Social', sentiment, sentiment_score, req.params.id, req.user.id]
     );
     if (!result.rows.length) throw new AppError('Behavior log not found.', 404);
 
@@ -423,12 +533,12 @@ behaviorRouter.put('/:id', authorize('admin', 'teacher'), async (req, res, next)
   }
 });
 
-// DELETE /api/behavior/:id — Delete a behavior log
-behaviorRouter.delete('/:id', authorize('admin', 'teacher'), async (req, res, next) => {
+// DELETE /api/behavior/:id — Teacher deletes their own log.
+behaviorRouter.delete('/:id', authorize('teacher'), async (req, res, next) => {
   try {
     const result = await query(
-      'DELETE FROM behavior_logs WHERE id=$1 RETURNING id',
-      [req.params.id]
+      'DELETE FROM behavior_logs WHERE id=$1 AND teacher_id=$2 RETURNING id',
+      [req.params.id, req.user.id]
     );
     if (!result.rows.length) throw new AppError('Behavior log not found.', 404);
 

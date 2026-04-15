@@ -668,12 +668,34 @@ export function Grades() {
 // BEHAVIOR PAGE
 // ============================================================
 import { behaviorApi, aiApi } from '../api/client'
-import { SentimentBadge, Modal } from '../components/UI'
-import { Heart, Plus as PlusIcon, Pencil, Trash2 } from 'lucide-react'
+import { SentimentBadge, Modal, StatCard } from '../components/UI'
+import { Heart, Plus as PlusIcon, Pencil, Trash2, Smile, Meh, Frown, X as XIcon } from 'lucide-react'
+import { Link as RouterLink } from 'react-router-dom'
 
 export function Behavior() {
-  const [students, setStudentsB]  = useState([])
+  const { user } = useAuth()
+  return user?.role === 'teacher' ? <TeacherBehavior /> : <AdminBehavior />
+}
+
+// ─── Teacher view — class-scoped logging ─────────────────────
+function TeacherBehavior() {
+  const { activeAssignments } = useAuth()
+
+  const sections = useMemo(() => {
+    const map = new Map()
+    for (const a of activeAssignments || []) {
+      const key = `${a.grade_level}|||${a.section}`
+      if (!map.has(key)) map.set(key, { grade_level: a.grade_level, section: a.section })
+    }
+    return [...map.values()].sort(
+      (a, b) => a.grade_level.localeCompare(b.grade_level) || a.section.localeCompare(b.section)
+    )
+  }, [activeAssignments])
+
+  const [selectedSection, setSelectedSection] = useState('')
   const [studentId, setStudentIdB]= useState('')
+  const [studentSearch, setStudentSearch] = useState('')
+  const [studentResults, setStudentResults] = useState([])
   const [logs, setLogs]           = useState([])
   const [loading, setLoading]     = useState(false)
   const [showLog, setShowLog]     = useState(false)
@@ -683,10 +705,30 @@ export function Behavior() {
   const [editingId, setEditingId] = useState(null)
 
   useEffect(() => {
-    studentApi.list({ limit: 200 })
-      .then(res => setStudentsB(res.data.students))
-      .catch(() => {})
-  }, [])
+    if (sections.length > 0 && !selectedSection) {
+      setSelectedSection(`${sections[0].grade_level}|||${sections[0].section}`)
+    }
+  }, [sections])
+
+  useEffect(() => {
+    setStudentIdB('')
+    setStudentSearch('')
+    setStudentResults([])
+    setLogs([])
+  }, [selectedSection])
+
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      const q = studentSearch.trim()
+      if (!q || studentId) return setStudentResults([])
+      if (!selectedSection) return setStudentResults([])
+      const [grade_level, section] = selectedSection.split('|||')
+      studentApi.list({ grade_level, section, search: q, limit: 20 })
+        .then(res => setStudentResults(res.data.students || []))
+        .catch(() => setStudentResults([]))
+    }, 250)
+    return () => clearTimeout(handle)
+  }, [studentSearch, studentId, selectedSection])
 
   const fetchLogs = async (sid) => {
     setStudentIdB(sid)
@@ -748,7 +790,7 @@ export function Behavior() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="page-title">Behavior Monitoring</h1>
-          <p className="page-subtitle">Log and track student behavioral observations</p>
+          <p className="page-subtitle">Log observations for students in your classes</p>
         </div>
         {studentId && (
           <button onClick={() => setShowLog(true)} className="btn-primary">
@@ -757,26 +799,63 @@ export function Behavior() {
         )}
       </div>
 
-      <div className="card p-4">
-        <label className="block text-sm font-medium text-slate-700 mb-1.5">Select Student</label>
-        <select className="input" value={studentId} onChange={e => fetchLogs(e.target.value)}>
-          <option value="">— Choose a student —</option>
-          {students.map(s => (
-            <option key={s.id} value={s.id}>{formatName(s)} ({s.grade_level})</option>
-          ))}
-        </select>
-      </div>
+      {sections.length === 0 ? (
+        <div className="card">
+          <EmptyState icon={Heart} title="No assigned classes"
+            description="You have no teaching assignments for the active school year." />
+        </div>
+      ) : (
+        <div className="card p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Class</label>
+            <select className="input" value={selectedSection}
+              onChange={e => setSelectedSection(e.target.value)}>
+              {sections.map(s => (
+                <option key={`${s.grade_level}|||${s.section}`} value={`${s.grade_level}|||${s.section}`}>
+                  {s.grade_level} — {s.section}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Student</label>
+            <input className="input" placeholder="Search by name or LRN…"
+              value={studentSearch}
+              onChange={e => {
+                setStudentSearch(e.target.value)
+                if (studentId) { setStudentIdB(''); setLogs([]) }
+              }}
+              onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+            {studentResults.length > 0 && !studentId && (
+              <div className="mt-1 max-h-40 overflow-y-auto border border-slate-200 rounded-lg bg-white">
+                {studentResults.map(s => (
+                  <button key={s.id} type="button"
+                    onClick={() => {
+                      setStudentResults([])
+                      setStudentSearch(formatName(s))
+                      fetchLogs(s.id)
+                    }}
+                    className="w-full text-left text-xs px-3 py-1.5 hover:bg-slate-50">
+                    <span className="font-medium text-slate-700">{formatName(s)}</span>
+                    {s.lrn && <span className="text-slate-400"> · LRN {s.lrn}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {loading ? <LoadingSpinner /> : logs.length > 0 ? (
         <div className="space-y-3">
           {logs.map(b => (
             <div key={b.id} className="card p-4 flex gap-4">
-              <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-sm font-bold text-slate-500 flex-shrink-0">
-                {b.teacher_name?.[0] || 'T'}
+              <div className="w-8 h-8 rounded-full bg-teal-50 flex items-center justify-center text-teal-600 flex-shrink-0">
+                <Pencil size={14}/>
               </div>
               <div className="flex-1">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <p className="text-sm font-medium text-slate-800">{b.teacher_name}</p>
+                  <p className="text-sm font-medium text-slate-800">Logged by you</p>
                   <div className="flex items-center gap-2">
                     <SentimentBadge sentiment={b.sentiment} />
                     <span className="text-xs text-slate-400">{b.category}</span>
@@ -856,6 +935,278 @@ export function Behavior() {
             </button>
           </div>
         </form>
+      </Modal>
+    </div>
+  )
+}
+
+// ─── Admin view — school-wide read-only browser ──────────────
+const EMPTY_BEHAVIOR_FILTERS = {
+  student_id: '', grade_level: '', section: '', category: '', sentiment: '',
+}
+const BEHAVIOR_PAGE_SIZE = 50
+
+function AdminBehavior() {
+  const [filters, setFilters] = useState(EMPTY_BEHAVIOR_FILTERS)
+  const [offset, setOffset]   = useState(0)
+  const [logs, setLogs]       = useState([])
+  const [total, setTotal]     = useState(0)
+  const [summary, setSummary] = useState({ total: 0, positive: 0, neutral: 0, negative: 0 })
+  const [loading, setLoading] = useState(false)
+  const [studentResults, setStudentResults] = useState([])
+  const [sections, setSections] = useState([])
+  const [studentSearch, setStudentSearch] = useState('')
+  const [detailLog, setDetailLog] = useState(null)
+
+  useEffect(() => {
+    curriculumApi.getSections()
+      .then(res => setSections(res.data.sections || []))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      const q = studentSearch.trim()
+      if (!q || filters.student_id) return setStudentResults([])
+      studentApi.list({ search: q, limit: 20 })
+        .then(res => setStudentResults(res.data.students || []))
+        .catch(() => setStudentResults([]))
+    }, 250)
+    return () => clearTimeout(handle)
+  }, [studentSearch, filters.student_id])
+
+  const cleanParams = useMemo(() => {
+    const out = {}
+    for (const [k, v] of Object.entries(filters)) if (v) out[k] = v
+    return out
+  }, [filters])
+
+  useEffect(() => { setOffset(0) }, [cleanParams])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    Promise.all([
+      behaviorApi.get({ ...cleanParams, limit: BEHAVIOR_PAGE_SIZE, offset }),
+      behaviorApi.summary(cleanParams),
+    ]).then(([listRes, sumRes]) => {
+      if (cancelled) return
+      setLogs(listRes.data.logs || [])
+      setTotal(listRes.data.total || 0)
+      setSummary(sumRes.data || {})
+    }).catch(() => {
+      if (!cancelled) { setLogs([]); setTotal(0) }
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [cleanParams, offset])
+
+  const patch = (k, v) => setFilters(f => ({ ...f, [k]: v }))
+  const clearFilters = () => {
+    setFilters(EMPTY_BEHAVIOR_FILTERS)
+    setStudentSearch('')
+    setStudentResults([])
+  }
+  const page = Math.floor(offset / BEHAVIOR_PAGE_SIZE) + 1
+  const pageCount = Math.max(1, Math.ceil(total / BEHAVIOR_PAGE_SIZE))
+
+  return (
+    <div className="space-y-5 animate-fade-in">
+      <div>
+        <h1 className="page-title">Behavior Monitoring</h1>
+        <p className="page-subtitle">School-wide observation logs — read-only oversight</p>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard title="Total logs" value={summary.total    ?? 0} icon={Heart} color="teal" />
+        <StatCard title="Positive"   value={summary.positive ?? 0} icon={Smile} color="emerald" />
+        <StatCard title="Neutral"    value={summary.neutral  ?? 0} icon={Meh}   color="blue" />
+        <StatCard title="Negative"   value={summary.negative ?? 0} icon={Frown} color="red" />
+      </div>
+
+      <div className="card p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-slate-700">Filters</h3>
+          <button onClick={clearFilters}
+            className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1">
+            <XIcon size={12}/> Clear
+          </button>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Student</label>
+            <input className="input" placeholder="Search by name or LRN…"
+              value={studentSearch}
+              onChange={e => {
+                setStudentSearch(e.target.value)
+                if (filters.student_id) {
+                  setFilters(f => ({ ...f, student_id: '', grade_level: '', section: '' }))
+                }
+              }}
+              onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+            {studentResults.length > 0 && !filters.student_id && (
+              <div className="mt-1 max-h-40 overflow-y-auto border border-slate-200 rounded-lg bg-white">
+                {studentResults.map(s => (
+                  <button key={s.id} type="button"
+                    onClick={() => {
+                      setFilters(f => ({
+                        ...f,
+                        student_id: s.id,
+                        grade_level: s.grade_level || '',
+                        section: s.section || '',
+                      }))
+                      setStudentSearch(formatName(s))
+                      setStudentResults([])
+                    }}
+                    className="w-full text-left text-xs px-3 py-1.5 hover:bg-slate-50">
+                    <span className="font-medium text-slate-700">{formatName(s)}</span>
+                    {s.lrn && <span className="text-slate-400"> · LRN {s.lrn}</span>}
+                    <span className="text-slate-400"> — {s.grade_level} {s.section}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Class</label>
+            <select className="input disabled:bg-slate-50 disabled:cursor-not-allowed"
+              disabled={!!filters.student_id}
+              value={filters.grade_level && filters.section ? `${filters.grade_level}|||${filters.section}` : ''}
+              onChange={e => {
+                const v = e.target.value
+                if (!v) { patch('grade_level', ''); patch('section', ''); return }
+                const [gl, sec] = v.split('|||')
+                setFilters(f => ({ ...f, grade_level: gl, section: sec }))
+              }}>
+              <option value="">All classes</option>
+              {sections.map(s => (
+                <option key={s.id} value={`${s.grade_level}|||${s.name}`}>
+                  {s.grade_level} — {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Category</label>
+            <select className="input" value={filters.category} onChange={e => patch('category', e.target.value)}>
+              <option value="">All categories</option>
+              <option>Social</option><option>Emotional</option><option>Academic</option><option>Physical</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Sentiment</label>
+            <select className="input" value={filters.sentiment} onChange={e => patch('sentiment', e.target.value)}>
+              <option value="">All</option>
+              <option>Positive</option><option>Neutral</option><option>Negative</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        {loading ? <LoadingSpinner /> : logs.length === 0 ? (
+          <EmptyState icon={Heart} title="No behavior logs"
+            description="No logs match the current filters." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="table-base">
+              <thead>
+                <tr>
+                  <th className="whitespace-nowrap">Student</th>
+                  <th className="whitespace-nowrap">Class</th>
+                  <th className="whitespace-nowrap">Category</th>
+                  <th className="whitespace-nowrap">Sentiment</th>
+                  <th className="whitespace-nowrap">Teacher</th>
+                  <th className="whitespace-nowrap text-center">Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {logs.map(b => (
+                  <tr key={b.id}>
+                    <td className="whitespace-nowrap">
+                      <RouterLink to={`/students/${b.student_id}`}
+                        className="text-teal-600 hover:text-teal-700 font-medium">
+                        {formatName(b)}
+                      </RouterLink>
+                    </td>
+                    <td className="whitespace-nowrap text-xs text-slate-500">{b.grade_level} — {b.section}</td>
+                    <td className="whitespace-nowrap text-xs text-slate-500">{b.category}</td>
+                    <td className="whitespace-nowrap"><SentimentBadge sentiment={b.sentiment} /></td>
+                    <td className="whitespace-nowrap text-sm text-slate-600">{b.teacher_name}</td>
+                    <td className="whitespace-nowrap text-left">
+                      <button onClick={() => setDetailLog(b)}
+                        className="btn-secondary px-3 py-1 text-xs">View</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {total > BEHAVIOR_PAGE_SIZE && (
+        <div className="flex items-center justify-between text-sm text-slate-600">
+          <span>Page {page} of {pageCount} · {total} logs</span>
+          <div className="flex gap-2">
+            <button className="btn-secondary" disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - BEHAVIOR_PAGE_SIZE))}>Prev</button>
+            <button className="btn-secondary" disabled={offset + BEHAVIOR_PAGE_SIZE >= total}
+              onClick={() => setOffset(offset + BEHAVIOR_PAGE_SIZE)}>Next</button>
+          </div>
+        </div>
+      )}
+
+      <Modal open={!!detailLog} onClose={() => setDetailLog(null)} title="Behavior Observation">
+        {detailLog && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div>
+                <p className="text-xs font-medium text-slate-500">Student</p>
+                <RouterLink to={`/students/${detailLog.student_id}`}
+                  className="text-teal-600 hover:text-teal-700 font-medium">
+                  {formatName(detailLog)}
+                </RouterLink>
+                <p className="text-xs text-slate-400">{detailLog.grade_level} — {detailLog.section}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-slate-500">Teacher</p>
+                <p className="text-slate-700">{detailLog.teacher_name}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-slate-500">Date &amp; Time</p>
+                <p className="text-slate-700">{format(new Date(detailLog.observed_at), 'MMM d, yyyy · h:mm a')}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-slate-500">Subject</p>
+                <p className="text-slate-700">{detailLog.subject || '—'}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-slate-500">Category</p>
+                <p className="text-slate-700">{detailLog.category}</p>
+              </div>
+              <div className="sm:col-span-2">
+                <p className="text-xs font-medium text-slate-500 mb-1">Sentiment</p>
+                <div className="flex items-center gap-2">
+                  <SentimentBadge sentiment={detailLog.sentiment} />
+                  {detailLog.sentiment_score != null && (
+                    <span className="text-xs text-slate-500">
+                      Score: <span className="font-mono font-semibold">{Number(detailLog.sentiment_score).toFixed(3)}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-slate-500 mb-1">Observation</p>
+              <div className="p-3 bg-slate-50 rounded-xl text-sm text-slate-700 whitespace-pre-wrap">
+                {detailLog.observation}
+              </div>
+            </div>
+            <div className="flex justify-end pt-1">
+              <button onClick={() => setDetailLog(null)} className="btn-secondary">Close</button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )

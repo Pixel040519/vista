@@ -98,10 +98,11 @@ export const gradesApi = {
 
 // ── Behavior ──────────────────────────────────────────────────
 export const behaviorApi = {
-  get:    (params)    => api.get('/behavior', { params }),
-  log:    (data)      => api.post('/behavior', data),
-  update: (id, data)  => api.put(`/behavior/${id}`, data),
-  delete: (id)        => api.delete(`/behavior/${id}`),
+  get:     (params)    => api.get('/behavior', { params }),
+  summary: (params)    => api.get('/behavior/summary', { params }),
+  log:     (data)      => api.post('/behavior', data),
+  update:  (id, data)  => api.put(`/behavior/${id}`, data),
+  delete:  (id)        => api.delete(`/behavior/${id}`),
 }
 
 // ── Dismissal ─────────────────────────────────────────────────
