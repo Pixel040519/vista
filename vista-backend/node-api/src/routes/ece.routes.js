@@ -42,111 +42,31 @@ const verifyEceAssignment = async (req, gradeLevel, section) => {
   }
 }
 
-// ─── Catalog: Domains ────────────────────────────────────────
-router.get('/domains', async (req, res, next) => {
-  try {
-    const r = await query(
-      `SELECT id, name, description, display_order, is_active
-       FROM competency_domains
-       WHERE is_active = TRUE
-       ORDER BY display_order, name`
-    )
-    res.json({ domains: r.rows })
-  } catch (e) { next(e) }
-})
-
-router.post('/domains', authorize('admin'), async (req, res, next) => {
-  try {
-    const schema = Joi.object({
-      name: Joi.string().min(1).max(120).required(),
-      description: Joi.string().allow('').optional(),
-      display_order: Joi.number().integer().min(0).default(0),
-    })
-    const { value, error } = schema.validate(req.body)
-    if (error) throw new AppError(error.message, 400)
-    const r = await query(
-      `INSERT INTO competency_domains (name, description, display_order)
-       VALUES ($1, $2, $3) RETURNING id, name, description, display_order, is_active`,
-      [value.name, value.description || null, value.display_order]
-    )
-    res.status(201).json({ domain: r.rows[0] })
-  } catch (e) { next(e) }
-})
-
-router.put('/domains/:id', authorize('admin'), async (req, res, next) => {
-  try {
-    const schema = Joi.object({
-      name: Joi.string().min(1).max(120).optional(),
-      description: Joi.string().allow('').optional(),
-      display_order: Joi.number().integer().min(0).optional(),
-      is_active: Joi.boolean().optional(),
-    })
-    const { value, error } = schema.validate(req.body)
-    if (error) throw new AppError(error.message, 400)
-    const sets = []
-    const params = []
-    let i = 1
-    for (const [k, v] of Object.entries(value)) {
-      sets.push(`${k}=$${i++}`)
-      params.push(v)
-    }
-    if (!sets.length) throw new AppError('No fields to update.', 400)
-    sets.push(`updated_at=NOW()`)
-    params.push(req.params.id)
-    const r = await query(
-      `UPDATE competency_domains SET ${sets.join(', ')} WHERE id=$${i} RETURNING *`,
-      params
-    )
-    if (!r.rows.length) throw new AppError('Domain not found.', 404)
-    res.json({ domain: r.rows[0] })
-  } catch (e) { next(e) }
-})
-
-router.delete('/domains/:id', authorize('admin'), async (req, res, next) => {
-  try {
-    // Block delete if any record exists under this domain's skills
-    const used = await query(
-      `SELECT 1 FROM ece_competency_records r
-       JOIN competency_skills s ON s.id = r.skill_id
-       WHERE s.domain_id=$1 LIMIT 1`, [req.params.id]
-    )
-    if (used.rows.length) {
-      // Soft-delete instead
-      await query(`UPDATE competency_domains SET is_active=FALSE, updated_at=NOW() WHERE id=$1`, [req.params.id])
-      return res.json({ message: 'Domain archived (has existing records).' })
-    }
-    await query(`DELETE FROM competency_domains WHERE id=$1`, [req.params.id])
-    res.json({ message: 'Domain deleted.' })
-  } catch (e) { next(e) }
-})
-
-// ─── Catalog: Skills ─────────────────────────────────────────
+// ─── Catalog: Skills (grouped by subject) ────────────────────
 router.get('/skills', async (req, res, next) => {
   try {
-    const { domain_id } = req.query
+    const { subject_id } = req.query
     const params = []
     let where = 'WHERE s.is_active = TRUE'
-    if (domain_id) {
-      params.push(domain_id)
-      where += ` AND s.domain_id = $${params.length}`
+    if (subject_id) {
+      params.push(subject_id)
+      where += ` AND s.subject_id = $${params.length}`
     }
     const r = await query(
-      `SELECT s.id, s.domain_id, s.name, s.description, s.display_order, s.is_active,
-              d.name AS domain_name
+      `SELECT s.id, s.subject_id, s.name, s.description, s.display_order, s.is_active
        FROM competency_skills s
-       JOIN competency_domains d ON d.id = s.domain_id
        ${where}
-       ORDER BY d.display_order, s.display_order, s.name`,
+       ORDER BY s.display_order, s.name`,
       params
     )
     res.json({ skills: r.rows })
   } catch (e) { next(e) }
 })
 
-router.post('/skills', authorize('admin'), async (req, res, next) => {
+router.post('/skills', authorize('admin', 'teacher'), async (req, res, next) => {
   try {
     const schema = Joi.object({
-      domain_id: Joi.string().uuid().required(),
+      subject_id: Joi.string().uuid().required(),
       name: Joi.string().min(1).max(255).required(),
       description: Joi.string().allow('').optional(),
       display_order: Joi.number().integer().min(0).default(0),
@@ -154,15 +74,15 @@ router.post('/skills', authorize('admin'), async (req, res, next) => {
     const { value, error } = schema.validate(req.body)
     if (error) throw new AppError(error.message, 400)
     const r = await query(
-      `INSERT INTO competency_skills (domain_id, name, description, display_order)
+      `INSERT INTO competency_skills (subject_id, name, description, display_order)
        VALUES ($1,$2,$3,$4) RETURNING *`,
-      [value.domain_id, value.name, value.description || null, value.display_order]
+      [value.subject_id, value.name, value.description || null, value.display_order]
     )
     res.status(201).json({ skill: r.rows[0] })
   } catch (e) { next(e) }
 })
 
-router.put('/skills/:id', authorize('admin'), async (req, res, next) => {
+router.put('/skills/:id', authorize('admin', 'teacher'), async (req, res, next) => {
   try {
     const schema = Joi.object({
       name: Joi.string().min(1).max(255).optional(),
@@ -191,7 +111,7 @@ router.put('/skills/:id', authorize('admin'), async (req, res, next) => {
   } catch (e) { next(e) }
 })
 
-router.delete('/skills/:id', authorize('admin'), async (req, res, next) => {
+router.delete('/skills/:id', authorize('admin', 'teacher'), async (req, res, next) => {
   try {
     const used = await query(
       `SELECT 1 FROM ece_competency_records WHERE skill_id=$1 LIMIT 1`, [req.params.id]

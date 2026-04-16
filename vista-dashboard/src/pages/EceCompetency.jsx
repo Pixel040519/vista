@@ -1,18 +1,73 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { eceApi } from '../api/client'
+import { eceApi, curriculumApi } from '../api/client'
 import { LoadingSpinner } from '../components/UI'
-import { Baby, Save, Info } from 'lucide-react'
+import { Baby, Save, Info, Plus, Pencil, Trash2, X, Check, ChevronDown, ChevronRight, GripVertical } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
 const QUARTERS = [1, 2, 3, 4]
 const RATINGS = [
-  { value: 'E',  label: 'Excellent',       color: 'bg-emerald-100 text-emerald-700 border-emerald-300' },
-  { value: 'G',  label: 'Good',            color: 'bg-teal-100 text-teal-700 border-teal-300' },
-  { value: 'F',  label: 'Fair',            color: 'bg-amber-100 text-amber-700 border-amber-300' },
-  { value: 'NA', label: 'Needs Assistance', color: 'bg-red-100 text-red-700 border-red-300' },
+  { value: 'E',  label: 'Excellent',       color: 'bg-emerald-500 text-white border-emerald-600' },
+  { value: 'G',  label: 'Good',            color: 'bg-teal-500 text-white border-teal-600' },
+  { value: 'F',  label: 'Fair',            color: 'bg-amber-500 text-white border-amber-600' },
+  { value: 'NA', label: 'Needs Assistance', color: 'bg-red-500 text-white border-red-600' },
 ]
+
+// ── Inline skill add/edit form ────────────────────────────────
+function SkillForm({ initial, onSave, onCancel, saving }) {
+  const [name, setName] = useState(initial?.name || '')
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    const trimmed = name.trim()
+    if (!trimmed) return toast.error('Description is required')
+    onSave({ name: trimmed, description: '' })
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-2 px-5 py-3 bg-slate-50 border-b border-slate-100">
+      <div className="flex-1 min-w-[200px]">
+        <label className="block text-xs font-medium text-slate-600 mb-1">Description</label>
+        <input
+          className="input text-sm"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && e.target.blur()}
+          placeholder="e.g. Recognizes letters"
+          autoFocus
+        />
+      </div>
+      <div className="flex gap-1">
+        <button type="submit" disabled={saving} className="p-2 rounded-lg bg-teal-500 text-white hover:bg-teal-600 disabled:opacity-50 transition-colors">
+          <Check size={14} />
+        </button>
+        <button type="button" onClick={onCancel} className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors">
+          <X size={14} />
+        </button>
+      </div>
+    </form>
+  )
+}
+
+// ── Skill list item (shown in manage mode) ───────────────────
+function SkillItem({ skill, onEdit, onDelete }) {
+  return (
+    <div className="flex items-center justify-between gap-2 px-5 py-1.5 hover:bg-slate-50 group transition-colors">
+      <div className="min-w-0">
+        <span className="text-sm text-slate-700">{skill.name}</span>
+      </div>
+      <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+        <button onClick={() => onEdit(skill)} className="p-1.5 rounded-lg text-slate-400 hover:text-amber-500 hover:bg-amber-50 transition-colors">
+          <Pencil size={12} />
+        </button>
+        <button onClick={() => onDelete(skill)} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
+          <Trash2 size={12} />
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export default function EceCompetency() {
   const { activeAssignments } = useAuth()
@@ -31,7 +86,7 @@ export default function EceCompetency() {
 
   const [selectedClass, setSelectedClass] = useState('')
   const [quarter, setQuarter] = useState(1)
-  const [domains, setDomains] = useState([])
+  const [subjects, setSubjects] = useState([])  // subjects for the selected grade level (used as domains)
   const [skills, setSkills] = useState([])
   const [students, setStudents] = useState([])
   const [grid, setGrid] = useState({}) // grid[studentId][skillId] = rating
@@ -39,15 +94,18 @@ export default function EceCompetency() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  // Load catalog once
-  useEffect(() => {
-    Promise.all([eceApi.getDomains(), eceApi.getSkills()])
-      .then(([dRes, sRes]) => {
-        setDomains(dRes.data.domains || [])
-        setSkills(sRes.data.skills || [])
-      })
-      .catch(() => toast.error('Failed to load competency catalog'))
-  }, [])
+  // Skill management state
+  const [addingToSubject, setAddingToSubject] = useState(null) // subject id or null
+  const [editingSkill, setEditingSkill] = useState(null)       // skill object or null
+  const [skillSaving, setSkillSaving] = useState(false)
+  const [managingSubject, setManagingSubject] = useState(null)  // subject id or null
+
+  // Expandable student state
+  const [expandedStudents, setExpandedStudents] = useState({}) // `${subjectId}::${studentId}` -> bool
+
+  // Drag-and-drop subject reorder
+  const [dragIdx, setDragIdx] = useState(null)
+  const [dragOverIdx, setDragOverIdx] = useState(null)
 
   // Auto-select first class
   useEffect(() => {
@@ -56,23 +114,39 @@ export default function EceCompetency() {
     }
   }, [eceClasses, selectedClass])
 
-  // Load records whenever class/quarter changes
+  // Load subjects for the selected grade level + skills + records
   useEffect(() => {
     if (!selectedClass) return
     const [grade_level, section] = selectedClass.split('||')
     setLoading(true)
-    eceApi.getRecords({ grade_level, section, quarter })
-      .then(res => {
-        setStudents(res.data.students || [])
+    Promise.all([
+      curriculumApi.getSubjects({ grade_level }),
+      eceApi.getSkills(),
+      eceApi.getRecords({ grade_level, section, quarter }),
+    ])
+      .then(([subRes, skRes, recRes]) => {
+        let subs = subRes.data.subjects || []
+        // Apply saved subject order
+        const key = `vista_ece_subject_order_${grade_level}||${section}`
+        try {
+          const saved = JSON.parse(localStorage.getItem(key))
+          if (Array.isArray(saved) && saved.length) {
+            const order = new Map(saved.map((id, i) => [id, i]))
+            subs = [...subs].sort((a, b) => (order.get(a.id) ?? 999) - (order.get(b.id) ?? 999))
+          }
+        } catch {}
+        setSubjects(subs)
+        setSkills(skRes.data.skills || [])
+        setStudents(recRes.data.students || [])
         const g = {}
-        for (const r of res.data.records || []) {
+        for (const r of recRes.data.records || []) {
           if (!g[r.student_id]) g[r.student_id] = {}
           g[r.student_id][r.skill_id] = r.rating
         }
         setGrid(g)
         setDirty(false)
       })
-      .catch(err => toast.error(err.response?.data?.error || 'Failed to load records'))
+      .catch(err => toast.error(err.response?.data?.error || 'Failed to load data'))
       .finally(() => setLoading(false))
   }, [selectedClass, quarter])
 
@@ -81,7 +155,6 @@ export default function EceCompetency() {
       const next = { ...prev }
       if (!next[studentId]) next[studentId] = {}
       if (next[studentId][skillId] === rating) {
-        // click same = clear
         const copy = { ...next[studentId] }
         delete copy[skillId]
         next[studentId] = copy
@@ -118,6 +191,143 @@ export default function EceCompetency() {
     setSaving(false)
   }
 
+  // ── Skill CRUD handlers ─────────────────────────────────────
+  const handleAddSkill = async ({ name, description }) => {
+    if (!addingToSubject) return
+    setSkillSaving(true)
+    try {
+      const maxOrder = skills.filter(s => s.subject_id === addingToSubject).reduce((m, s) => Math.max(m, s.display_order || 0), 0)
+      const res = await eceApi.createSkill({ subject_id: addingToSubject, name, description, display_order: maxOrder + 1 })
+      setSkills(prev => [...prev, res.data.skill])
+      setAddingToSubject(null)
+      toast.success('Description added')
+    } catch (err) {
+      const msg = err.response?.data?.error || 'Failed to add description'
+      toast.error(msg.includes('unique') || msg.includes('duplicate') ? 'A description with that name already exists for this subject' : msg)
+    }
+    setSkillSaving(false)
+  }
+
+  const handleUpdateSkill = async ({ name, description }) => {
+    if (!editingSkill) return
+    setSkillSaving(true)
+    try {
+      const res = await eceApi.updateSkill(editingSkill.id, { name, description })
+      setSkills(prev => prev.map(s => s.id === editingSkill.id ? { ...s, ...res.data.skill } : s))
+      setEditingSkill(null)
+      toast.success('Description updated')
+    } catch (err) {
+      const msg = err.response?.data?.error || 'Failed to update description'
+      toast.error(msg.includes('unique') || msg.includes('duplicate') ? 'A description with that name already exists for this subject' : msg)
+    }
+    setSkillSaving(false)
+  }
+
+  const handleDeleteSkill = async (skill) => {
+    if (!window.confirm(`Delete "${skill.name}"? If it has existing ratings, it will be archived instead.`)) return
+    try {
+      const res = await eceApi.deleteSkill(skill.id)
+      setSkills(prev => prev.filter(s => s.id !== skill.id))
+      toast.success(res.data.message || 'Description removed')
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete description')
+    }
+  }
+
+  const toggleStudent = (subjectId, studentId) => {
+    const key = `${subjectId}::${studentId}`
+    setExpandedStudents(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const toggleAllStudents = (subjectId) => {
+    const allExpanded = students.every(st => expandedStudents[`${subjectId}::${st.id}`])
+    const updates = {}
+    for (const st of students) {
+      updates[`${subjectId}::${st.id}`] = !allExpanded
+    }
+    setExpandedStudents(prev => ({ ...prev, ...updates }))
+  }
+
+  // ── Subject drag-and-drop reorder ────────────────────────────
+  const orderKey = selectedClass ? `vista_ece_subject_order_${selectedClass}` : null
+  const scrollRaf = useRef(null)
+
+  // Auto-scroll when dragging near top/bottom of viewport
+  const handleDocDragOver = useCallback((e) => {
+    // Find the element that is actually scrolling
+    const mainEl = document.querySelector('main')
+    const candidates = [mainEl, document.documentElement, document.body]
+    let scrollEl = null
+    for (const el of candidates) {
+      if (el && el.scrollHeight > el.clientHeight) { scrollEl = el; break }
+    }
+    if (!scrollEl) return
+
+    const edge = 60
+    const speed = 20
+    const y = e.clientY
+    const topZone = 64 + edge // 64 = Topbar height, scroll-up zone is 64–124px
+
+    const doScroll = (delta) => {
+      const before = scrollEl.scrollTop
+      scrollEl.scrollTop += delta
+      // If scrollEl didn't move, try window as fallback
+      if (scrollEl.scrollTop === before) window.scrollBy(0, delta)
+    }
+
+    if (y < topZone && y > 64) {
+      cancelAnimationFrame(scrollRaf.current)
+      const intensity = 1 - (y - 64) / edge
+      const scroll = () => {
+        doScroll(-Math.ceil(speed * intensity))
+        scrollRaf.current = requestAnimationFrame(scroll)
+      }
+      scrollRaf.current = requestAnimationFrame(scroll)
+    } else if (y > window.innerHeight - edge) {
+      cancelAnimationFrame(scrollRaf.current)
+      const intensity = 1 - (window.innerHeight - y) / edge
+      const scroll = () => {
+        doScroll(Math.ceil(speed * intensity))
+        scrollRaf.current = requestAnimationFrame(scroll)
+      }
+      scrollRaf.current = requestAnimationFrame(scroll)
+    } else {
+      cancelAnimationFrame(scrollRaf.current)
+    }
+  }, [])
+
+  const handleDragStart = (idx) => (e) => {
+    setDragIdx(idx)
+    e.dataTransfer.effectAllowed = 'move'
+    document.addEventListener('dragover', handleDocDragOver)
+  }
+  const handleDragOver = (idx) => (e) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (idx !== dragOverIdx) setDragOverIdx(idx)
+  }
+  const handleDrop = (idx) => (e) => {
+    e.preventDefault()
+    if (dragIdx === null || dragIdx === idx) { setDragIdx(null); setDragOverIdx(null); return }
+    setSubjects(prev => {
+      const next = [...prev]
+      const [moved] = next.splice(dragIdx, 1)
+      next.splice(idx, 0, moved)
+      if (orderKey) {
+        try { localStorage.setItem(orderKey, JSON.stringify(next.map(s => s.id))) } catch {}
+      }
+      return next
+    })
+    setDragIdx(null)
+    setDragOverIdx(null)
+  }
+  const handleDragEnd = () => {
+    setDragIdx(null)
+    setDragOverIdx(null)
+    cancelAnimationFrame(scrollRaf.current)
+    document.removeEventListener('dragover', handleDocDragOver)
+  }
+
   if (eceClasses.length === 0) {
     return (
       <div className="card p-8 text-center">
@@ -130,9 +340,10 @@ export default function EceCompetency() {
     )
   }
 
-  const skillsByDomain = domains.map(d => ({
-    ...d,
-    skills: skills.filter(s => s.domain_id === d.id),
+  // Group skills by subject_id
+  const skillsBySubject = subjects.map(subj => ({
+    ...subj,
+    skills: skills.filter(s => s.subject_id === subj.id),
   }))
 
   return (
@@ -147,7 +358,7 @@ export default function EceCompetency() {
           disabled={!dirty || saving}
           className="btn-primary"
         >
-          <Save size={16} /> {saving ? 'Saving…' : 'Save Ratings'}
+          <Save size={16} /> {saving ? 'Saving...' : 'Save Ratings'}
         </button>
       </div>
 
@@ -188,59 +399,172 @@ export default function EceCompetency() {
           </div>
         ) : (
           <div className="space-y-5">
-            {skillsByDomain.map(domain => domain.skills.length > 0 && (
-              <div key={domain.id} className="card overflow-hidden">
-                <div className="px-5 py-3 bg-slate-50 border-b border-slate-100">
-                  <h3 className="text-sm font-semibold text-slate-800">{domain.name}</h3>
-                  {domain.description && (
-                    <p className="text-xs text-slate-500 mt-0.5">{domain.description}</p>
-                  )}
+            {skillsBySubject.map((subj, subjIdx) => (
+              <div
+                key={subj.id}
+                draggable
+                onDragStart={handleDragStart(subjIdx)}
+                onDragOver={handleDragOver(subjIdx)}
+                onDrop={handleDrop(subjIdx)}
+                onDragEnd={handleDragEnd}
+                className={`card overflow-hidden transition-all ${
+                  dragIdx === subjIdx ? 'opacity-40 ring-2 ring-teal-300'
+                    : dragOverIdx === subjIdx && dragIdx !== null ? 'ring-2 ring-teal-400 shadow-lg'
+                    : ''
+                }`}
+              >
+                {/* Subject header (used as domain) */}
+                <div className="px-5 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-600 flex-shrink-0">
+                      <GripVertical size={16} />
+                    </span>
+                    <h3 className="text-sm font-semibold text-slate-800">{subj.name}</h3>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button
+                      onClick={() => setManagingSubject(managingSubject === subj.id ? null : subj.id)}
+                      className={`text-xs font-medium px-2.5 py-1.5 rounded-lg transition-colors ${
+                        managingSubject === subj.id
+                          ? 'bg-teal-100 text-teal-700'
+                          : 'text-slate-500 hover:text-teal-600 hover:bg-teal-50'
+                      }`}
+                    >
+                      <Pencil size={12} className="inline -mt-0.5 mr-1" />
+                      Manage
+                    </button>
+                    <button
+                      onClick={() => { setAddingToSubject(subj.id); setEditingSkill(null) }}
+                      className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-teal-600 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors"
+                    >
+                      <Plus size={13} /> Add
+                    </button>
+                  </div>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="table-base">
-                    <thead>
-                      <tr>
-                        <th className="whitespace-nowrap">Student</th>
-                        {domain.skills.map(s => (
-                          <th key={s.id} className="whitespace-nowrap text-xs" title={s.description || ''}>
-                            {s.name}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {students.map(st => (
-                        <tr key={st.id}>
-                          <td className="font-medium text-sm whitespace-nowrap">{st.full_name}</td>
-                          {domain.skills.map(sk => {
-                            const current = grid[st.id]?.[sk.id]
-                            return (
-                              <td key={sk.id}>
-                                <div className="flex gap-1">
-                                  {RATINGS.map(r => (
-                                    <button
-                                      key={r.value}
-                                      type="button"
-                                      onClick={() => setRating(st.id, sk.id, r.value)}
-                                      className={`w-8 h-7 rounded-md text-xs font-bold border transition ${
-                                        current === r.value
-                                          ? r.color
-                                          : 'border-slate-200 text-slate-400 hover:border-slate-300'
-                                      }`}
-                                      title={r.label}
-                                    >
-                                      {r.value}
-                                    </button>
-                                  ))}
-                                </div>
-                              </td>
-                            )
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+
+                {/* Skill management list (toggled) */}
+                {managingSubject === subj.id && subj.skills.length > 0 && (
+                  <div className="border-b border-slate-100 bg-slate-50/50 py-1">
+                    <p className="px-5 py-1 text-xs text-slate-400">
+                      Descriptions under {subj.name}
+                    </p>
+                    {subj.skills.map(sk => (
+                      editingSkill?.id === sk.id ? (
+                        <SkillForm
+                          key={sk.id}
+                          initial={editingSkill}
+                          saving={skillSaving}
+                          onSave={handleUpdateSkill}
+                          onCancel={() => setEditingSkill(null)}
+                        />
+                      ) : (
+                        <SkillItem
+                          key={sk.id}
+                          skill={sk}
+                          onEdit={setEditingSkill}
+                          onDelete={handleDeleteSkill}
+                        />
+                      )
+                    ))}
+                  </div>
+                )}
+
+                {/* Add skill form */}
+                {addingToSubject === subj.id && (
+                  <SkillForm
+                    saving={skillSaving}
+                    onSave={handleAddSkill}
+                    onCancel={() => setAddingToSubject(null)}
+                  />
+                )}
+
+                {/* Student rows */}
+                {subj.skills.length === 0 ? (
+                  <div className="px-5 py-6 text-center text-sm text-slate-400">
+                    No descriptions yet. Click <span className="font-medium text-teal-600">+ Add</span> to create one.
+                  </div>
+                ) : (
+                  <>
+                    {/* Expand/Collapse all toggle */}
+                    <div className="px-5 py-2 border-b border-slate-100 flex items-center justify-between">
+                      <span className="text-xs text-slate-400">{students.length} student{students.length !== 1 ? 's' : ''}</span>
+                      <button
+                        onClick={() => toggleAllStudents(subj.id)}
+                        className="text-xs text-slate-500 hover:text-teal-600 font-medium transition-colors"
+                      >
+                        {students.every(st => expandedStudents[`${subj.id}::${st.id}`]) ? 'Collapse All' : 'Expand All'}
+                      </button>
+                    </div>
+
+                    <div className="divide-y divide-slate-300">
+                      {students.map(st => {
+                        const key = `${subj.id}::${st.id}`
+                        const isExpanded = expandedStudents[key]
+                        const ratedCount = subj.skills.filter(sk => grid[st.id]?.[sk.id]).length
+
+                        return (
+                          <div key={st.id}>
+                            {/* Student row */}
+                            <div
+                              className="flex items-center justify-between px-5 py-3 cursor-pointer hover:bg-slate-50 transition-colors select-none"
+                              onClick={() => toggleStudent(subj.id, st.id)}
+                            >
+                              <div className="flex items-center gap-2">
+                                {isExpanded
+                                  ? <ChevronDown size={16} className="text-slate-400 flex-shrink-0" />
+                                  : <ChevronRight size={16} className="text-slate-400 flex-shrink-0" />
+                                }
+                                <span className="text-sm font-semibold text-slate-800">{st.full_name}</span>
+                              </div>
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                                ratedCount === subj.skills.length
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : ratedCount > 0
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-slate-100 text-slate-400'
+                              }`}>
+                                {ratedCount}/{subj.skills.length}
+                              </span>
+                            </div>
+
+                            {/* Expanded: skill rows with ratings */}
+                            {isExpanded && (
+                              <div className="pb-3 px-5 pl-10 space-y-1.5">
+                                {subj.skills.map(sk => {
+                                  const current = grid[st.id]?.[sk.id]
+                                  return (
+                                    <div key={sk.id} className="flex items-center justify-between gap-3 py-1">
+                                      <div className="min-w-0 flex-1">
+                                        <span className="text-sm font-medium text-slate-800">{sk.name}</span>
+                                      </div>
+                                      <div className="flex gap-1 flex-shrink-0">
+                                        {RATINGS.map(r => (
+                                          <button
+                                            key={r.value}
+                                            type="button"
+                                            onClick={(e) => { e.stopPropagation(); setRating(st.id, sk.id, r.value) }}
+                                            className={`w-8 h-7 rounded-md text-xs font-bold border transition ${
+                                              current === r.value
+                                                ? r.color
+                                                : 'border-slate-300 text-slate-500 hover:border-slate-400 hover:text-slate-600'
+                                            }`}
+                                            title={r.label}
+                                          >
+                                            {r.value}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
               </div>
             ))}
           </div>

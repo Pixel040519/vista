@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ClipboardCheck, Heart, QrCode, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight } from 'lucide-react'
+import { ArrowLeft, BookOpen, ClipboardCheck, Heart, QrCode, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi } from '../api/client'
 import { RiskBadge, SentimentBadge, LoadingSpinner, GradeChip } from '../components/UI'
@@ -482,7 +482,9 @@ export default function StudentDetail() {
                                 }`}>{a.status}</span>
                               </td>
                               <td className="text-slate-500 text-xs">{a.subject_name || '—'}</td>
-                              <td className="text-slate-400 text-xs">{a.recorded_by_name || '—'}</td>
+                              <td className="text-slate-400 text-xs">
+                                {isTeacher && a.recorded_by === user?.id ? 'You' : (a.recorded_by_name || '—')}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -537,14 +539,16 @@ export default function StudentDetail() {
                   </button>
                   {isOpen && (
                     <div className="border-t border-slate-100 p-3 space-y-2">
-                      {logs.map(b => (
+                      {logs.map(b => {
+                        const mine = isTeacher && b.teacher_id === user?.id
+                        return (
                         <div key={b.id} className="p-3 bg-slate-50 rounded-xl flex gap-4">
-                          <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center flex-shrink-0 text-sm font-bold text-slate-500">
-                            {b.teacher_name?.[0] || 'T'}
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${mine ? 'bg-teal-50 text-teal-600' : 'bg-white text-slate-500 text-sm font-bold'}`}>
+                            {mine ? <Pencil size={14}/> : (b.teacher_name?.[0] || 'T')}
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-2 flex-wrap">
-                              <p className="text-sm font-medium text-slate-800">{b.teacher_name}</p>
+                              <p className="text-sm font-medium text-slate-800">{mine ? 'Logged by you' : b.teacher_name}</p>
                               <div className="flex items-center gap-2">
                                 <SentimentBadge sentiment={b.sentiment} />
                                 {b.category && <span className="text-xs text-slate-400 bg-white px-2 py-0.5 rounded-full">{b.category}</span>}
@@ -565,7 +569,8 @@ export default function StudentDetail() {
                             )}
                           </div>
                         </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   )}
                 </div>
