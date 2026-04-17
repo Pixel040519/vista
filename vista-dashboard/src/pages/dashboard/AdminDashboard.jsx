@@ -9,6 +9,7 @@ import { aiApi } from '../../api/client'
 import { StatCard, LoadingSpinner } from '../../components/UI'
 import { useAuth } from '../../context/AuthContext'
 import AttendanceDetailModal from '../../components/AttendanceDetailModal'
+import AdminEceOverviewCard from './AdminEceOverviewCard'
 
 const SENTIMENT_COLORS = { Positive: '#14b8a6', Neutral: '#94a3b8', Negative: '#f43f5e' }
 const RISK_COLORS = { stable: '#22c55e', moderate_risk: '#f59e0b', high_risk: '#ef4444' }
@@ -302,6 +303,9 @@ export default function AdminDashboard() {
               )}
             </div>
           </div>
+
+          {/* ECE Competency Overview */}
+          <AdminEceOverviewCard />
 
           {/* Enrollment by Grade */}
           {data?.overview?.enrollment_by_grade?.length > 0 && (

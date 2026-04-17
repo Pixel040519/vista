@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { eceApi, curriculumApi } from '../api/client'
 import { LoadingSpinner } from '../components/UI'
-import { Baby, Save, Info, Plus, Pencil, Trash2, X, Check, ChevronDown, ChevronRight, GripVertical } from 'lucide-react'
+import { Baby, Save, Info, Plus, Pencil, Trash2, X, Check, ChevronDown, ChevronRight, GripVertical, Eye } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
@@ -70,11 +70,26 @@ function SkillItem({ skill, onEdit, onDelete }) {
 }
 
 export default function EceCompetency() {
-  const { activeAssignments } = useAuth()
+  const { user, activeAssignments } = useAuth()
+  const isReadOnly = user?.role === 'admin'
+
+  // Admin: load all ECE sections school-wide (they have no activeAssignments).
+  // Teacher: build class list from activeAssignments filtered to ECE grades.
+  const [adminSections, setAdminSections] = useState([])
+  useEffect(() => {
+    if (!isReadOnly) return
+    curriculumApi.getSections()
+      .then(res => setAdminSections(res.data.sections || []))
+      .catch(() => setAdminSections([]))
+  }, [isReadOnly])
+
   const eceClasses = useMemo(() => {
     const seen = new Set()
     const out = []
-    for (const a of activeAssignments || []) {
+    const source = isReadOnly
+      ? adminSections.map(s => ({ grade_level: s.grade_level, section: s.name }))
+      : (activeAssignments || [])
+    for (const a of source) {
       if (!ECE_GRADES.includes(a.grade_level)) continue
       const key = `${a.grade_level}||${a.section}`
       if (seen.has(key)) continue
@@ -82,7 +97,7 @@ export default function EceCompetency() {
       out.push({ grade_level: a.grade_level, section: a.section, key })
     }
     return out
-  }, [activeAssignments])
+  }, [isReadOnly, activeAssignments, adminSections])
 
   const [selectedClass, setSelectedClass] = useState('')
   const [quarter, setQuarter] = useState(1)
@@ -332,9 +347,13 @@ export default function EceCompetency() {
     return (
       <div className="card p-8 text-center">
         <Baby size={40} className="mx-auto text-slate-300 mb-3" />
-        <h2 className="text-lg font-semibold text-slate-800">No ECE classes assigned</h2>
+        <h2 className="text-lg font-semibold text-slate-800">
+          {isReadOnly ? 'No ECE classes configured' : 'No ECE classes assigned'}
+        </h2>
         <p className="text-sm text-slate-500 mt-1">
-          Competency tracking is available for Pre-Nursery, Nursery, Pre-Kinder, and Kinder teachers.
+          {isReadOnly
+            ? 'No Pre-Nursery, Nursery, Pre-Kinder, or Kinder sections exist in the active school year.'
+            : 'Competency tracking is available for Pre-Nursery, Nursery, Pre-Kinder, and Kinder teachers.'}
         </p>
       </div>
     )
@@ -350,16 +369,29 @@ export default function EceCompetency() {
     <div className="space-y-5 animate-fade-in">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="page-title">ECE Competency Tracker</h1>
-          <p className="page-subtitle">Record developmental milestones for early learners</p>
+          <h1 className="page-title flex items-center gap-2 flex-wrap">
+            ECE Competency Tracker
+            {isReadOnly && (
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide bg-purple-50 text-purple-700 border border-purple-200 rounded-full px-2 py-0.5">
+                <Eye size={11} /> Read-only · Admin view
+              </span>
+            )}
+          </h1>
+          <p className="page-subtitle">
+            {isReadOnly
+              ? 'Review developmental milestones recorded by teachers'
+              : 'Record developmental milestones for early learners'}
+          </p>
         </div>
-        <button
-          onClick={handleSave}
-          disabled={!dirty || saving}
-          className="btn-primary"
-        >
-          <Save size={16} /> {saving ? 'Saving...' : 'Save Ratings'}
-        </button>
+        {!isReadOnly && (
+          <button
+            onClick={handleSave}
+            disabled={!dirty || saving}
+            className="btn-primary"
+          >
+            <Save size={16} /> {saving ? 'Saving...' : 'Save Ratings'}
+          </button>
+        )}
       </div>
 
       {/* Filters */}
@@ -389,7 +421,9 @@ export default function EceCompetency() {
             {r.value} = {r.label}
           </span>
         ))}
-        <span className="text-slate-400 ml-auto">Click a rating again to clear it</span>
+        {!isReadOnly && (
+          <span className="text-slate-400 ml-auto">Click a rating again to clear it</span>
+        )}
       </div>
 
       {loading ? <LoadingSpinner /> : (
@@ -421,29 +455,31 @@ export default function EceCompetency() {
                     </span>
                     <h3 className="text-sm font-semibold text-slate-800">{subj.name}</h3>
                   </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <button
-                      onClick={() => setManagingSubject(managingSubject === subj.id ? null : subj.id)}
-                      className={`text-xs font-medium px-2.5 py-1.5 rounded-lg transition-colors ${
-                        managingSubject === subj.id
-                          ? 'bg-teal-100 text-teal-700'
-                          : 'text-slate-500 hover:text-teal-600 hover:bg-teal-50'
-                      }`}
-                    >
-                      <Pencil size={12} className="inline -mt-0.5 mr-1" />
-                      Manage
-                    </button>
-                    <button
-                      onClick={() => { setAddingToSubject(subj.id); setEditingSkill(null) }}
-                      className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-teal-600 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors"
-                    >
-                      <Plus size={13} /> Add
-                    </button>
-                  </div>
+                  {!isReadOnly && (
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => setManagingSubject(managingSubject === subj.id ? null : subj.id)}
+                        className={`text-xs font-medium px-2.5 py-1.5 rounded-lg transition-colors ${
+                          managingSubject === subj.id
+                            ? 'bg-teal-100 text-teal-700'
+                            : 'text-slate-500 hover:text-teal-600 hover:bg-teal-50'
+                        }`}
+                      >
+                        <Pencil size={12} className="inline -mt-0.5 mr-1" />
+                        Manage
+                      </button>
+                      <button
+                        onClick={() => { setAddingToSubject(subj.id); setEditingSkill(null) }}
+                        className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-teal-600 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors"
+                      >
+                        <Plus size={13} /> Add
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Skill management list (toggled) */}
-                {managingSubject === subj.id && subj.skills.length > 0 && (
+                {!isReadOnly && managingSubject === subj.id && subj.skills.length > 0 && (
                   <div className="border-b border-slate-100 bg-slate-50/50 py-1">
                     <p className="px-5 py-1 text-xs text-slate-400">
                       Descriptions under {subj.name}
@@ -470,7 +506,7 @@ export default function EceCompetency() {
                 )}
 
                 {/* Add skill form */}
-                {addingToSubject === subj.id && (
+                {!isReadOnly && addingToSubject === subj.id && (
                   <SkillForm
                     saving={skillSaving}
                     onSave={handleAddSkill}
@@ -481,7 +517,10 @@ export default function EceCompetency() {
                 {/* Student rows */}
                 {subj.skills.length === 0 ? (
                   <div className="px-5 py-6 text-center text-sm text-slate-400">
-                    No descriptions yet. Click <span className="font-medium text-teal-600">+ Add</span> to create one.
+                    {isReadOnly
+                      ? 'No descriptions have been added for this subject yet.'
+                      : <>No descriptions yet. Click <span className="font-medium text-teal-600">+ Add</span> to create one.</>
+                    }
                   </div>
                 ) : (
                   <>
@@ -538,21 +577,34 @@ export default function EceCompetency() {
                                         <span className="text-sm font-medium text-slate-800">{sk.name}</span>
                                       </div>
                                       <div className="flex gap-1 flex-shrink-0">
-                                        {RATINGS.map(r => (
-                                          <button
-                                            key={r.value}
-                                            type="button"
-                                            onClick={(e) => { e.stopPropagation(); setRating(st.id, sk.id, r.value) }}
-                                            className={`w-8 h-7 rounded-md text-xs font-bold border transition ${
-                                              current === r.value
-                                                ? r.color
-                                                : 'border-slate-300 text-slate-500 hover:border-slate-400 hover:text-slate-600'
-                                            }`}
-                                            title={r.label}
-                                          >
-                                            {r.value}
-                                          </button>
-                                        ))}
+                                        {isReadOnly ? (
+                                          current ? (
+                                            <span
+                                              className={`w-8 h-7 rounded-md text-xs font-bold border inline-flex items-center justify-center ${RATINGS.find(r => r.value === current)?.color}`}
+                                              title={RATINGS.find(r => r.value === current)?.label}
+                                            >
+                                              {current}
+                                            </span>
+                                          ) : (
+                                            <span className="text-[11px] text-slate-400 italic">Not rated</span>
+                                          )
+                                        ) : (
+                                          RATINGS.map(r => (
+                                            <button
+                                              key={r.value}
+                                              type="button"
+                                              onClick={(e) => { e.stopPropagation(); setRating(st.id, sk.id, r.value) }}
+                                              className={`w-8 h-7 rounded-md text-xs font-bold border transition ${
+                                                current === r.value
+                                                  ? r.color
+                                                  : 'border-slate-300 text-slate-500 hover:border-slate-400 hover:text-slate-600'
+                                              }`}
+                                              title={r.label}
+                                            >
+                                              {r.value}
+                                            </button>
+                                          ))
+                                        )}
                                       </div>
                                     </div>
                                   )

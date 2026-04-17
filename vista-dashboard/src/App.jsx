@@ -66,7 +66,7 @@ export default function App() {
             } />
 
             <Route path="ece-competency" element={
-              <PrivateRoute roles={['teacher']}><EceCompetency /></PrivateRoute>
+              <PrivateRoute roles={['admin', 'teacher']}><EceCompetency /></PrivateRoute>
             } />
 
             <Route path="behavior" element={<Behavior />} />

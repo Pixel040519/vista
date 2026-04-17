@@ -42,25 +42,40 @@ const verifyEceAssignment = async (req, gradeLevel, section) => {
   }
 }
 
-// ─── Summary: dashboard widget for teacher ──────────────────
+// ─── Summary: dashboard widget ──────────────────────────────
 // GET /summary?quarter=<1-4>  (quarter auto-detected if omitted)
-// Returns per-class completion stats + rating distribution.
-router.get('/summary', authorize('teacher'), async (req, res, next) => {
+// Teacher: scoped to their ECE assignments. Admin: school-wide.
+// Returns per-class completion stats + rating distribution + by_grade_level rollup.
+router.get('/summary', authorize('admin', 'teacher'), async (req, res, next) => {
   try {
     const sy = await getActiveSYId()
+    const isAdmin = req.user.role === 'admin'
 
-    // Get teacher's ECE assignments
-    const asgn = await query(
-      `SELECT DISTINCT grade_level, section
-       FROM teacher_assignments
-       WHERE teacher_id=$1 AND school_year=$2
-         AND grade_level = ANY($3)`,
-      [req.user.id, sy.label, ECE_GRADES]
-    )
+    // Resolve the set of ECE (grade_level, section) pairs to aggregate over.
+    // Teacher: their own assignments. Admin: every ECE class in the school.
+    const asgn = isAdmin
+      ? await query(
+          `SELECT DISTINCT grade_level, section
+           FROM teacher_assignments
+           WHERE school_year=$1 AND grade_level = ANY($2)
+           ORDER BY grade_level, section`,
+          [sy.label, ECE_GRADES]
+        )
+      : await query(
+          `SELECT DISTINCT grade_level, section
+           FROM teacher_assignments
+           WHERE teacher_id=$1 AND school_year=$2
+             AND grade_level = ANY($3)`,
+          [req.user.id, sy.label, ECE_GRADES]
+        )
     if (!asgn.rows.length) {
       return res.json({
         quarter: 1,
         classes: [],
+        by_grade_level: ECE_GRADES.map(gl => ({
+          grade_level: gl, class_count: 0, student_count: 0,
+          rated_cells: 0, total_cells: 0, completion_pct: 0,
+        })),
         totals: { students: 0, rated_cells: 0, total_cells: 0, completion_pct: 0 },
         rating_distribution: { E: 0, G: 0, F: 0, NA: 0 },
       })
@@ -135,9 +150,26 @@ router.get('/summary', authorize('teacher'), async (req, res, next) => {
       totalCells += cells
     }
 
+    // Roll up per-class stats into a per-grade-level summary (for admin card).
+    const byGradeLevel = ECE_GRADES.map(gl => {
+      const entries = classes.filter(c => c.grade_level === gl)
+      const rated = entries.reduce((a, c) => a + c.rated_cells, 0)
+      const total = entries.reduce((a, c) => a + c.total_cells, 0)
+      const stu   = entries.reduce((a, c) => a + c.student_count, 0)
+      return {
+        grade_level: gl,
+        class_count: entries.length,
+        student_count: stu,
+        rated_cells: rated,
+        total_cells: total,
+        completion_pct: total > 0 ? Math.round((rated / total) * 1000) / 10 : 0,
+      }
+    })
+
     res.json({
       quarter,
       classes,
+      by_grade_level: byGradeLevel,
       totals: {
         students: totalStudents,
         rated_cells: totalRated,
