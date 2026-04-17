@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import {
@@ -7,6 +8,7 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 import { formatName, nameInitial } from '../../utils/nameHelper'
+import { Modal } from '../UI'
 import nrysLogo from '../../assets/NRYS_logo.png'
 
 const adminNavGroups = [
@@ -78,8 +80,10 @@ export default function Sidebar({ open, onClose }) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+  const [confirmLogout, setConfirmLogout] = useState(false)
 
   const handleLogout = () => {
+    setConfirmLogout(false)
     logout()
     navigate('/login')
   }
@@ -151,25 +155,72 @@ export default function Sidebar({ open, onClose }) {
 
       {/* User footer */}
       <div className="px-3 py-4 border-t border-white/10">
-        <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl">
-          <div className="w-8 h-8 rounded-full bg-teal-500/20 border border-teal-500/30 flex items-center justify-center flex-shrink-0">
-            <span className="text-teal-400 text-sm font-bold">
-              {user ? nameInitial(user) : 'U'}
-            </span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-white text-sm font-medium truncate">{user ? formatName(user) : ''}</p>
-            <p className="text-slate-500 text-xs capitalize">{user?.role}</p>
-          </div>
+        <div className="flex items-center gap-1 px-1 py-1 rounded-xl">
+          <NavLink
+            to="/profile"
+            onClick={handleNavClick}
+            className={({ isActive }) => clsx(
+              'flex items-center gap-3 flex-1 min-w-0 px-2 py-1.5 rounded-lg transition-colors',
+              isActive ? 'bg-white/10' : 'hover:bg-white/5'
+            )}
+            title="View profile"
+          >
+            <div className="w-8 h-8 rounded-full bg-teal-500/20 border border-teal-500/30 flex items-center justify-center flex-shrink-0">
+              <span className="text-teal-400 text-sm font-bold">
+                {user ? nameInitial(user) : 'U'}
+              </span>
+            </div>
+            <div className="flex-1 min-w-0 text-left">
+              <p className="text-white text-sm font-medium truncate">{user ? formatName(user) : ''}</p>
+              <p className="text-slate-500 text-xs capitalize">{user?.role}</p>
+            </div>
+          </NavLink>
           <button
-            onClick={handleLogout}
-            className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-400/10 transition-colors"
-            title="Logout"
+            onClick={() => setConfirmLogout(true)}
+            className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-400/10 transition-colors flex-shrink-0"
+            title="Sign out"
           >
             <LogOut size={15} />
           </button>
         </div>
       </div>
+
+      <Modal
+        open={confirmLogout}
+        onClose={() => setConfirmLogout(false)}
+        title="Sign out?"
+        size="sm"
+      >
+        <div className="space-y-5">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center flex-shrink-0">
+              <LogOut size={18} />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm text-slate-700">
+                You'll be returned to the login screen. Any unsaved changes on the current page will be lost.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-3 pt-1 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setConfirmLogout(false)}
+              className="btn-secondary flex-1"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="btn-primary flex-1 justify-center !bg-red-600 hover:!bg-red-700"
+            >
+              <LogOut size={15} />
+              Sign out
+            </button>
+          </div>
+        </div>
+      </Modal>
     </aside>
   )
 }

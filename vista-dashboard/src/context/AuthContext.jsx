@@ -43,8 +43,12 @@ export function AuthProvider({ children }) {
     return user.assignments.filter(a => a.school_year === user.active_school_year)
   }, [user])
 
+  const updateUser = (patch) => {
+    setUser(prev => prev ? { ...prev, ...patch } : prev)
+  }
+
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading, activeAssignments }}>
+    <AuthContext.Provider value={{ user, login, logout, loading, activeAssignments, updateUser }}>
       {children}
     </AuthContext.Provider>
   )

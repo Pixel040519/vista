@@ -23,6 +23,7 @@ const accountRoutes = require('./routes/account.routes');
 const curriculumRoutes = require('./routes/curriculum.routes');
 const scoreRoutes = require('./routes/score.routes');
 const eceRoutes = require('./routes/ece.routes');
+const profileRoutes = require('./routes/profile.routes');
 
 const { errorHandler } = require('./middleware/error.middleware');
 
@@ -75,6 +76,7 @@ app.use('/api/accounts', accountRoutes);   // Admin: teacher account management
 app.use('/api/curriculum', curriculumRoutes); // Subjects & sections management
 app.use('/api/scores', scoreRoutes);         // Score items & student scores
 app.use('/api/ece', eceRoutes);              // ECE competency catalog & records
+app.use('/api/profile', profileRoutes);      // Self-service profile (any role)
 
 // ─── 404 Handler ──────────────────────────────────────────────
 app.use((req, res) => {

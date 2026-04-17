@@ -17,6 +17,7 @@ import AccountManagement from './pages/AccountManagement'
 import CurriculumManagement from './pages/CurriculumManagement'
 import ScoreEntry from './pages/ScoreEntry'
 import EceCompetency from './pages/EceCompetency'
+import Profile from './pages/Profile'
 
 
 function PrivateRoute({ children, roles }) {
@@ -83,6 +84,8 @@ export default function App() {
             } />
 
             <Route path="announcements" element={<Announcements />} />
+
+            <Route path="profile" element={<Profile />} />
 
             <Route path="accounts" element={
               <PrivateRoute roles={['admin']}><AccountManagement /></PrivateRoute>

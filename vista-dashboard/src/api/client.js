@@ -67,6 +67,12 @@ export const authApi = {
   me:    ()     => api.get('/auth/me'),
 }
 
+// ── Profile (self-service, any role) ─────────────────────────
+export const profileApi = {
+  updateMe:       (data) => api.put('/profile/me', data),
+  changePassword: (data) => api.patch('/profile/me/password', data),
+}
+
 // ── Students ──────────────────────────────────────────────────
 export const studentApi = {
   list:           (params) => api.get('/students', { params }),
