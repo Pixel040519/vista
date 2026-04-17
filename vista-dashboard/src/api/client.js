@@ -147,6 +147,7 @@ export const eceApi = {
   deleteSkill:    (id)      => api.delete(`/ece/skills/${id}`),
   getRecords:     (params)  => api.get('/ece/records', { params }),
   saveRecords:    (data)    => api.post('/ece/records', data),
+  getSummary:     (params)  => api.get('/ece/summary', { params }),
 }
 
 // ── Account Management (Admin only) ──────────────────────────

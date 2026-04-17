@@ -2,12 +2,13 @@ import { useState, useEffect, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Users, UserCheck, UserX, AlertTriangle, ClipboardCheck, CheckCircle2,
-  ChevronRight, MessageSquare, BookOpen, Sparkles, Clock, ArrowRight,
+  ChevronRight, BookOpen, Clock, ArrowRight,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { aiApi } from '../../api/client'
 import { StatCard, LoadingSpinner } from '../../components/UI'
 import { useAuth } from '../../context/AuthContext'
+import EceCompetencyCard from './EceCompetencyCard'
 
 const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
 
@@ -492,28 +493,8 @@ export default function TeacherDashboard() {
               })()}
             </div>
 
-            {/* ECE Competency placeholder — only for ECE-assigned teachers */}
-            {isECE && (
-              <div className="card p-5 border-2 border-dashed border-purple-200 bg-purple-50/30">
-                <div className="flex items-center gap-2 mb-2">
-                  <Sparkles size={16} className="text-purple-500" />
-                  <h3 className="text-sm font-semibold text-slate-800">ECE Competency Checklist</h3>
-                </div>
-                <p className="text-xs text-slate-500 mb-3">
-                  Coming soon — log developmental milestones for your{' '}
-                  <span className="font-semibold text-purple-700">{data?.ece_student_count || 0}</span>{' '}
-                  ECE student{(data?.ece_student_count || 0) !== 1 ? 's' : ''} on the
-                  E / G / F / NA scale.
-                </p>
-                <div className="grid grid-cols-2 gap-1.5 text-[11px]">
-                  {['Reading & Language', 'Phonemic Awareness', 'Cognitive', 'Motor Skills'].map(d => (
-                    <div key={d} className="px-2 py-1 bg-white rounded-md border border-purple-100 text-purple-700">
-                      {d}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* ECE Competency — only for ECE-assigned teachers */}
+            {isECE && <EceCompetencyCard />}
           </div>
         </>
       )}

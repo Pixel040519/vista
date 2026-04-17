@@ -42,6 +42,113 @@ const verifyEceAssignment = async (req, gradeLevel, section) => {
   }
 }
 
+// ─── Summary: dashboard widget for teacher ──────────────────
+// GET /summary?quarter=<1-4>  (quarter auto-detected if omitted)
+// Returns per-class completion stats + rating distribution.
+router.get('/summary', authorize('teacher'), async (req, res, next) => {
+  try {
+    const sy = await getActiveSYId()
+
+    // Get teacher's ECE assignments
+    const asgn = await query(
+      `SELECT DISTINCT grade_level, section
+       FROM teacher_assignments
+       WHERE teacher_id=$1 AND school_year=$2
+         AND grade_level = ANY($3)`,
+      [req.user.id, sy.label, ECE_GRADES]
+    )
+    if (!asgn.rows.length) {
+      return res.json({
+        quarter: 1,
+        classes: [],
+        totals: { students: 0, rated_cells: 0, total_cells: 0, completion_pct: 0 },
+        rating_distribution: { E: 0, G: 0, F: 0, NA: 0 },
+      })
+    }
+
+    // Resolve quarter: use explicit param, else latest quarter with records, else Q1
+    let quarter = parseInt(req.query.quarter) || 0
+    if (!quarter) {
+      const qRes = await query(
+        `SELECT MAX(r.quarter) AS latest
+         FROM ece_competency_records r
+         JOIN students s ON s.id = r.student_id
+         WHERE r.school_year_id=$1
+           AND (s.grade_level, s.section) IN (${asgn.rows.map((_, i) => `($${i*2+2}, $${i*2+3})`).join(', ')})`,
+        [sy.id, ...asgn.rows.flatMap(a => [a.grade_level, a.section])]
+      )
+      quarter = qRes.rows[0]?.latest || 1
+    }
+
+    const classes = []
+    let totalStudents = 0, totalRated = 0, totalCells = 0
+    const dist = { E: 0, G: 0, F: 0, NA: 0 }
+
+    for (const a of asgn.rows) {
+      // Count students
+      const stRes = await query(
+        `SELECT COUNT(*)::int AS cnt FROM students
+         WHERE is_active=TRUE AND grade_level=$1 AND section=$2`,
+        [a.grade_level, a.section]
+      )
+      const studentCount = stRes.rows[0].cnt
+
+      // Count active skills for this grade level
+      const skRes = await query(
+        `SELECT COUNT(*)::int AS cnt FROM competency_skills cs
+         JOIN subjects sub ON sub.id = cs.subject_id
+         WHERE cs.is_active=TRUE AND sub.grade_level=$1`,
+        [a.grade_level]
+      )
+      const skillCount = skRes.rows[0].cnt
+
+      // Count records + distribution for this class
+      const recRes = await query(
+        `SELECT r.rating, COUNT(*)::int AS cnt
+         FROM ece_competency_records r
+         JOIN students s ON s.id = r.student_id
+         WHERE s.grade_level=$1 AND s.section=$2
+           AND r.school_year_id=$3 AND r.quarter=$4
+         GROUP BY r.rating`,
+        [a.grade_level, a.section, sy.id, quarter]
+      )
+
+      let ratedCells = 0
+      for (const row of recRes.rows) {
+        ratedCells += row.cnt
+        if (dist.hasOwnProperty(row.rating)) dist[row.rating] += row.cnt
+      }
+
+      const cells = studentCount * skillCount
+      classes.push({
+        grade_level: a.grade_level,
+        section: a.section,
+        student_count: studentCount,
+        total_skills: skillCount,
+        rated_cells: ratedCells,
+        total_cells: cells,
+        completion_pct: cells > 0 ? Math.round((ratedCells / cells) * 1000) / 10 : 0,
+      })
+
+      totalStudents += studentCount
+      totalRated += ratedCells
+      totalCells += cells
+    }
+
+    res.json({
+      quarter,
+      classes,
+      totals: {
+        students: totalStudents,
+        rated_cells: totalRated,
+        total_cells: totalCells,
+        completion_pct: totalCells > 0 ? Math.round((totalRated / totalCells) * 1000) / 10 : 0,
+      },
+      rating_distribution: dist,
+    })
+  } catch (e) { next(e) }
+})
+
 // ─── Catalog: Skills (grouped by subject) ────────────────────
 router.get('/skills', async (req, res, next) => {
   try {
