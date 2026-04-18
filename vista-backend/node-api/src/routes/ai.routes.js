@@ -481,55 +481,75 @@ router.get('/ece-class-health', authorize('admin', 'teacher'), async (req, res, 
     );
     const latestQ = latestQRes.rows[0]?.q || null;
 
-    let competency;
-    if (!latestQ) {
-      // No ratings yet — still report total_skills so the suggestion can nudge.
-      const skillsRes = await query(
-        `SELECT COUNT(*)::int AS n
-           FROM competency_skills s
-           JOIN subjects sub ON sub.id = s.subject_id
-          WHERE s.is_active = TRUE AND sub.grade_level = $1`,
-        [st.grade_level]
+    // Per-subject totals for this student's grade level (used in both branches).
+    const subjectTotalsRes = await query(
+      `SELECT sub.id         AS subject_id,
+              sub.name       AS subject_name,
+              COUNT(s.id)::int AS total_skills
+         FROM subjects sub
+         LEFT JOIN competency_skills s
+           ON s.subject_id = sub.id AND s.is_active = TRUE
+        WHERE sub.grade_level = $1
+        GROUP BY sub.id, sub.name
+       HAVING COUNT(s.id) > 0
+        ORDER BY sub.name`,
+      [st.grade_level]
+    );
+    const subjectTotals = subjectTotalsRes.rows;
+    const totalSkills   = subjectTotals.reduce((a, r) => a + r.total_skills, 0);
+
+    // Per-subject rating distribution for the latest quarter (empty map if no Q).
+    const perSubjectDist = new Map(); // subject_id -> { E, G, F, NA }
+    if (latestQ) {
+      const ratingRes = await query(
+        `SELECT s.subject_id, r.rating, COUNT(*)::int AS n
+           FROM ece_competency_records r
+           JOIN competency_skills s ON s.id = r.skill_id
+          WHERE r.student_id = $1
+            AND r.school_year_id = $2
+            AND r.quarter = $3
+          GROUP BY s.subject_id, r.rating`,
+        [student_id, sy.id, latestQ]
       );
-      competency = {
-        quarter: null,
-        rated: 0,
-        total_skills: skillsRes.rows[0]?.n || 0,
-        completion: null,
-        distribution: { E: 0, G: 0, F: 0, NA: 0 },
-        band: 'insufficient',
-      };
-    } else {
-      const [skillsRes, ratingRes] = await Promise.all([
-        query(
-          `SELECT COUNT(*)::int AS n
-             FROM competency_skills s
-             JOIN subjects sub ON sub.id = s.subject_id
-            WHERE s.is_active = TRUE AND sub.grade_level = $1`,
-          [st.grade_level]
-        ),
-        query(
-          `SELECT rating, COUNT(*)::int AS n
-             FROM ece_competency_records
-            WHERE student_id = $1 AND school_year_id = $2 AND quarter = $3
-            GROUP BY rating`,
-          [student_id, sy.id, latestQ]
-        ),
-      ]);
-      const totalSkills = skillsRes.rows[0]?.n || 0;
-      const dist = { E: 0, G: 0, F: 0, NA: 0 };
-      for (const r of ratingRes.rows) dist[r.rating] = r.n;
-      const rated = dist.E + dist.G + dist.F + dist.NA;
-      const completion = totalSkills > 0 ? rated / totalSkills : 0;
-      competency = {
-        quarter: latestQ,
-        rated,
-        total_skills: totalSkills,
-        completion: Math.round(completion * 10000) / 10000,
-        distribution: dist,
-        band: bandCompetency(dist, totalSkills),
-      };
+      for (const row of ratingRes.rows) {
+        const d = perSubjectDist.get(row.subject_id) || { E: 0, G: 0, F: 0, NA: 0 };
+        d[row.rating] = row.n;
+        perSubjectDist.set(row.subject_id, d);
+      }
     }
+
+    // Build per-subject entries + aggregate totals.
+    const BAND_SORT = { urgent: 0, watch: 1, insufficient: 2, ok: 3 };
+    const overallDist = { E: 0, G: 0, F: 0, NA: 0 };
+    const per_subject = subjectTotals.map(s => {
+      const dist = perSubjectDist.get(s.subject_id) || { E: 0, G: 0, F: 0, NA: 0 };
+      const rated = dist.E + dist.G + dist.F + dist.NA;
+      overallDist.E += dist.E; overallDist.G += dist.G;
+      overallDist.F += dist.F; overallDist.NA += dist.NA;
+      return {
+        subject_id:   s.subject_id,
+        subject_name: s.subject_name,
+        rated,
+        total_skills: s.total_skills,
+        distribution: dist,
+        band:         bandCompetency(dist, s.total_skills),
+      };
+    }).sort((a, b) =>
+      (BAND_SORT[a.band] - BAND_SORT[b.band]) ||
+      a.subject_name.localeCompare(b.subject_name)
+    );
+
+    const overallRated      = overallDist.E + overallDist.G + overallDist.F + overallDist.NA;
+    const overallCompletion = totalSkills > 0 ? overallRated / totalSkills : 0;
+    const competency = {
+      quarter:      latestQ,
+      rated:        overallRated,
+      total_skills: totalSkills,
+      completion:   Math.round(overallCompletion * 10000) / 10000,
+      distribution: overallDist,
+      band:         bandCompetency(overallDist, totalSkills),
+      per_subject,
+    };
 
     // 5. Attendance — last 30 days. Teachers filter to their own subjects.
     const attArgs = [student_id];
@@ -576,23 +596,44 @@ router.get('/ece-class-health', authorize('admin', 'teacher'), async (req, res, 
     // 7. Overall band = worst of non-insufficient
     const overall_band = overallBand([competency.band, attBand, behBand]);
 
-    // 8. DSS suggestions
+    // 8. DSS suggestions — per-subject competency lines, then attendance + behavior.
     const suggestions = [];
-    const naCount = competency.distribution.NA;
-    const fCount  = competency.distribution.F;
-    if (competency.band === 'urgent') {
+    const urgentSubjects = competency.per_subject.filter(s => s.band === 'urgent');
+    const watchSubjects  = competency.per_subject.filter(s => s.band === 'watch');
+    const URGENT_CAP = 3;
+    const WATCH_CAP  = 2;
+
+    for (const s of urgentSubjects.slice(0, URGENT_CAP)) {
+      const na = s.distribution.NA;
       suggestions.push({
         severity: 'urgent',
-        text: `${naCount} skill${naCount === 1 ? '' : 's'} marked Needs Assistance in Q${competency.quarter}. Plan a targeted play-based intervention this week.`,
+        text: `${s.subject_name}: ${na} skill${na === 1 ? '' : 's'} marked Needs Assistance in Q${competency.quarter}. Plan a targeted play-based session this week.`,
         action: { type: 'ece', label: 'Open ECE Competency' },
       });
-    } else if (competency.band === 'watch') {
+    }
+    for (const s of watchSubjects.slice(0, WATCH_CAP)) {
+      const below = (s.distribution.NA || 0) + (s.distribution.F || 0);
       suggestions.push({
         severity: 'watch',
-        text: `Some competencies need more support (${naCount + fCount} below "Good"). Schedule focused practice and re-observe next week.`,
+        text: `${s.subject_name}: ${below} skill${below === 1 ? '' : 's'} below "Good" in Q${competency.quarter}. Schedule focused practice and re-observe next week.`,
         action: { type: 'ece', label: 'Open ECE Competency' },
       });
-    } else if (competency.band === 'insufficient' && competency.total_skills > 0) {
+    }
+    const overflowCount =
+      Math.max(0, urgentSubjects.length - URGENT_CAP) +
+      Math.max(0, watchSubjects.length  - WATCH_CAP);
+    if (overflowCount > 0) {
+      suggestions.push({
+        severity: 'watch',
+        text: `+${overflowCount} more subject${overflowCount === 1 ? '' : 's'} need attention — review the full list.`,
+        action: { type: 'ece', label: 'Open ECE Competency' },
+      });
+    }
+
+    // Overall-completion nudge — fires only when no per-subject lines were
+    // added (otherwise it's redundant), and the overall band is insufficient.
+    if (urgentSubjects.length === 0 && watchSubjects.length === 0
+        && competency.band === 'insufficient' && competency.total_skills > 0) {
       suggestions.push({
         severity: 'watch',
         text: competency.quarter

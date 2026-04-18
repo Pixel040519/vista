@@ -66,6 +66,8 @@ export default function StudentDetail() {
   const [eceAccessError, setEceAccessError] = useState(null)
   const [expandedEceSY, setExpandedEceSY] = useState(true)
   const [expandedEceSubjects, setExpandedEceSubjects] = useState(() => new Set())
+  const [expandedEceInsightsOk, setExpandedEceInsightsOk] = useState(false)
+  const [expandedEceInsightsInsufficient, setExpandedEceInsightsInsufficient] = useState(false)
 
   const isECE = !!student && ECE_GRADES.includes(student.grade_level)
 
@@ -818,11 +820,6 @@ export default function StudentDetail() {
             }
             const { overall_band, metrics, suggestions } = eceHealth
             const { competency, attendance: att, behavior: beh } = metrics
-            const fmtRate = (r) => r === null || r === undefined ? '—' : `${Math.round(r * 100)}%`
-            const fmtSent = (s) => s === null || s === undefined ? '—' : (s >= 0 ? `+${s.toFixed(2)}` : s.toFixed(2))
-            const compPct = competency.total_skills > 0
-              ? Math.round((competency.rated / competency.total_skills) * 100)
-              : null
 
             return (
               <div className="space-y-5">
@@ -851,52 +848,168 @@ export default function StudentDetail() {
                   </p>
 
                   <div className="space-y-2">
-                    {/* Competency */}
-                    <div className="flex items-start justify-between gap-3 p-3 bg-slate-50 rounded-xl">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-slate-800">Competency</p>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {competency.total_skills === 0
-                            ? 'No competency skills defined for this grade level yet.'
-                            : competency.quarter
-                              ? `${competency.rated} of ${competency.total_skills} skills rated · Q${competency.quarter}`
-                              : `${competency.rated} of ${competency.total_skills} skills rated · no quarter yet`}
-                        </p>
-                        {competency.rated > 0 && (
-                          <>
-                            <div className="mt-1.5 flex h-2 rounded-full overflow-hidden bg-slate-200">
-                              {ECE_RATINGS.map(r => {
-                                const count = competency.distribution[r.value] || 0
-                                if (!count) return null
-                                const pct = (count / competency.total_skills) * 100
-                                return (
-                                  <div
-                                    key={r.value}
-                                    className={r.color.split(' ')[0]}
-                                    style={{ width: `${pct}%` }}
-                                    title={`${r.label}: ${count}`}
-                                  />
-                                )
-                              })}
+                    {/* Competency — overview header + per-subject breakdown */}
+                    {(() => {
+                      const perSubject = competency.per_subject || []
+                      const urgentAndWatch = perSubject.filter(s => s.band === 'urgent' || s.band === 'watch')
+                      const insufficientSubjects = perSubject.filter(s => s.band === 'insufficient')
+                      const okSubjects = perSubject.filter(s => s.band === 'ok')
+
+                      return (
+                        <div className="p-3 bg-slate-50 rounded-xl space-y-3">
+                          {/* Header — overall competency stats */}
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-semibold text-slate-800">Competency</p>
+                              <p className="text-xs text-slate-500 mt-0.5">
+                                {competency.total_skills === 0
+                                  ? 'No competency skills defined for this grade level yet.'
+                                  : competency.quarter
+                                    ? `${competency.rated} of ${competency.total_skills} skills rated · Q${competency.quarter}`
+                                    : `${competency.rated} of ${competency.total_skills} skills rated · no quarter yet`}
+                              </p>
+                              {competency.rated > 0 && (
+                                <>
+                                  <div className="mt-1.5 flex h-2 rounded-full overflow-hidden bg-slate-200">
+                                    {ECE_RATINGS.map(r => {
+                                      const count = competency.distribution[r.value] || 0
+                                      if (!count) return null
+                                      const pct = (count / competency.total_skills) * 100
+                                      return (
+                                        <div
+                                          key={r.value}
+                                          className={r.color.split(' ')[0]}
+                                          style={{ width: `${pct}%` }}
+                                          title={`${r.label}: ${count}`}
+                                        />
+                                      )
+                                    })}
+                                  </div>
+                                  <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-0.5">
+                                    {ECE_RATINGS.map(r => (
+                                      <span key={r.value} className="inline-flex items-center gap-1 text-[11px] text-slate-500">
+                                        <span className={`w-2 h-2 rounded-full ${r.color.split(' ')[0]}`} />
+                                        {r.value}: <span className="font-mono text-slate-700">{competency.distribution[r.value] || 0}</span>
+                                      </span>
+                                    ))}
+                                  </div>
+                                </>
+                              )}
                             </div>
-                            <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-0.5">
-                              {ECE_RATINGS.map(r => (
-                                <span key={r.value} className="inline-flex items-center gap-1 text-[11px] text-slate-500">
-                                  <span className={`w-2 h-2 rounded-full ${r.color.split(' ')[0]}`} />
-                                  {r.value}: <span className="font-mono text-slate-700">{competency.distribution[r.value] || 0}</span>
-                                </span>
+                          </div>
+
+                          {/* Per-subject breakdown */}
+                          {perSubject.length > 0 && (
+                            <div className="space-y-1.5 pt-1">
+                              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                                By subject
+                              </p>
+
+                              {/* Urgent + Watch — shown individually */}
+                              {urgentAndWatch.map(s => (
+                                <div key={s.subject_id} className="flex items-center justify-between gap-3 px-3 py-2 bg-white rounded-lg border border-slate-100">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium text-slate-800 truncate">{s.subject_name}</p>
+                                    <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+                                      <span className="text-[11px] text-slate-500">
+                                        {s.rated} / {s.total_skills} rated
+                                      </span>
+                                      {s.rated > 0 && (
+                                        <span className="flex items-center gap-1.5">
+                                          {ECE_RATINGS.map(r => (
+                                            <span key={r.value} className="inline-flex items-center gap-0.5 text-[10px] text-slate-500">
+                                              <span className={`w-1.5 h-1.5 rounded-full ${r.color.split(' ')[0]}`} />
+                                              <span className="font-mono text-slate-700">{s.distribution[r.value] || 0}</span>
+                                            </span>
+                                          ))}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${bandStyles[s.band]}`}>
+                                    {bandLabels[s.band]}
+                                  </span>
+                                </div>
                               ))}
+
+                              {/* Insufficient — collapsed aggregate */}
+                              {insufficientSubjects.length > 0 && (
+                                <div className="bg-white rounded-lg border border-slate-100 overflow-hidden">
+                                  <button
+                                    onClick={() => setExpandedEceInsightsInsufficient(v => !v)}
+                                    className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 transition-colors text-left"
+                                  >
+                                    {expandedEceInsightsInsufficient
+                                      ? <ChevronDown size={14} className="text-slate-400 flex-shrink-0" />
+                                      : <ChevronRight size={14} className="text-slate-400 flex-shrink-0" />}
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-sm font-medium text-slate-800">
+                                        {insufficientSubjects.length} subject{insufficientSubjects.length === 1 ? '' : 's'} need{insufficientSubjects.length === 1 ? 's' : ''} more ratings
+                                      </p>
+                                      {!expandedEceInsightsInsufficient && (
+                                        <p className="text-[11px] text-slate-500 truncate">
+                                          {insufficientSubjects.map(s => s.subject_name).join(', ')}
+                                        </p>
+                                      )}
+                                    </div>
+                                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${bandStyles.insufficient}`}>
+                                      {bandLabels.insufficient}
+                                    </span>
+                                  </button>
+                                  {expandedEceInsightsInsufficient && (
+                                    <div className="border-t border-slate-100 divide-y divide-slate-50">
+                                      {insufficientSubjects.map(s => (
+                                        <div key={s.subject_id} className="flex items-center justify-between gap-3 px-3 py-1.5">
+                                          <span className="text-sm text-slate-700">{s.subject_name}</span>
+                                          <span className="text-[11px] text-slate-500 font-mono">{s.rated} / {s.total_skills}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* OK — collapsed aggregate */}
+                              {okSubjects.length > 0 && (
+                                <div className="bg-white rounded-lg border border-slate-100 overflow-hidden">
+                                  <button
+                                    onClick={() => setExpandedEceInsightsOk(v => !v)}
+                                    className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 transition-colors text-left"
+                                  >
+                                    {expandedEceInsightsOk
+                                      ? <ChevronDown size={14} className="text-slate-400 flex-shrink-0" />
+                                      : <ChevronRight size={14} className="text-slate-400 flex-shrink-0" />}
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-sm font-medium text-slate-800">
+                                        {okSubjects.length} subject{okSubjects.length === 1 ? '' : 's'} on track
+                                      </p>
+                                      {!expandedEceInsightsOk && (
+                                        <p className="text-[11px] text-slate-500 truncate">
+                                          {okSubjects.map(s => s.subject_name).join(', ')}
+                                        </p>
+                                      )}
+                                    </div>
+                                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${bandStyles.ok}`}>
+                                      {bandLabels.ok}
+                                    </span>
+                                  </button>
+                                  {expandedEceInsightsOk && (
+                                    <div className="border-t border-slate-100 divide-y divide-slate-50">
+                                      {okSubjects.map(s => (
+                                        <div key={s.subject_id} className="flex items-center justify-between gap-3 px-3 py-1.5">
+                                          <span className="text-sm text-slate-700">{s.subject_name}</span>
+                                          <span className="text-[11px] text-slate-500 font-mono">{s.rated} / {s.total_skills}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
-                          </>
-                        )}
-                      </div>
-                      <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                        <span className="text-lg font-bold text-slate-800">{compPct === null ? '—' : `${compPct}%`}</span>
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[competency.band]}`}>
-                          {bandLabels[competency.band]}
-                        </span>
-                      </div>
-                    </div>
+                          )}
+                        </div>
+                      )
+                    })()}
 
                     {/* Attendance */}
                     <div className="flex items-start justify-between gap-3 p-3 bg-slate-50 rounded-xl">
@@ -910,12 +1023,9 @@ export default function StudentDetail() {
                             : `${att.present} of ${att.total} classes · last 30 days`}
                         </p>
                       </div>
-                      <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                        <span className="text-lg font-bold text-slate-800">{fmtRate(att.rate)}</span>
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[att.band]}`}>
-                          {bandLabels[att.band]}
-                        </span>
-                      </div>
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${bandStyles[att.band]}`}>
+                        {bandLabels[att.band]}
+                      </span>
                     </div>
 
                     {/* Behavior */}
@@ -930,12 +1040,9 @@ export default function StudentDetail() {
                             : `${beh.log_count} ${beh.log_count === 1 ? 'log' : 'logs'} this month`}
                         </p>
                       </div>
-                      <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                        <span className="text-lg font-bold text-slate-800">{fmtSent(beh.avg_sentiment)}</span>
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[beh.band]}`}>
-                          {bandLabels[beh.band]}
-                        </span>
-                      </div>
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${bandStyles[beh.band]}`}>
+                        {bandLabels[beh.band]}
+                      </span>
                     </div>
                   </div>
 
@@ -1009,9 +1116,6 @@ export default function StudentDetail() {
                   insufficient: 'More data needed',
                 }
                 const { scope, overall_band, metrics } = classHealth
-                const fmtRate = (r) => r === null ? '—' : `${Math.round(r * 100)}%`
-                const fmtSent = (s) => s === null || s === undefined ? '—' : (s >= 0 ? `+${s.toFixed(2)}` : s.toFixed(2))
-                const fmtGrade = (g) => g === null ? '—' : g.toFixed(1)
                 return (
                   <div className="card p-5">
                     <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
@@ -1046,12 +1150,9 @@ export default function StudentDetail() {
                             </div>
                           )}
                         </div>
-                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                          <span className="text-lg font-bold text-slate-800">{fmtGrade(metrics.academic.avg_grade)}</span>
-                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[metrics.academic.band]}`}>
-                            {bandLabels[metrics.academic.band]}
-                          </span>
-                        </div>
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${bandStyles[metrics.academic.band]}`}>
+                          {bandLabels[metrics.academic.band]}
+                        </span>
                       </div>
 
                       {/* Attendance */}
@@ -1064,12 +1165,9 @@ export default function StudentDetail() {
                               : `${metrics.attendance.present} of ${metrics.attendance.total} classes · last 30 days`}
                           </p>
                         </div>
-                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                          <span className="text-lg font-bold text-slate-800">{fmtRate(metrics.attendance.rate)}</span>
-                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[metrics.attendance.band]}`}>
-                            {bandLabels[metrics.attendance.band]}
-                          </span>
-                        </div>
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${bandStyles[metrics.attendance.band]}`}>
+                          {bandLabels[metrics.attendance.band]}
+                        </span>
                       </div>
 
                       {/* Behavior */}
@@ -1082,12 +1180,9 @@ export default function StudentDetail() {
                               : `${metrics.behavior.log_count} ${metrics.behavior.log_count === 1 ? 'log' : 'logs'} you recorded this month`}
                           </p>
                         </div>
-                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                          <span className="text-lg font-bold text-slate-800">{fmtSent(metrics.behavior.avg_sentiment)}</span>
-                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[metrics.behavior.band]}`}>
-                            {bandLabels[metrics.behavior.band]}
-                          </span>
-                        </div>
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${bandStyles[metrics.behavior.band]}`}>
+                          {bandLabels[metrics.behavior.band]}
+                        </span>
                       </div>
                     </div>
 
