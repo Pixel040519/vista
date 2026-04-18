@@ -28,6 +28,19 @@ const bandBehavior = (sentiment, count) =>
   : sentiment >= 0 ? 'ok'
   : sentiment >= -0.30 ? 'watch'
   : 'urgent';
+// ECE band: uses the rating distribution for the latest quarter's records.
+// Distinct from bandAcademic because ECE learners have no numeric grades.
+const bandCompetency = (dist, totalSkills) => {
+  const rated = (dist.E||0)+(dist.G||0)+(dist.F||0)+(dist.NA||0);
+  if (totalSkills === 0 || rated === 0) return 'insufficient';
+  const completion = rated / totalSkills;
+  if (completion < 0.3) return 'insufficient';
+  const naPct = (dist.NA||0) / rated;
+  const fPct  = (dist.F||0)  / rated;
+  if (naPct > 0.3) return 'urgent';
+  if ((dist.NA||0) > 0 || fPct > 0.4) return 'watch';
+  return 'ok';
+};
 const overallBand = (bands) => {
   const active = bands.filter(b => b !== 'insufficient');
   if (active.length === 0) return 'insufficient';
@@ -402,6 +415,256 @@ router.get('/class-health', authorize('teacher'), async (req, res, next) => {
             : null,
           log_count:     logCount,
           band:          behBand,
+        },
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── GET /api/ai/ece-class-health ─────────────────────────────
+// ECE-equivalent of /class-health for Pre-Nursery → Kinder learners.
+// Because ECE has no numeric grades, the academic tile is replaced by a
+// Competency tile banded on the rating mix (E/G/F/NA) for the student's
+// latest quarter with records. Attendance + Behavior tiles reuse the same
+// rules as /class-health. Available to both admin (school-wide) and
+// teacher (scoped to their teacher_assignments for this student's class).
+router.get('/ece-class-health', authorize('admin', 'teacher'), async (req, res, next) => {
+  try {
+    const { student_id } = req.query;
+    if (!student_id) throw new AppError('student_id is required.', 400);
+
+    // 1. Active SY
+    const syRes = await query(
+      'SELECT id, label FROM school_years WHERE is_active = TRUE LIMIT 1'
+    );
+    const sy = syRes.rows[0];
+    if (!sy) throw new AppError('No active school year set.', 400);
+
+    // 2. Student + ECE check
+    const ECE = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder'];
+    const stRes = await query(
+      `SELECT id, grade_level, section FROM students WHERE id = $1 AND is_active = TRUE`,
+      [student_id]
+    );
+    if (!stRes.rows.length) throw new AppError('Student not found.', 404);
+    const st = stRes.rows[0];
+    if (!ECE.includes(st.grade_level)) {
+      throw new AppError('This endpoint is only for ECE learners.', 400);
+    }
+
+    // 3. Teacher scope (role=teacher → restrict to subjects they teach for this class)
+    let teacherSubjectNames = null;
+    if (req.user.role === 'teacher') {
+      const scopeRes = await query(
+        `SELECT subject
+           FROM teacher_assignments
+          WHERE teacher_id = $1
+            AND grade_level = $2
+            AND section     = $3
+            AND school_year = $4`,
+        [req.user.id, st.grade_level, st.section, sy.label]
+      );
+      if (!scopeRes.rows.length) {
+        throw new AppError('You are not assigned to this student in the current school year.', 404);
+      }
+      teacherSubjectNames = scopeRes.rows.map(r => r.subject);
+    }
+
+    // 4. Competency metric — latest quarter with records for this student
+    const latestQRes = await query(
+      `SELECT MAX(quarter)::int AS q
+         FROM ece_competency_records
+        WHERE student_id = $1 AND school_year_id = $2`,
+      [student_id, sy.id]
+    );
+    const latestQ = latestQRes.rows[0]?.q || null;
+
+    let competency;
+    if (!latestQ) {
+      // No ratings yet — still report total_skills so the suggestion can nudge.
+      const skillsRes = await query(
+        `SELECT COUNT(*)::int AS n
+           FROM competency_skills s
+           JOIN subjects sub ON sub.id = s.subject_id
+          WHERE s.is_active = TRUE AND sub.grade_level = $1`,
+        [st.grade_level]
+      );
+      competency = {
+        quarter: null,
+        rated: 0,
+        total_skills: skillsRes.rows[0]?.n || 0,
+        completion: null,
+        distribution: { E: 0, G: 0, F: 0, NA: 0 },
+        band: 'insufficient',
+      };
+    } else {
+      const [skillsRes, ratingRes] = await Promise.all([
+        query(
+          `SELECT COUNT(*)::int AS n
+             FROM competency_skills s
+             JOIN subjects sub ON sub.id = s.subject_id
+            WHERE s.is_active = TRUE AND sub.grade_level = $1`,
+          [st.grade_level]
+        ),
+        query(
+          `SELECT rating, COUNT(*)::int AS n
+             FROM ece_competency_records
+            WHERE student_id = $1 AND school_year_id = $2 AND quarter = $3
+            GROUP BY rating`,
+          [student_id, sy.id, latestQ]
+        ),
+      ]);
+      const totalSkills = skillsRes.rows[0]?.n || 0;
+      const dist = { E: 0, G: 0, F: 0, NA: 0 };
+      for (const r of ratingRes.rows) dist[r.rating] = r.n;
+      const rated = dist.E + dist.G + dist.F + dist.NA;
+      const completion = totalSkills > 0 ? rated / totalSkills : 0;
+      competency = {
+        quarter: latestQ,
+        rated,
+        total_skills: totalSkills,
+        completion: Math.round(completion * 10000) / 10000,
+        distribution: dist,
+        band: bandCompetency(dist, totalSkills),
+      };
+    }
+
+    // 5. Attendance — last 30 days. Teachers filter to their own subjects.
+    const attArgs = [student_id];
+    let attSubjectClause = '';
+    if (teacherSubjectNames) {
+      attArgs.push(teacherSubjectNames);
+      attSubjectClause = `AND sub.name = ANY($${attArgs.length}::text[])`;
+    }
+    const attRes = await query(
+      `SELECT COUNT(*)::int AS total,
+              SUM(CASE WHEN a.status = 'Present' THEN 1 ELSE 0 END)::int AS present
+         FROM attendance a
+         JOIN subjects sub ON sub.id = a.subject_id
+        WHERE a.student_id = $1
+          AND a.date >= (CURRENT_DATE - INTERVAL '30 days')
+          ${attSubjectClause}`,
+      attArgs
+    );
+    const attTotal   = attRes.rows[0]?.total || 0;
+    const attPresent = attRes.rows[0]?.present || 0;
+    const attRate    = attTotal > 0 ? attPresent / attTotal : null;
+    const attBand    = bandAttendance(attRate, attTotal);
+
+    // 6. Behavior — this month. Teachers filter to their own logs.
+    const behArgs = [student_id];
+    let behTeacherClause = '';
+    if (req.user.role === 'teacher') {
+      behArgs.push(req.user.id);
+      behTeacherClause = `AND teacher_id = $${behArgs.length}`;
+    }
+    const behRes = await query(
+      `SELECT AVG(sentiment_score)::float AS avg_sentiment,
+              COUNT(*)::int AS log_count
+         FROM behavior_logs
+        WHERE student_id = $1
+          AND observed_at >= date_trunc('month', CURRENT_DATE)
+          ${behTeacherClause}`,
+      behArgs
+    );
+    const logCount     = behRes.rows[0]?.log_count || 0;
+    const avgSentiment = behRes.rows[0]?.avg_sentiment;
+    const behBand      = bandBehavior(avgSentiment, logCount);
+
+    // 7. Overall band = worst of non-insufficient
+    const overall_band = overallBand([competency.band, attBand, behBand]);
+
+    // 8. DSS suggestions
+    const suggestions = [];
+    const naCount = competency.distribution.NA;
+    const fCount  = competency.distribution.F;
+    if (competency.band === 'urgent') {
+      suggestions.push({
+        severity: 'urgent',
+        text: `${naCount} skill${naCount === 1 ? '' : 's'} marked Needs Assistance in Q${competency.quarter}. Plan a targeted play-based intervention this week.`,
+        action: { type: 'ece', label: 'Open ECE Competency' },
+      });
+    } else if (competency.band === 'watch') {
+      suggestions.push({
+        severity: 'watch',
+        text: `Some competencies need more support (${naCount + fCount} below "Good"). Schedule focused practice and re-observe next week.`,
+        action: { type: 'ece', label: 'Open ECE Competency' },
+      });
+    } else if (competency.band === 'insufficient' && competency.total_skills > 0) {
+      suggestions.push({
+        severity: 'watch',
+        text: competency.quarter
+          ? `Only ${competency.rated} of ${competency.total_skills} skills rated in Q${competency.quarter}. Complete this quarter's tracker to surface signals.`
+          : `No competency ratings recorded yet. Start this quarter's tracker to surface signals.`,
+        action: { type: 'ece', label: 'Open ECE Competency' },
+      });
+    }
+
+    if (attBand === 'urgent') {
+      suggestions.push({
+        severity: 'urgent',
+        text: `Attendance is critically low (${Math.round(attRate * 100)}% over the last 30 days). Contact the guardian and document the pattern.`,
+        action: { type: 'attendance', label: 'Open Attendance' },
+      });
+    } else if (attBand === 'watch') {
+      suggestions.push({
+        severity: 'watch',
+        text: `Watch for consecutive absences. Flag to the homeroom adviser if the pattern continues.`,
+        action: { type: 'attendance', label: 'Open Attendance' },
+      });
+    }
+
+    if (behBand === 'urgent') {
+      suggestions.push({
+        severity: 'urgent',
+        text: req.user.role === 'teacher'
+          ? `Your behavior logs for this student skew negative. Log a fresh observation with a concrete intervention.`
+          : `Behavior observations skew negative this month. Follow up with the homeroom teacher.`,
+        action: { type: 'behavior', label: 'Log observation' },
+      });
+    } else if (behBand === 'watch') {
+      suggestions.push({
+        severity: 'watch',
+        text: `Mixed behavioral observations — add a fresh note so the signal stays current.`,
+        action: { type: 'behavior', label: 'Log observation' },
+      });
+    }
+
+    if (overall_band === 'ok') {
+      suggestions.push({
+        severity: 'ok',
+        text: `Student is progressing well across tracked signals — continue regular observation.`,
+      });
+    }
+
+    if (overall_band === 'insufficient' && suggestions.length === 0) {
+      suggestions.push({
+        severity: 'insufficient',
+        text: `Not enough tracked data yet. Rate more competency skills, take attendance, or log behavior to enable signals.`,
+      });
+    }
+
+    res.json({
+      scope: { grade_level: st.grade_level, section: st.section },
+      overall_band,
+      suggestions,
+      metrics: {
+        competency,
+        attendance: {
+          rate:        attRate !== null ? Math.round(attRate * 10000) / 10000 : null,
+          present:     attPresent,
+          total:       attTotal,
+          window_days: 30,
+          band:        attBand,
+        },
+        behavior: {
+          avg_sentiment: avgSentiment !== null && avgSentiment !== undefined
+            ? Math.round(avgSentiment * 10000) / 10000
+            : null,
+          log_count: logCount,
+          band:      behBand,
         },
       },
     });

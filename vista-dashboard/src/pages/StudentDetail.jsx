@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ClipboardCheck, Heart, QrCode, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil } from 'lucide-react'
+import { ArrowLeft, BookOpen, ClipboardCheck, Heart, QrCode, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
-import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi } from '../api/client'
+import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi, eceApi, curriculumApi } from '../api/client'
 import { RiskBadge, SentimentBadge, LoadingSpinner, GradeChip } from '../components/UI'
 import { format } from 'date-fns'
 import { formatName, nameInitial } from '../utils/nameHelper'
@@ -21,6 +21,15 @@ const calcAge = (dob) => {
 
 const TABS = ['Overview', 'Grades', 'Attendance', 'Behavior', 'AI Insights']
 
+const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
+const ECE_RATINGS = [
+  { value: 'E',  label: 'Excellent',        color: 'bg-emerald-500 text-white border-emerald-600' },
+  { value: 'G',  label: 'Good',             color: 'bg-teal-500 text-white border-teal-600' },
+  { value: 'F',  label: 'Fair',             color: 'bg-amber-500 text-white border-amber-600' },
+  { value: 'NA', label: 'Needs Assistance', color: 'bg-red-500 text-white border-red-600' },
+]
+const ECE_RATING_BY_VALUE = Object.fromEntries(ECE_RATINGS.map(r => [r.value, r]))
+
 export default function StudentDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -34,6 +43,8 @@ export default function StudentDetail() {
   const [risk, setRisk]         = useState(null)
   const [classHealth, setClassHealth] = useState(null)
   const [classHealthError, setClassHealthError] = useState(null)
+  const [eceHealth, setEceHealth] = useState(null)
+  const [eceHealthError, setEceHealthError] = useState(null)
   const [loading, setLoading]   = useState(true)
   const [tab, setTab]           = useState('Overview')
   const [qr, setQr]             = useState(null)
@@ -43,6 +54,21 @@ export default function StudentDetail() {
   const [expandedBehMonths, setExpandedBehMonths] = useState(() => new Set())
   const [behaviorFilter, setBehaviorFilter] = useState('All')
 
+  // ECE competency (Pre-Nursery → Kinder) — replaces the numeric grades view
+  // for ECE learners and feeds the AI Insights tab so ECE teachers see
+  // competency-aware signals instead of grade-based ones.
+  const [eceSkills, setEceSkills]       = useState([])
+  const [eceSubjects, setEceSubjects]   = useState([])
+  const [eceRecords, setEceRecords]     = useState([])   // records for selected quarter + this student
+  const [eceSchoolYear, setEceSchoolYear] = useState(null)
+  const [eceQuarter, setEceQuarter]     = useState(1)
+  const [eceLoading, setEceLoading]     = useState(false)
+  const [eceAccessError, setEceAccessError] = useState(null)
+  const [expandedEceSY, setExpandedEceSY] = useState(true)
+  const [expandedEceSubjects, setExpandedEceSubjects] = useState(() => new Set())
+
+  const isECE = !!student && ECE_GRADES.includes(student.grade_level)
+
   const toggleInSet = (setter) => (key) => {
     setter(prev => {
       const next = new Set(prev)
@@ -51,9 +77,10 @@ export default function StudentDetail() {
       return next
     })
   }
-  const toggleSY       = toggleInSet(setExpandedSYs)
-  const toggleAttMonth = toggleInSet(setExpandedAttMonths)
-  const toggleBehMonth = toggleInSet(setExpandedBehMonths)
+  const toggleSY           = toggleInSet(setExpandedSYs)
+  const toggleAttMonth     = toggleInSet(setExpandedAttMonths)
+  const toggleBehMonth     = toggleInSet(setExpandedBehMonths)
+  const toggleEceSubject   = toggleInSet(setExpandedEceSubjects)
 
   useEffect(() => {
     Promise.all([
@@ -71,6 +98,23 @@ export default function StudentDetail() {
   }, [id])
 
   const fetchAI = async () => {
+    // ECE learners: call the ECE-specific endpoint (Competency + Attendance +
+    // Behavior) for both roles. Skip grade-based predictions / FastAPI risk.
+    if (isECE) {
+      if (eceHealth || eceHealthError) return
+      try {
+        const res = await aiApi.eceClassHealth(id)
+        setEceHealth(res.data)
+      } catch (err) {
+        const status = err?.response?.status
+        setEceHealthError(
+          status === 404
+            ? 'You are not assigned to this student in the current school year.'
+            : 'AI service unavailable.'
+        )
+      }
+      return
+    }
     if (prediction) return // Already loaded
     try {
       if (isTeacher) {
@@ -105,6 +149,50 @@ export default function StudentDetail() {
     }
   }
 
+  // Load the ECE skill catalog + subjects for this student's grade level once.
+  useEffect(() => {
+    if (!isECE || !student?.grade_level) return
+    let cancelled = false
+    Promise.all([
+      eceApi.getSkills({ grade_level: student.grade_level }),
+      curriculumApi.getSubjects({ grade_level: student.grade_level }),
+    ]).then(([sk, sj]) => {
+      if (cancelled) return
+      setEceSkills(sk.data.skills || sk.data || [])
+      setEceSubjects(sj.data.subjects || sj.data || [])
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [isECE, student?.grade_level])
+
+  // Load this student's records for the selected quarter. eceApi.getRecords
+  // returns the whole class — we filter to this student client-side. Admins
+  // bypass verifyEceAssignment on the backend; teachers not assigned get a 403.
+  useEffect(() => {
+    if (!isECE || !student?.grade_level || !student?.section) return
+    let cancelled = false
+    setEceLoading(true)
+    setEceAccessError(null)
+    eceApi.getRecords({
+      grade_level: student.grade_level,
+      section: student.section,
+      quarter: eceQuarter,
+    }).then(res => {
+      if (cancelled) return
+      const all = res.data.records || []
+      setEceRecords(all.filter(r => r.student_id === id))
+      if (res.data.school_year) setEceSchoolYear(res.data.school_year)
+    }).catch(err => {
+      if (cancelled) return
+      setEceRecords([])
+      if (err?.response?.status === 403) {
+        setEceAccessError('You are not assigned to this class.')
+      }
+    }).finally(() => {
+      if (!cancelled) setEceLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [isECE, student?.grade_level, student?.section, eceQuarter, id])
+
   const handleTabChange = t => {
     setTab(t)
     if (t === 'AI Insights') fetchAI()
@@ -113,8 +201,14 @@ export default function StudentDetail() {
   // DSS deep-link dispatcher — mirrors the patterns used by TeacherDashboard
   // (sessionStorage for Score Entry, React Router location state for Attendance).
   const runSuggestionAction = (action) => {
-    if (!action || !classHealth?.scope) return
-    const { grade_level, section } = classHealth.scope
+    if (!action) return
+    if (action.type === 'ece') {
+      navigate('/ece-competency')
+      return
+    }
+    const scope = classHealth?.scope || eceHealth?.scope
+    if (!scope) return
+    const { grade_level, section } = scope
     if (action.type === 'score-entry') {
       const STORAGE_KEY = 'vista_score_entry_filters'
       let cur = {}
@@ -277,7 +371,7 @@ export default function StudentDetail() {
               tab === t ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
-            {t}
+            {t === 'Grades' && isECE ? 'Competencies' : t}
           </button>
         ))}
       </div>
@@ -393,7 +487,127 @@ export default function StudentDetail() {
       )}
 
       {tab === 'Grades' && (
-        grades.length === 0 ? (
+        isECE ? (
+          (() => {
+            // ECE learners: show competency ratings instead of numeric grades.
+            const ratingByskill = new Map(eceRecords.map(r => [r.skill_id, r.rating]))
+            const subjectsWithSkills = eceSubjects
+              .map(sub => ({
+                subject: sub,
+                skills: eceSkills.filter(sk => sk.subject_id === sub.id),
+              }))
+              .filter(g => g.skills.length > 0)
+            const totalSkills = subjectsWithSkills.reduce((a, g) => a + g.skills.length, 0)
+            const ratedCount  = eceRecords.length
+            const syLabel = eceSchoolYear?.label || '—'
+            return (
+              <div className="space-y-3">
+                <div className="card overflow-hidden">
+                  <button
+                    onClick={() => setExpandedEceSY(v => !v)}
+                    className="w-full flex items-center gap-2 px-5 py-3 hover:bg-slate-50 transition-colors"
+                  >
+                    {expandedEceSY ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                    <span className="text-sm font-semibold text-slate-800">{syLabel}</span>
+                    <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                      Q{eceQuarter} · {ratedCount} / {totalSkills} rated
+                    </span>
+                  </button>
+                  {expandedEceSY && (
+                    <div className="border-t border-slate-100 p-5 space-y-4">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <h3 className="text-sm font-semibold text-slate-800">Competency Ratings</h3>
+                        <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
+                          {[1, 2, 3, 4].map(q => (
+                            <button
+                              key={q}
+                              onClick={() => setEceQuarter(q)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                                eceQuarter === q ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                              }`}
+                            >
+                              Q{q}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {eceAccessError ? (
+                        <div className="p-8 text-center text-sm text-slate-500">{eceAccessError}</div>
+                      ) : eceLoading ? (
+                        <div className="p-8 text-center">
+                          <LoadingSpinner size="sm" />
+                          <p className="text-sm text-slate-400 mt-2">Loading competency records...</p>
+                        </div>
+                      ) : subjectsWithSkills.length === 0 ? (
+                        <div className="p-8 text-center text-sm text-slate-400">
+                          No competency skills have been defined for {student.grade_level} yet.
+                          {isTeacher && (
+                            <>
+                              {' '}
+                              <Link to="/ece-competency" className="text-teal-600 hover:text-teal-700 font-medium">
+                                Open ECE Competency →
+                              </Link>
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {subjectsWithSkills.map(({ subject, skills }) => {
+                            const isOpen = expandedEceSubjects.has(subject.id)
+                            const rated = skills.filter(sk => ratingByskill.has(sk.id)).length
+                            return (
+                              <div key={subject.id} className="border border-slate-100 rounded-xl overflow-hidden">
+                                <button
+                                  onClick={() => toggleEceSubject(subject.id)}
+                                  className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-slate-50 transition-colors"
+                                >
+                                  {isOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                                  <span className="text-sm font-semibold text-slate-800">{subject.name}</span>
+                                  <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                                    {rated} / {skills.length} rated
+                                  </span>
+                                </button>
+                                {isOpen && (
+                                  <div className="border-t border-slate-100 divide-y divide-slate-50">
+                                    {skills.map(skill => {
+                                      const rating = ratingByskill.get(skill.id)
+                                      const meta = rating ? ECE_RATING_BY_VALUE[rating] : null
+                                      return (
+                                        <div key={skill.id} className="flex items-center justify-between gap-3 px-4 py-2">
+                                          <span className="text-sm text-slate-700">{skill.name}</span>
+                                          {meta ? (
+                                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${meta.color}`}>
+                                              {meta.value} · {meta.label}
+                                            </span>
+                                          ) : (
+                                            <span className="text-xs italic text-slate-400">Not rated</span>
+                                          )}
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {isTeacher && (
+                  <div className="flex justify-end">
+                    <Link to="/ece-competency" className="text-xs font-semibold text-teal-700 hover:text-teal-800 hover:underline">
+                      Open ECE Competency →
+                    </Link>
+                  </div>
+                )}
+              </div>
+            )
+          })()
+        ) : grades.length === 0 ? (
           <div className="card p-8 text-center text-sm text-slate-400">No grade records found.</div>
         ) : (
           <div className="space-y-3">
@@ -580,7 +794,189 @@ export default function StudentDetail() {
         )
       )}
 
-      {tab === 'AI Insights' && (
+      {tab === 'AI Insights' && isECE && (
+        eceHealthError ? (
+          <div className="card p-5 text-sm text-slate-500">{eceHealthError}</div>
+        ) : !eceHealth ? (
+          <div className="card p-8 text-center">
+            <LoadingSpinner size="sm" />
+            <p className="text-sm text-slate-400 mt-2">Computing ECE signals...</p>
+          </div>
+        ) : (
+          (() => {
+            const bandStyles = {
+              ok:           'bg-emerald-50 text-emerald-700',
+              watch:        'bg-amber-50 text-amber-700',
+              urgent:       'bg-red-50 text-red-700',
+              insufficient: 'bg-slate-100 text-slate-500',
+            }
+            const bandLabels = {
+              ok:           'OK',
+              watch:        'Watch',
+              urgent:       'Urgent',
+              insufficient: 'More data needed',
+            }
+            const { overall_band, metrics, suggestions } = eceHealth
+            const { competency, attendance: att, behavior: beh } = metrics
+            const fmtRate = (r) => r === null || r === undefined ? '—' : `${Math.round(r * 100)}%`
+            const fmtSent = (s) => s === null || s === undefined ? '—' : (s >= 0 ? `+${s.toFixed(2)}` : s.toFixed(2))
+            const compPct = competency.total_skills > 0
+              ? Math.round((competency.rated / competency.total_skills) * 100)
+              : null
+
+            return (
+              <div className="space-y-5">
+                <div className="rounded-xl border border-teal-100 bg-teal-50 px-4 py-3 text-xs text-teal-800 flex items-start gap-2">
+                  <Baby size={14} className="text-teal-600 mt-0.5 flex-shrink-0" />
+                  <p>
+                    <span className="font-semibold">ECE signals</span> replace grade-based predictions.
+                    Competency ratings reflect the latest quarter with records.
+                  </p>
+                </div>
+
+                <div className="card p-5">
+                  <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+                    <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                      <Brain size={15} className="text-teal-500" />
+                      {isTeacher ? 'Competency & Class Signals' : 'Competency Snapshot'}
+                    </h3>
+                    <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${bandStyles[overall_band]}`}>
+                      {bandLabels[overall_band]}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mb-4">
+                    {isTeacher
+                      ? 'Your signals for this student: latest-quarter competencies, attendance, and behavior.'
+                      : 'School-wide signals: latest-quarter competencies, attendance, and behavior.'}
+                  </p>
+
+                  <div className="space-y-2">
+                    {/* Competency */}
+                    <div className="flex items-start justify-between gap-3 p-3 bg-slate-50 rounded-xl">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-slate-800">Competency</p>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {competency.total_skills === 0
+                            ? 'No competency skills defined for this grade level yet.'
+                            : competency.quarter
+                              ? `${competency.rated} of ${competency.total_skills} skills rated · Q${competency.quarter}`
+                              : `${competency.rated} of ${competency.total_skills} skills rated · no quarter yet`}
+                        </p>
+                        {competency.rated > 0 && (
+                          <>
+                            <div className="mt-1.5 flex h-2 rounded-full overflow-hidden bg-slate-200">
+                              {ECE_RATINGS.map(r => {
+                                const count = competency.distribution[r.value] || 0
+                                if (!count) return null
+                                const pct = (count / competency.total_skills) * 100
+                                return (
+                                  <div
+                                    key={r.value}
+                                    className={r.color.split(' ')[0]}
+                                    style={{ width: `${pct}%` }}
+                                    title={`${r.label}: ${count}`}
+                                  />
+                                )
+                              })}
+                            </div>
+                            <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-0.5">
+                              {ECE_RATINGS.map(r => (
+                                <span key={r.value} className="inline-flex items-center gap-1 text-[11px] text-slate-500">
+                                  <span className={`w-2 h-2 rounded-full ${r.color.split(' ')[0]}`} />
+                                  {r.value}: <span className="font-mono text-slate-700">{competency.distribution[r.value] || 0}</span>
+                                </span>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                        <span className="text-lg font-bold text-slate-800">{compPct === null ? '—' : `${compPct}%`}</span>
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[competency.band]}`}>
+                          {bandLabels[competency.band]}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Attendance */}
+                    <div className="flex items-start justify-between gap-3 p-3 bg-slate-50 rounded-xl">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800">Attendance</p>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {att.total === 0
+                            ? isTeacher
+                              ? 'No attendance recorded in your subject sessions yet.'
+                              : 'No attendance recorded in the last 30 days.'
+                            : `${att.present} of ${att.total} classes · last 30 days`}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                        <span className="text-lg font-bold text-slate-800">{fmtRate(att.rate)}</span>
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[att.band]}`}>
+                          {bandLabels[att.band]}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Behavior */}
+                    <div className="flex items-start justify-between gap-3 p-3 bg-slate-50 rounded-xl">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-800">Behavior</p>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {beh.log_count === 0
+                            ? isTeacher
+                              ? "You haven't logged any behavior notes this month."
+                              : 'No behavior logs this month.'
+                            : `${beh.log_count} ${beh.log_count === 1 ? 'log' : 'logs'} this month`}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                        <span className="text-lg font-bold text-slate-800">{fmtSent(beh.avg_sentiment)}</span>
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${bandStyles[beh.band]}`}>
+                          {bandLabels[beh.band]}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {suggestions?.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-slate-100">
+                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                        Suggested next steps
+                      </p>
+                      <ul className="space-y-2">
+                        {suggestions.map((s, i) => (
+                          <li key={i} className="flex items-start gap-2 text-sm text-slate-600">
+                            <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                              s.severity === 'urgent'       ? 'bg-red-500'     :
+                              s.severity === 'watch'        ? 'bg-amber-500'   :
+                              s.severity === 'ok'           ? 'bg-emerald-500' :
+                                                              'bg-slate-300'
+                            }`} />
+                            <div className="flex-1 min-w-0">
+                              <span>{s.text}</span>
+                              {s.action && (
+                                <button
+                                  onClick={() => runSuggestionAction(s.action)}
+                                  className="ml-2 inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800 hover:underline"
+                                >
+                                  {s.action.label || 'Open'} →
+                                </button>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })()
+        )
+      )}
+
+      {tab === 'AI Insights' && !isECE && (
         <div className="space-y-5">
           {isTeacher && (
             <div className="rounded-xl border border-teal-100 bg-teal-50 px-4 py-3 text-xs text-teal-800">

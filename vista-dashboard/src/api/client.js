@@ -139,6 +139,7 @@ export const aiApi = {
   sentiment:   (text)    => api.post('/ai/sentiment', { text }),
   classHealth: (id)      => api.get('/ai/class-health', { params: { student_id: id } }),
   classHealthAll: ()     => api.get('/ai/class-health/all'),
+  eceClassHealth: (id)   => api.get('/ai/ece-class-health', { params: { student_id: id } }),
 }
 
 // ── ECE Competency (Tots School) ─────────────────────────────
