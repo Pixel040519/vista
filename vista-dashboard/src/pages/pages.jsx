@@ -1390,6 +1390,7 @@ const FACTOR_LABELS = {
   attendance: 'Attendance',
   academic:   'Academic',
   behavioral: 'Behavioral',
+  competency: 'ECE Competency',
 }
 
 const CLASS_FILTERS = [
@@ -1409,6 +1410,7 @@ const BAND_STYLES = {
 
 const TOP_CONCERN_LABELS = {
   academic:   'Academic',
+  competency: 'Competency',
   attendance: 'Attendance',
   behavior:   'Behavior',
 }
@@ -1516,7 +1518,7 @@ function TeacherRiskOverview({ data, loading, filter, setFilter, onRefresh }) {
                 <th>Grade &amp; Section</th>
                 <th>Class Band</th>
                 <th>Top Concern</th>
-                <th>Academic</th>
+                <th>Academic / Competency</th>
                 <th>Attendance</th>
                 <th>Behavior</th>
               </tr>
@@ -1525,11 +1527,17 @@ function TeacherRiskOverview({ data, loading, filter, setFilter, onRefresh }) {
               {visible.map(s => {
                 const bandStyle = BAND_STYLES[s.overall_band] || BAND_STYLES.insufficient
                 const ac = s.metrics.academic
+                const cp = s.metrics.competency
                 const at = s.metrics.attendance
                 const bh = s.metrics.behavior
                 const sentimentText = bh.avg_sentiment !== null
                   ? (bh.avg_sentiment >= 0 ? `+${bh.avg_sentiment.toFixed(2)}` : bh.avg_sentiment.toFixed(2))
                   : '—'
+                // ECE learners get a competency chip here instead of academic —
+                // the server leaves ac.band = 'insufficient' for ECE rows.
+                const primary = s.is_ece && cp
+                  ? { band: cp.band, text: cp.total_skills > 0 ? `${Math.round(cp.completion * 100)}%` : '—' }
+                  : { band: ac.band, text: ac.avg_grade !== null ? ac.avg_grade.toFixed(1) : '—' }
                 return (
                   <tr
                     key={s.student_id}
@@ -1560,7 +1568,7 @@ function TeacherRiskOverview({ data, loading, filter, setFilter, onRefresh }) {
                         ? TOP_CONCERN_LABELS[s.top_concern]
                         : <span className="text-slate-300">—</span>}
                     </td>
-                    <td>{renderChip(ac.band, ac.avg_grade !== null ? ac.avg_grade.toFixed(1) : '—')}</td>
+                    <td>{renderChip(primary.band, primary.text)}</td>
                     <td>{renderChip(at.band, at.rate !== null ? `${Math.round(at.rate * 100)}%` : '—')}</td>
                     <td>{renderChip(bh.band, sentimentText)}</td>
                   </tr>

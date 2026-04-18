@@ -74,7 +74,7 @@ Key tables:
 - `score_items` — individual assessments under a component, scoped to **subject + section + quarter**.
 - `student_scores` — per-student raw scores; unique on `(score_item_id, student_id)`.
 - `behavior_logs` — teacher observations + VADER `vader_compound` score.
-- `risk_assessments` — AI risk tier (Stable/Moderate/High). Factor columns `attendance_factor`/`academic_factor`/`behavioral_factor` are `DECIMAL(5,4)` (0–1 scale — normalize before insert, e.g. avg_grade 92 → 0.92).
+- `risk_assessments` — AI risk tier (Stable/Moderate/High). Factor columns `attendance_factor`/`academic_factor`/`behavioral_factor`/`ece_competency_factor` are `DECIMAL(5,4)` (0–1 scale — normalize before insert, e.g. avg_grade 92 → 0.92). `ece_competency_factor` is populated only for ECE grade levels (Pre-Nursery–Kinder) from the student's latest-quarter rating average (E=1.0 / G=0.75 / F=0.5 / NA=0.25); NULL for Grades 1–6.
 - `academic_predictions` — grade forecasts with confidence scores.
 - `dismissal_logs` — SecurePass QR scan/authorization records.
 - `school_years` — SY management via `is_active` (one) + `is_upcoming` (many). No `is_current` column.

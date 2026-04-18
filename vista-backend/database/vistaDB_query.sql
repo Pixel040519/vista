@@ -128,6 +128,7 @@ CREATE TABLE risk_assessments (
     attendance_factor DECIMAL(5,4),
     academic_factor DECIMAL(5,4),
     behavioral_factor DECIMAL(5,4),
+    ece_competency_factor DECIMAL(5,4),      -- 0-1 avg rating for ECE (E=1.0, G=.75, F=.5, NA=.25)
     contributing_factors JSONB,              -- Array of factor descriptions
     assessed_at TIMESTAMP DEFAULT NOW(),
     model_version VARCHAR(50)

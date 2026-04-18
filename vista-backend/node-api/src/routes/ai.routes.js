@@ -725,10 +725,12 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
   try {
     // 1. Active SY
     const syRes = await query(
-      'SELECT label FROM school_years WHERE is_active = TRUE LIMIT 1'
+      'SELECT id, label FROM school_years WHERE is_active = TRUE LIMIT 1'
     );
-    const syLabel = syRes.rows[0]?.label;
-    if (!syLabel) throw new AppError('No active school year set.', 400);
+    const syRow = syRes.rows[0];
+    if (!syRow) throw new AppError('No active school year set.', 400);
+    const syLabel = syRow.label;
+    const syId    = syRow.id;
 
     // 2. Teacher's assignments → groups keyed by (grade_level, section)
     const asgRes = await query(
@@ -782,6 +784,7 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
     }
 
     // Seed a per-student accumulator so groups can drop their results in.
+    const ECE_GRADE_LEVELS = new Set(['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']);
     const byId = new Map();
     for (const s of students) {
       const full_name = [s.surname, ','].join('') + ' ' + s.first_name +
@@ -791,9 +794,11 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
         full_name,
         grade_level: s.grade_level,
         section:     s.section,
+        is_ece:      ECE_GRADE_LEVELS.has(s.grade_level),
         _acad: { sum: 0, count: 0 },
         _att:  { present: 0, total: 0 },
         _beh:  { sum: 0, count: 0 },
+        _comp: null, // filled for ECE students below
       });
     }
 
@@ -873,8 +878,59 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
       }
     }
 
-    // 5. Band each student, build the summary, sort worst-first.
-    const TOP_ORDER = ['academic', 'attendance', 'behavior'];
+    // 5. ECE competency — loaded once for all ECE students in scope, since
+    // ECE learners have no numeric grades and the academic tile would always
+    // say "insufficient" for them. The competency tile replaces it.
+    const eceStudents = students.filter(s => ECE_GRADE_LEVELS.has(s.grade_level));
+    if (eceStudents.length) {
+      const eceIds    = eceStudents.map(s => s.id);
+      const eceGrades = [...new Set(eceStudents.map(s => s.grade_level))];
+
+      // total skills per grade level (sum over subjects that have skills)
+      const totalRes = await query(
+        `SELECT sub.grade_level, COUNT(cs.id)::int AS total_skills
+           FROM subjects sub
+           JOIN competency_skills cs
+             ON cs.subject_id = sub.id AND cs.is_active = TRUE
+          WHERE sub.grade_level = ANY($1::text[])
+          GROUP BY sub.grade_level`,
+        [eceGrades]
+      );
+      const totalSkillsByGrade = new Map(totalRes.rows.map(r => [r.grade_level, r.total_skills]));
+
+      // latest-quarter rating distribution per student, in active SY
+      const distRes = await query(
+        `SELECT r.student_id, r.rating, COUNT(*)::int AS n
+           FROM ece_competency_records r
+           JOIN (
+             SELECT student_id, MAX(quarter) AS q
+               FROM ece_competency_records
+              WHERE student_id = ANY($1::uuid[]) AND school_year_id = $2
+              GROUP BY student_id
+           ) latest ON latest.student_id = r.student_id AND latest.q = r.quarter
+          WHERE r.student_id = ANY($1::uuid[]) AND r.school_year_id = $2
+          GROUP BY r.student_id, r.rating`,
+        [eceIds, syId]
+      );
+      const distByStudent = new Map();
+      for (const row of distRes.rows) {
+        const d = distByStudent.get(row.student_id) || { E: 0, G: 0, F: 0, NA: 0 };
+        d[row.rating] = row.n;
+        distByStudent.set(row.student_id, d);
+      }
+
+      for (const s of eceStudents) {
+        const bucket = byId.get(s.id);
+        if (!bucket) continue;
+        bucket._comp = {
+          dist:         distByStudent.get(s.id) || { E: 0, G: 0, F: 0, NA: 0 },
+          total_skills: totalSkillsByGrade.get(s.grade_level) || 0,
+        };
+      }
+    }
+
+    // 6. Band each student, build the summary, sort worst-first.
+    const TOP_ORDER = ['academic', 'competency', 'attendance', 'behavior'];
     const out = [];
     const summary = { total: students.length, ok: 0, watch: 0, urgent: 0, insufficient: 0 };
 
@@ -889,16 +945,43 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
         ? bucket._beh.sum / bucket._beh.count
         : null;
 
-      const acadB = bandAcademic(avg_grade);
       const attB  = bandAttendance(att_rate ?? 0, bucket._att.total);
       const behB  = bandBehavior(avg_sentiment ?? 0, bucket._beh.count);
-      const overall = overallBand([acadB, attB, behB]);
 
-      // top_concern = worst non-insufficient metric
-      const perMetric = { academic: acadB, attendance: attB, behavior: behB };
+      // ECE students swap academic → competency in both the per-row chip and
+      // the overall-band calc. Non-ECE students keep the existing flow.
+      let acadB = 'insufficient';
+      let compB = 'insufficient';
+      let competencyMetric = null;
+      if (bucket.is_ece && bucket._comp) {
+        compB = bandCompetency(bucket._comp.dist, bucket._comp.total_skills);
+        const d = bucket._comp.dist;
+        const rated = d.E + d.G + d.F + d.NA;
+        competencyMetric = {
+          rated,
+          total_skills: bucket._comp.total_skills,
+          completion:   bucket._comp.total_skills > 0
+            ? Math.round((rated / bucket._comp.total_skills) * 10000) / 10000
+            : 0,
+          distribution: d,
+          band:         compB,
+        };
+      } else if (!bucket.is_ece) {
+        acadB = bandAcademic(avg_grade);
+      }
+
+      const overall = bucket.is_ece
+        ? overallBand([compB, attB, behB])
+        : overallBand([acadB, attB, behB]);
+
+      // top_concern = worst non-insufficient metric. For ECE students
+      // "academic" is never considered; for non-ECE "competency" isn't.
+      const perMetric = { academic: acadB, competency: compB, attendance: attB, behavior: behB };
       let top_concern = null;
       let worstRank = -1;
       for (const m of TOP_ORDER) {
+        if (bucket.is_ece && m === 'academic') continue;
+        if (!bucket.is_ece && m === 'competency') continue;
         const b = perMetric[m];
         if (b === 'insufficient' || b === 'ok') continue;
         if (BAND_RANK[b] > worstRank) {
@@ -914,6 +997,7 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
         full_name:   bucket.full_name,
         grade_level: bucket.grade_level,
         section:     bucket.section,
+        is_ece:      bucket.is_ece,
         overall_band: overall,
         top_concern,
         metrics: {
@@ -922,6 +1006,7 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
             sample_count: bucket._acad.count,
             band:         acadB,
           },
+          competency: competencyMetric, // null for non-ECE
           attendance: {
             rate:    att_rate !== null ? Math.round(att_rate * 10000) / 10000 : null,
             present: bucket._att.present,
