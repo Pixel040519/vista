@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Search, Plus, Filter, ChevronRight, Pencil, Trash2,
-  UserPlus, X, Users, ShieldCheck, Phone, Mail, Eye, EyeOff
+  UserPlus, X, Users, ShieldCheck, Phone, Mail, Eye, EyeOff, Upload
 } from 'lucide-react'
 import { studentApi, curriculumApi } from '../api/client'
 import { LoadingSpinner, EmptyState, Modal, PhoneInput } from '../components/UI'
+import BatchUploadModal from '../components/BatchUploadModal'
 import { useAuth } from '../context/AuthContext'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -820,6 +821,7 @@ export default function Students() {
   const [filterSections, setFilterSections] = useState([])
 
   const [showCreate, setShowCreate]       = useState(false)
+  const [showBatch, setShowBatch]         = useState(false)
   const [editTarget, setEditTarget]       = useState(null)
   const [editGuardians, setEditGuardians] = useState(null)
   const [deleteTarget, setDeleteTarget]   = useState(null)
@@ -888,9 +890,14 @@ export default function Students() {
           <p className="page-subtitle">{pagination.total} enrolled students</p>
         </div>
         {isAdmin && (
-          <button onClick={() => setShowCreate(true)} className="btn-primary">
-            <Plus size={16}/> Add Student
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowBatch(true)} className="btn-secondary">
+              <Upload size={16}/> Batch Upload
+            </button>
+            <button onClick={() => setShowCreate(true)} className="btn-primary">
+              <Plus size={16}/> Add Student
+            </button>
+          </div>
         )}
       </div>
 
@@ -1066,6 +1073,12 @@ export default function Students() {
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Add New Student" size="lg" selfScroll>
         <StudentForm mode="create" onSubmit={handleCreate} onClose={() => setShowCreate(false)}/>
       </Modal>
+
+      <BatchUploadModal
+        open={showBatch}
+        onClose={() => setShowBatch(false)}
+        onSuccess={() => fetchStudents()}
+      />
 
       <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title="Edit Student Information" size="lg" selfScroll>
         {editTarget && <StudentForm mode="edit" initial={editTarget} onSubmit={handleEdit} onClose={() => setEditTarget(null)}/>}

@@ -271,6 +271,101 @@ router.post('/', authorize('admin'), async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// POST /api/students/check-lrns — admin-only. Given { lrns: [...] } returns
+// { existing: [...] } for LRNs that already belong to an active student.
+// Used by the batch-upload preview so duplicates surface before submit.
+router.post('/check-lrns', authorize('admin'), async (req, res, next) => {
+  try {
+    const lrns = Array.isArray(req.body?.lrns) ? req.body.lrns : []
+    const clean = [...new Set(lrns.map(x => String(x).trim()).filter(x => /^\d{12}$/.test(x)))]
+    if (!clean.length) return res.json({ existing: [] })
+    const r = await query(
+      'SELECT lrn FROM students WHERE lrn = ANY($1::text[]) AND is_active = TRUE',
+      [clean]
+    )
+    res.json({ existing: r.rows.map(row => row.lrn) })
+  } catch (err) { next(err) }
+})
+
+// POST /api/students/bulk — admin-only CSV batch upload (students only, no guardians)
+const bulkStudentSchema = studentSchema.fork(['guardians'], s => s.forbidden())
+const bulkSchema = Joi.object({
+  students: Joi.array().items(bulkStudentSchema).min(1).max(200).required()
+})
+
+router.post('/bulk', authorize('admin'), async (req, res, next) => {
+  try {
+    const { error, value } = bulkSchema.validate(req.body, { abortEarly: false, stripUnknown: true })
+    if (error) {
+      const msg = error.details.map(d => {
+        const idx = d.path[1]
+        const field = d.path.slice(2).join('.')
+        return typeof idx === 'number' ? `Row ${idx + 1} ${field}: ${d.message}` : d.message
+      }).join('; ')
+      throw new AppError(msg, 422)
+    }
+
+    const rows = value.students
+
+    const seen = new Set()
+    for (let i = 0; i < rows.length; i++) {
+      if (seen.has(rows[i].lrn)) {
+        throw new AppError(`Duplicate LRN ${rows[i].lrn} at row ${i + 1} within the upload.`, 400)
+      }
+      seen.add(rows[i].lrn)
+    }
+
+    const existing = await query(
+      'SELECT lrn FROM students WHERE lrn = ANY($1::text[])',
+      [rows.map(r => r.lrn)]
+    )
+    if (existing.rows.length) {
+      throw new AppError(
+        `These LRNs already exist: ${existing.rows.map(r => r.lrn).join(', ')}`,
+        409
+      )
+    }
+
+    // Validate (grade_level, section) against sections defined for the active
+    // school year. Empty section is allowed (mirrors single-student POST).
+    const rowsWithSection = rows.filter(r => r.section && String(r.section).trim())
+    if (rowsWithSection.length) {
+      const sy = await query('SELECT id FROM school_years WHERE is_active=TRUE LIMIT 1')
+      if (!sy.rows.length) throw new AppError('No active school year configured.', 500)
+      const secs = await query(
+        'SELECT grade_level, name FROM sections WHERE school_year_id=$1 AND is_active=TRUE',
+        [sy.rows[0].id]
+      )
+      const valid = new Set(secs.rows.map(s => `${s.grade_level}|${s.name}`))
+      const badSections = []
+      rows.forEach((r, i) => {
+        if (r.section && !valid.has(`${r.grade_level}|${r.section}`)) {
+          badSections.push(`Row ${i + 1}: section "${r.section}" does not exist for ${r.grade_level}`)
+        }
+      })
+      if (badSections.length) throw new AppError(badSections.join('; '), 400)
+    }
+
+    const inserted = await withTransaction(async (client) => {
+      const out = []
+      for (const r of rows) {
+        const { surname, first_name, middle_name } = normaliseName(r)
+        const res = await client.query(
+          `INSERT INTO students (lrn, surname, first_name, middle_name, date_of_birth,
+                                 gender, grade_level, section, home_address)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, lrn`,
+          [r.lrn, surname, first_name, middle_name || null, r.date_of_birth,
+           r.gender, r.grade_level, r.section || null, r.home_address]
+        )
+        out.push(res.rows[0])
+      }
+      return out
+    })
+
+    res.status(201).json({ message: `${inserted.length} students added.`, students: inserted })
+  } catch (err) { next(err) }
+})
+
 // PUT /api/students/:id
 router.put('/:id', authorize('admin'), async (req, res, next) => {
   try {
