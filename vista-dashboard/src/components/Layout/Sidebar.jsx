@@ -23,7 +23,8 @@ const adminNavGroups = [
     items: [
       { to: '/students',    icon: Users,          label: 'Students'   },
       { to: '/attendance',  icon: ClipboardCheck, label: 'Attendance', roles: ['teacher'] },
-      { to: '/grades',       icon: BookOpen,       label: 'Grades'     },
+      { to: '/grades',       icon: BookOpen,       label: 'Grades'         },
+      { to: '/ece-competency', icon: Baby,         label: 'ECE Competency' },
       { to: '/score-entry', icon: PenLine,        label: 'Score Entry', roles: ['teacher'] },
       { to: '/behavior',    icon: Heart,          label: 'Behavior'   },
     ]

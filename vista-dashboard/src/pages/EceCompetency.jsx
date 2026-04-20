@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { eceApi, curriculumApi } from '../api/client'
 import { LoadingSpinner } from '../components/UI'
-import { Baby, Save, Info, Plus, Pencil, Trash2, X, Check, ChevronDown, ChevronRight, GripVertical, Eye } from 'lucide-react'
+import { Baby, Save, Info, Plus, Pencil, Trash2, X, Check, ChevronDown, ChevronRight, GripVertical } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
@@ -101,6 +101,7 @@ export default function EceCompetency() {
 
   const [selectedClass, setSelectedClass] = useState('')
   const [quarter, setQuarter] = useState(1)
+  const [ratingFilter, setRatingFilter] = useState(null) // null | 'E' | 'G' | 'F' | 'NA'
   const [subjects, setSubjects] = useState([])  // subjects for the selected grade level (used as domains)
   const [skills, setSkills] = useState([])
   const [students, setStudents] = useState([])
@@ -365,18 +366,16 @@ export default function EceCompetency() {
     skills: skills.filter(s => s.subject_id === subj.id),
   }))
 
+  // When ratingFilter is active, check if any subject has any matching rating
+  const filterHasMatches = !ratingFilter || skillsBySubject.some(subj =>
+    students.some(st => subj.skills.some(sk => grid[st.id]?.[sk.id] === ratingFilter))
+  )
+
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="page-title flex items-center gap-2 flex-wrap">
-            ECE Competency Tracker
-            {isReadOnly && (
-              <span className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide bg-purple-50 text-purple-700 border border-purple-200 rounded-full px-2 py-0.5">
-                <Eye size={11} /> Read-only · Admin view
-              </span>
-            )}
-          </h1>
+          <h1 className="page-title">ECE Competency Tracker</h1>
           <p className="page-subtitle">
             {isReadOnly
               ? 'Review developmental milestones recorded by teachers'
@@ -410,6 +409,39 @@ export default function EceCompetency() {
             {QUARTERS.map(q => <option key={q} value={q}>Q{q}</option>)}
           </select>
         </div>
+        {isReadOnly && (
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Filter by rating</label>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => setRatingFilter(null)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                  ratingFilter === null
+                    ? 'bg-slate-800 text-white border-slate-800'
+                    : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                All
+              </button>
+              {RATINGS.map(r => (
+                <button
+                  key={r.value}
+                  type="button"
+                  onClick={() => setRatingFilter(ratingFilter === r.value ? null : r.value)}
+                  title={r.label}
+                  className={`w-10 py-1.5 rounded-lg text-xs font-bold border transition ${
+                    ratingFilter === r.value
+                      ? r.color
+                      : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  {r.value}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Legend */}
@@ -431,16 +463,45 @@ export default function EceCompetency() {
           <div className="card p-8 text-center text-sm text-slate-500">
             No active students in this class.
           </div>
+        ) : !filterHasMatches ? (
+          <div className="card p-8 text-center">
+            <p className="text-sm text-slate-500">
+              No students with a <span className="font-semibold">{ratingFilter}</span> rating in Q{quarter} for this class.
+            </p>
+            <button
+              type="button"
+              onClick={() => setRatingFilter(null)}
+              className="mt-3 text-xs text-teal-600 hover:text-teal-700 font-medium"
+            >
+              Clear filter
+            </button>
+          </div>
         ) : (
           <div className="space-y-5">
-            {skillsBySubject.map((subj, subjIdx) => (
+            {skillsBySubject.map((subj, subjIdx) => {
+              // Per-student filtered skills based on ratingFilter
+              const studentView = students.map(st => {
+                const matched = ratingFilter
+                  ? subj.skills.filter(sk => grid[st.id]?.[sk.id] === ratingFilter)
+                  : subj.skills
+                return { student: st, matchedSkills: matched }
+              })
+              const visibleStudents = ratingFilter
+                ? studentView.filter(sv => sv.matchedSkills.length > 0)
+                : studentView
+
+              // Hide subject card entirely if filter active and no matches school-wide for this subject
+              if (ratingFilter && visibleStudents.length === 0) return null
+
+              const dragEnabled = !ratingFilter
+              return (
               <div
                 key={subj.id}
-                draggable
-                onDragStart={handleDragStart(subjIdx)}
-                onDragOver={handleDragOver(subjIdx)}
-                onDrop={handleDrop(subjIdx)}
-                onDragEnd={handleDragEnd}
+                draggable={dragEnabled}
+                onDragStart={dragEnabled ? handleDragStart(subjIdx) : undefined}
+                onDragOver={dragEnabled ? handleDragOver(subjIdx) : undefined}
+                onDrop={dragEnabled ? handleDrop(subjIdx) : undefined}
+                onDragEnd={dragEnabled ? handleDragEnd : undefined}
                 className={`card overflow-hidden transition-all ${
                   dragIdx === subjIdx ? 'opacity-40 ring-2 ring-teal-300'
                     : dragOverIdx === subjIdx && dragIdx !== null ? 'ring-2 ring-teal-400 shadow-lg'
@@ -450,9 +511,11 @@ export default function EceCompetency() {
                 {/* Subject header (used as domain) */}
                 <div className="px-5 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-600 flex-shrink-0">
-                      <GripVertical size={16} />
-                    </span>
+                    {dragEnabled && (
+                      <span className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-600 flex-shrink-0">
+                        <GripVertical size={16} />
+                      </span>
+                    )}
                     <h3 className="text-sm font-semibold text-slate-800">{subj.name}</h3>
                   </div>
                   {!isReadOnly && (
@@ -526,17 +589,29 @@ export default function EceCompetency() {
                   <>
                     {/* Expand/Collapse all toggle */}
                     <div className="px-5 py-2 border-b border-slate-100 flex items-center justify-between">
-                      <span className="text-xs text-slate-400">{students.length} student{students.length !== 1 ? 's' : ''}</span>
+                      <span className="text-xs text-slate-400">
+                        {ratingFilter
+                          ? `${visibleStudents.length} of ${students.length} student${students.length !== 1 ? 's' : ''} with ${ratingFilter} rating`
+                          : `${students.length} student${students.length !== 1 ? 's' : ''}`}
+                      </span>
                       <button
-                        onClick={() => toggleAllStudents(subj.id)}
+                        onClick={() => {
+                          const visibleIds = visibleStudents.map(v => v.student.id)
+                          const allExpanded = visibleIds.every(id => expandedStudents[`${subj.id}::${id}`])
+                          const updates = {}
+                          for (const id of visibleIds) {
+                            updates[`${subj.id}::${id}`] = !allExpanded
+                          }
+                          setExpandedStudents(prev => ({ ...prev, ...updates }))
+                        }}
                         className="text-xs text-slate-500 hover:text-teal-600 font-medium transition-colors"
                       >
-                        {students.every(st => expandedStudents[`${subj.id}::${st.id}`]) ? 'Collapse All' : 'Expand All'}
+                        {visibleStudents.every(v => expandedStudents[`${subj.id}::${v.student.id}`]) ? 'Collapse All' : 'Expand All'}
                       </button>
                     </div>
 
                     <div className="divide-y divide-slate-300">
-                      {students.map(st => {
+                      {visibleStudents.map(({ student: st, matchedSkills }) => {
                         const key = `${subj.id}::${st.id}`
                         const isExpanded = expandedStudents[key]
                         const ratedCount = subj.skills.filter(sk => grid[st.id]?.[sk.id]).length
@@ -555,21 +630,27 @@ export default function EceCompetency() {
                                 }
                                 <span className="text-sm font-semibold text-slate-800">{st.full_name}</span>
                               </div>
-                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                                ratedCount === subj.skills.length
-                                  ? 'bg-emerald-100 text-emerald-700'
-                                  : ratedCount > 0
-                                    ? 'bg-amber-100 text-amber-700'
-                                    : 'bg-slate-100 text-slate-400'
-                              }`}>
-                                {ratedCount}/{subj.skills.length}
-                              </span>
+                              {ratingFilter ? (
+                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${RATINGS.find(r => r.value === ratingFilter)?.color}`}>
+                                  {matchedSkills.length} {ratingFilter}
+                                </span>
+                              ) : (
+                                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                                  ratedCount === subj.skills.length
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : ratedCount > 0
+                                      ? 'bg-amber-100 text-amber-700'
+                                      : 'bg-slate-100 text-slate-400'
+                                }`}>
+                                  {ratedCount}/{subj.skills.length}
+                                </span>
+                              )}
                             </div>
 
                             {/* Expanded: skill rows with ratings */}
                             {isExpanded && (
                               <div className="pb-3 px-5 pl-10 space-y-1.5">
-                                {subj.skills.map(sk => {
+                                {matchedSkills.map(sk => {
                                   const current = grid[st.id]?.[sk.id]
                                   return (
                                     <div key={sk.id} className="flex items-center justify-between gap-3 py-1">
@@ -618,7 +699,8 @@ export default function EceCompetency() {
                   </>
                 )}
               </div>
-            ))}
+              )
+            })}
           </div>
         )
       )}
