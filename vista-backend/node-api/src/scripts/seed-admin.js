@@ -27,7 +27,7 @@ const ADMIN = {
   surname:     'Administrator',
   first_name:  'Vista',
   middle_name: '',
-  role:        'admin',
+  role:        'super_admin',
   phone:       '09000000000',
 }
 // ─────────────────────────────────────────────────────────────

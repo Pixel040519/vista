@@ -9,6 +9,7 @@ import { LoadingSpinner, Modal } from '../components/UI'
 import GradingConfigModal from '../components/GradingConfigModal'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
+import { useAuth } from '../context/AuthContext'
 
 // ── School year validation helper ────────────────────────────
 const validateSY = (label, start_date, end_date) => {
@@ -229,7 +230,7 @@ function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradin
 }
 
 // ── School Year Selector Dropdown ─────────────────────────────
-function SYSelector({ schoolYears, selectedSY, onSelect, onManage }) {
+function SYSelector({ schoolYears, selectedSY, onSelect, onManage, canManage = true }) {
   const [open, setOpen] = useState(false)
   const current = selectedSY
 
@@ -273,12 +274,14 @@ function SYSelector({ schoolYears, selectedSY, onSelect, onManage }) {
                 }
               </button>
             ))}
-            <div className="border-t border-slate-100">
-              <button onClick={() => { setOpen(false); onManage() }}
-                className="w-full flex items-center gap-2 px-4 py-3 text-sm text-teal-600 hover:bg-teal-50 transition-colors font-medium">
-                <Plus size={14}/> Create New School Year
-              </button>
-            </div>
+            {canManage && (
+              <div className="border-t border-slate-100">
+                <button onClick={() => { setOpen(false); onManage() }}
+                  className="w-full flex items-center gap-2 px-4 py-3 text-sm text-teal-600 hover:bg-teal-50 transition-colors font-medium">
+                  <Plus size={14}/> Create New School Year
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -455,6 +458,10 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
 
 // ── Main Page ─────────────────────────────────────────────────
 export default function CurriculumManagement() {
+  const { isSuperAdmin, gradeScope } = useAuth()
+  const visibleGrades = isSuperAdmin || !gradeScope?.length
+    ? GRADE_LEVELS
+    : GRADE_LEVELS.filter(g => gradeScope.includes(g))
   const [schoolYears, setSchoolYears]   = useState([])
   const [selectedSY, setSelectedSY]     = useState(null)
   const [tab, setTab]                   = useState('subjects')
@@ -605,10 +612,11 @@ export default function CurriculumManagement() {
           selectedSY={selectedSY}
           onSelect={setSelectedSY}
           onManage={() => setShowCreate(true)}
+          canManage={isSuperAdmin}
         />
 
-        {/* Edit current SY button */}
-        {selectedSY && (
+        {/* Edit current SY button (super_admin only) */}
+        {selectedSY && isSuperAdmin && (
           <button onClick={() => setEditSY(selectedSY)}
             className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
             title="Edit school year settings">
@@ -674,7 +682,7 @@ export default function CurriculumManagement() {
           {/* ── Subjects ─────────────────────────────────── */}
           {tab === 'subjects' && (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {GRADE_LEVELS.map(grade => (
+              {visibleGrades.map(grade => (
                 <GradeCard key={grade} grade={grade}
                   items={subjects[grade] || []} type="subject" syId={selectedSY.id}
                   onAdd={handleAddSubject} onSave={handleUpdateSubject} onDelete={handleDeleteSubject}
@@ -686,7 +694,7 @@ export default function CurriculumManagement() {
           {/* ── Sections ─────────────────────────────────── */}
           {tab === 'sections' && (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {GRADE_LEVELS.map(grade => (
+              {visibleGrades.map(grade => (
                 <GradeCard key={grade} grade={grade}
                   items={sections[grade] || []} type="section" syId={selectedSY.id}
                   onAdd={handleAddSection} onSave={handleUpdateSection} onDelete={handleDeleteSection}/>

@@ -10,6 +10,7 @@ import clsx from 'clsx'
 import { formatName, nameInitial } from '../../utils/nameHelper'
 import { Modal } from '../UI'
 import nrysLogo from '../../assets/NRYS_logo.png'
+import { ROLES, ANY_ADMIN, ROLE_LABELS } from '../../utils/roles'
 
 const adminNavGroups = [
   {
@@ -22,26 +23,26 @@ const adminNavGroups = [
     label: 'Student Management',
     items: [
       { to: '/students',    icon: Users,          label: 'Students'   },
-      { to: '/attendance',  icon: ClipboardCheck, label: 'Attendance', roles: ['teacher'] },
       { to: '/grades',       icon: BookOpen,       label: 'Grades'         },
-      { to: '/ece-competency', icon: Baby,         label: 'ECE Competency' },
-      { to: '/score-entry', icon: PenLine,        label: 'Score Entry', roles: ['teacher'] },
+      // ECE Competency visible to super_admin + admin_ece only (admin_elem has no ECE scope)
+      { to: '/ece-competency', icon: Baby,         label: 'ECE Competency',
+        roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE] },
       { to: '/behavior',    icon: Heart,          label: 'Behavior'   },
     ]
   },
   {
     label: 'Tools',
     items: [
-      { to: '/securepass',    icon: QrCode,         label: 'SecurePass QR', roles: ['admin','teacher'] },
-      { to: '/risk',          icon: AlertTriangle,  label: 'Risk Overview', roles: ['admin'] },
+      { to: '/securepass',    icon: QrCode,         label: 'SecurePass QR', roles: [...ANY_ADMIN, ROLES.TEACHER] },
+      { to: '/risk',          icon: AlertTriangle,  label: 'Risk Overview', roles: ANY_ADMIN },
       { to: '/announcements', icon: Megaphone,      label: 'Announcements'  },
     ]
   },
   {
     label: 'Administration',
     items: [
-      { to: '/accounts',     icon: UserCog,        label: 'Accounts',      roles: ['admin'] },
-      { to: '/curriculum',   icon: GraduationCap,  label: 'Curriculum',    roles: ['admin'] },
+      { to: '/accounts',     icon: UserCog,        label: 'Accounts',      roles: ANY_ADMIN },
+      { to: '/curriculum',   icon: GraduationCap,  label: 'Curriculum',    roles: ANY_ADMIN },
     ]
   }
 ]
@@ -121,7 +122,7 @@ export default function Sidebar({ open, onClose }) {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
-        {(user?.role === 'teacher' ? teacherNavGroups : adminNavGroups).map(group => {
+        {(user?.role === ROLES.TEACHER ? teacherNavGroups : adminNavGroups).map(group => {
           const visibleItems = group.items.filter(
             item => !item.roles || item.roles.includes(user?.role)
           )
@@ -173,7 +174,7 @@ export default function Sidebar({ open, onClose }) {
             </div>
             <div className="flex-1 min-w-0 text-left">
               <p className="text-white text-sm font-medium truncate">{user ? formatName(user) : ''}</p>
-              <p className="text-slate-500 text-xs capitalize">{user?.role}</p>
+              <p className="text-slate-500 text-xs">{ROLE_LABELS[user?.role] || user?.role}</p>
             </div>
           </NavLink>
           <button

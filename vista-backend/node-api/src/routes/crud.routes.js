@@ -4,8 +4,9 @@
 const express = require('express');
 const attendanceRouter = express.Router();
 const { query } = require('../config/database');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, authorizeAnyAdmin } = require('../middleware/auth.middleware');
 const { AppError } = require('../middleware/error.middleware');
+const { ANY_ADMIN, isAnyAdmin, isScopedAdmin, gradeScopeForRole } = require('../utils/roles');
 
 attendanceRouter.use(authenticate);
 
@@ -214,7 +215,7 @@ gradeRouter.get('/', async (req, res, next) => {
 });
 
 // POST /api/grades — Submit grades (batch)
-gradeRouter.post('/', authorize('admin', 'teacher'), async (req, res, next) => {
+gradeRouter.post('/', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
   try {
     const { records } = req.body; // [{ student_id, subject_id, quarter, school_year, score, grade }]
 
@@ -359,7 +360,7 @@ const teacherOwnsStudent = async (teacherId, studentId) => {
 // Admin:   student_id optional; supports teacher_id, category, sentiment, date_from, date_to, limit, offset.
 behaviorRouter.get('/', async (req, res, next) => {
   try {
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = isAnyAdmin(req.user.role);
     const {
       student_id, teacher_id, category, sentiment,
       date_from, date_to, grade_level, section,
@@ -391,6 +392,10 @@ behaviorRouter.get('/', async (req, res, next) => {
       if (!owns) return res.json({ logs: [], total: 0 });
     } else if (teacher_id) {
       add('bl.teacher_id = ?', teacher_id);
+    }
+
+    if (isScopedAdmin(req.user.role)) {
+      add('s.grade_level = ANY(?::text[])', gradeScopeForRole(req.user.role));
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -437,7 +442,7 @@ behaviorRouter.get('/', async (req, res, next) => {
 });
 
 // GET /api/behavior/summary — admin-only aggregate counts for the current filters.
-behaviorRouter.get('/summary', authorize('admin'), async (req, res, next) => {
+behaviorRouter.get('/summary', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const {
       student_id, teacher_id, category, sentiment,
@@ -456,6 +461,10 @@ behaviorRouter.get('/summary', authorize('admin'), async (req, res, next) => {
     if (date_to)    add('bl.observed_at <  (?::date + INTERVAL \'1 day\')', date_to);
     if (grade_level) add('s.grade_level = ?', grade_level);
     if (section)    add('s.section = ?', section);
+
+    if (isScopedAdmin(req.user.role)) {
+      add('s.grade_level = ANY(?::text[])', gradeScopeForRole(req.user.role));
+    }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -559,7 +568,7 @@ const dismissalRouter = express.Router();
 dismissalRouter.use(authenticate);
 
 // POST /api/dismissal/verify — Scan & verify QR code
-dismissalRouter.post('/verify', authorize('admin', 'teacher'), async (req, res, next) => {
+dismissalRouter.post('/verify', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
   try {
     const { qrPayload, authorized_by } = req.body;
 
@@ -630,17 +639,23 @@ dismissalRouter.post('/verify', authorize('admin', 'teacher'), async (req, res, 
 });
 
 // GET /api/dismissal/logs?date=
-dismissalRouter.get('/logs', authorize('admin'), async (req, res, next) => {
+dismissalRouter.get('/logs', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { date } = req.query;
+    const params = [date || null];
+    let scopeClause = '';
+    if (isScopedAdmin(req.user.role)) {
+      params.push(gradeScopeForRole(req.user.role));
+      scopeClause = ` AND s.grade_level = ANY($${params.length}::text[])`;
+    }
     const result = await query(
       `SELECT dl.*, s.full_name as student_name, u.full_name as guardian_name
        FROM dismissal_logs dl
        JOIN students s ON s.id = dl.student_id
        JOIN users u ON u.id = dl.authorized_by
-       WHERE ($1::date IS NULL OR dl.scanned_at::date = $1::date)
+       WHERE ($1::date IS NULL OR dl.scanned_at::date = $1::date)${scopeClause}
        ORDER BY dl.scanned_at DESC`,
-      [date || null]
+      params
     );
     res.json({ logs: result.rows });
   } catch (err) {

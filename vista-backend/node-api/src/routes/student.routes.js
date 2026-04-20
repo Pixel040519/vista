@@ -4,9 +4,22 @@ const QRCode  = require('qrcode')
 const { v4: uuidv4 } = require('uuid')
 const Joi     = require('joi')
 const { query, withTransaction } = require('../config/database')
-const { authenticate, authorize } = require('../middleware/auth.middleware')
+const { authenticate, authorizeAnyAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
 const { normaliseName } = require('../utils/nameHelper')
+const { gradeScopeForRole, canManageGrade, isScopedAdmin } = require('../utils/roles')
+
+// Throws 403 if the targeted student's grade_level is outside the caller's scope.
+// Super_admin, teachers, and parents are untouched (teachers/parents are scoped
+// elsewhere; this helper enforces the ECE/Elem admin split on student rows).
+const assertStudentInScope = async (req, studentId) => {
+  if (!isScopedAdmin(req.user.role)) return
+  const r = await query('SELECT grade_level FROM students WHERE id=$1 AND is_active=TRUE', [studentId])
+  if (!r.rows.length) throw new AppError('Student not found.', 404)
+  if (!canManageGrade(req.user.role, r.rows[0].grade_level)) {
+    throw new AppError('Student is outside your grade scope.', 403)
+  }
+}
 
 router.use(authenticate)
 
@@ -162,7 +175,7 @@ const insertGuardian = async (client, studentId, g) => {
 }
 
 // GET /api/students/parents/search?q=juan — search existing parent accounts
-router.get('/parents/search', authorize('admin'), async (req, res, next) => {
+router.get('/parents/search', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { q = '' } = req.query
     if (!q.trim()) return res.json({ parents: [] })
@@ -203,6 +216,10 @@ router.get('/', async (req, res, next) => {
       params.push(req.user.id)
       conditions.push(`ps.parent_id=$${params.length}`)
     }
+    if (isScopedAdmin(req.user.role)) {
+      params.push(gradeScopeForRole(req.user.role))
+      conditions.push(`s.grade_level = ANY($${params.length}::text[])`)
+    }
 
     const join  = req.user.role === 'parent' ? 'INNER JOIN parent_student ps ON ps.student_id=s.id' : ''
     const where = `WHERE ${conditions.join(' AND ')}`
@@ -231,6 +248,10 @@ router.get('/:id', async (req, res, next) => {
     const student = await getStudentWithGuardians(req.params.id)
     if (!student) throw new AppError('Student not found.', 404)
 
+    if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, student.grade_level)) {
+      throw new AppError('Student not found.', 404)
+    }
+
     if (req.user.role === 'teacher') {
       delete student.home_address
       for (const g of student.guardians || []) {
@@ -245,10 +266,12 @@ router.get('/:id', async (req, res, next) => {
 })
 
 // POST /api/students
-router.post('/', authorize('admin'), async (req, res, next) => {
+router.post('/', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { error, value } = studentSchema.validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
+
+    enforceGradeScope(req, value.grade_level)
 
     const { guardians=[], ...data } = value
     const { surname, first_name, middle_name } = normaliseName(data)
@@ -274,7 +297,7 @@ router.post('/', authorize('admin'), async (req, res, next) => {
 // POST /api/students/check-lrns — admin-only. Given { lrns: [...] } returns
 // { existing: [...] } for LRNs that already belong to an active student.
 // Used by the batch-upload preview so duplicates surface before submit.
-router.post('/check-lrns', authorize('admin'), async (req, res, next) => {
+router.post('/check-lrns', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const lrns = Array.isArray(req.body?.lrns) ? req.body.lrns : []
     const clean = [...new Set(lrns.map(x => String(x).trim()).filter(x => /^\d{12}$/.test(x)))]
@@ -293,7 +316,7 @@ const bulkSchema = Joi.object({
   students: Joi.array().items(bulkStudentSchema).min(1).max(200).required()
 })
 
-router.post('/bulk', authorize('admin'), async (req, res, next) => {
+router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { error, value } = bulkSchema.validate(req.body, { abortEarly: false, stripUnknown: true })
     if (error) {
@@ -306,6 +329,16 @@ router.post('/bulk', authorize('admin'), async (req, res, next) => {
     }
 
     const rows = value.students
+
+    if (isScopedAdmin(req.user.role)) {
+      const offenders = []
+      rows.forEach((r, i) => {
+        if (!canManageGrade(req.user.role, r.grade_level)) {
+          offenders.push(`Row ${i + 1}: grade "${r.grade_level}" is outside your scope`)
+        }
+      })
+      if (offenders.length) throw new AppError(offenders.join('; '), 403)
+    }
 
     const seen = new Set()
     for (let i = 0; i < rows.length; i++) {
@@ -367,10 +400,14 @@ router.post('/bulk', authorize('admin'), async (req, res, next) => {
 })
 
 // PUT /api/students/:id
-router.put('/:id', authorize('admin'), async (req, res, next) => {
+router.put('/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { error, value } = updateStudentSchema.validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
+
+    await assertStudentInScope(req, req.params.id)
+    // Prevent scoped admin from moving a student into an out-of-scope grade.
+    if (value.grade_level) enforceGradeScope(req, value.grade_level)
 
     const normed = normaliseName(value)
     const sets=[]; const params=[]
@@ -400,8 +437,9 @@ router.put('/:id', authorize('admin'), async (req, res, next) => {
 })
 
 // DELETE /api/students/:id
-router.delete('/:id', authorize('admin'), async (req, res, next) => {
+router.delete('/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
+    await assertStudentInScope(req, req.params.id)
     const r = await query(
       'UPDATE students SET is_active=FALSE, updated_at=NOW() WHERE id=$1 RETURNING full_name', [req.params.id]
     )
@@ -411,8 +449,9 @@ router.delete('/:id', authorize('admin'), async (req, res, next) => {
 })
 
 // POST /api/students/:id/guardians
-router.post('/:id/guardians', authorize('admin'), async (req, res, next) => {
+router.post('/:id/guardians', authorizeAnyAdmin, async (req, res, next) => {
   try {
+    await assertStudentInScope(req, req.params.id)
     const { error, value } = guardianSchema.validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
     await withTransaction(async (client) => { await insertGuardian(client, req.params.id, value) })
@@ -421,8 +460,9 @@ router.post('/:id/guardians', authorize('admin'), async (req, res, next) => {
 })
 
 // PUT /api/students/:id/guardians/:guardianId
-router.put('/:id/guardians/:guardianId', authorize('admin'), async (req, res, next) => {
+router.put('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, next) => {
   try {
+    await assertStudentInScope(req, req.params.id)
     const { error, value } = updateGuardianSchema.validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
 
@@ -444,8 +484,9 @@ router.put('/:id/guardians/:guardianId', authorize('admin'), async (req, res, ne
 })
 
 // DELETE /api/students/:id/guardians/:guardianId
-router.delete('/:id/guardians/:guardianId', authorize('admin'), async (req, res, next) => {
+router.delete('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, next) => {
   try {
+    await assertStudentInScope(req, req.params.id)
     // Get the parent_id (portal account) before deleting the row
     const row = await query(
       'SELECT parent_id FROM parent_student WHERE id=$1 AND student_id=$2',
@@ -473,8 +514,9 @@ router.delete('/:id/guardians/:guardianId', authorize('admin'), async (req, res,
 })
 
 // POST /api/students/:id/generate-qr
-router.post('/:id/generate-qr', authorize('admin'), async (req, res, next) => {
+router.post('/:id/generate-qr', authorizeAnyAdmin, async (req, res, next) => {
   try {
+    await assertStudentInScope(req, req.params.id)
     const { expiresInMinutes=30 } = req.body
     const token     = uuidv4()
     const expiresAt = new Date(Date.now() + expiresInMinutes*60000)

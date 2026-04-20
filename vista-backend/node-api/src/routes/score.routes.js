@@ -4,6 +4,7 @@ const Joi     = require('joi')
 const { query, withTransaction } = require('../config/database')
 const { authenticate, authorize } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
+const { ANY_ADMIN, isAnyAdmin, canManageGrade } = require('../utils/roles')
 
 router.use(authenticate)
 
@@ -20,7 +21,16 @@ const transmuteGrade = (initial) => {
 // Resolves subject_id → subject name + grade_level, then checks teacher_assignments.
 // Admins are always allowed. For teachers, grade_level and section must also be provided.
 const verifyTeacherAssignment = async (req, subjectId, gradeLevel, section) => {
-  if (req.user.role === 'admin') return
+  // Any admin may bypass the teacher_assignments lookup. For scoped admins
+  // (admin_ece / admin_elem) we still enforce the grade-level boundary.
+  if (isAnyAdmin(req.user.role)) {
+    const subRes = await query('SELECT grade_level FROM subjects WHERE id=$1', [subjectId])
+    const gl = gradeLevel || subRes.rows[0]?.grade_level
+    if (gl && !canManageGrade(req.user.role, gl)) {
+      throw new AppError(`Subject grade '${gl}' is outside your scope.`, 403)
+    }
+    return
+  }
   // Look up the subject name, grade_level, and school year from subjects table
   const subRes = await query(
     `SELECT s.name, s.grade_level, sy.label AS school_year
@@ -139,7 +149,7 @@ router.get('/items', async (req, res, next) => {
 })
 
 // POST /api/scores/items — Create/replace score items for a component+quarter
-router.post('/items', authorize('admin', 'teacher'), async (req, res, next) => {
+router.post('/items', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
   try {
     const schema = Joi.object({
       component_id: Joi.string().uuid().required(),
@@ -234,7 +244,7 @@ router.post('/items', authorize('admin', 'teacher'), async (req, res, next) => {
 })
 
 // DELETE /api/scores/items/:id — Soft-delete a score item
-router.delete('/items/:id', authorize('admin', 'teacher'), async (req, res, next) => {
+router.delete('/items/:id', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
   try {
     // Look up the item's subject to verify assignment
     const itemRes = await query(
@@ -260,7 +270,7 @@ router.delete('/items/:id', authorize('admin', 'teacher'), async (req, res, next
 
 // GET /api/scores?subject_id=&quarter=&grade_level=&section=
 // Returns students list, score items, and all scores for the grid
-router.get('/', authorize('admin', 'teacher'), async (req, res, next) => {
+router.get('/', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
   try {
     const { subject_id, quarter, grade_level, section } = req.query
     if (!subject_id || !quarter || !grade_level || !section) {
@@ -312,7 +322,7 @@ router.get('/', authorize('admin', 'teacher'), async (req, res, next) => {
 })
 
 // POST /api/scores — Batch upsert student scores + auto-compute final grade
-router.post('/', authorize('admin', 'teacher'), async (req, res, next) => {
+router.post('/', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
   try {
     const schema = Joi.object({
       subject_id:   Joi.string().uuid().required(),
@@ -428,7 +438,7 @@ router.post('/', authorize('admin', 'teacher'), async (req, res, next) => {
 
 // GET /api/scores/breakdown?subject_id=&quarter=&grade_level=&section=
 // Returns fully computed grade breakdown per student
-router.get('/breakdown', authorize('admin', 'teacher'), async (req, res, next) => {
+router.get('/breakdown', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
   try {
     const { subject_id, quarter, grade_level, section } = req.query
     if (!subject_id || !quarter || !grade_level || !section) {

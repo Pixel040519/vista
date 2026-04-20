@@ -169,6 +169,12 @@ export const accountApi = {
   deactivate:     (id)     => api.delete(`/accounts/teachers/${id}`),
   deletePermanent:(id)     => api.delete(`/accounts/teachers/${id}/permanent`),
   assignmentHistory: (id)  => api.get(`/accounts/teachers/${id}/assignment-history`),
+
+  // Admin accounts (super_admin only)
+  listAdmins:    (params)  => api.get('/accounts/admins', { params }),
+  createAdmin:   (data)    => api.post('/accounts/admins', data),
+  updateAdmin:   (id, d)   => api.put(`/accounts/admins/${id}`, d),
+  deleteAdmin:   (id)      => api.delete(`/accounts/admins/${id}`),
 }
 
 // ── Scores (Score Items & Student Scores) ────────────────────

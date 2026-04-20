@@ -25,7 +25,7 @@ const MOCK_USER = {
   id: 'preview-user',
   full_name: 'Preview admin',
   email: 'admin@vista.edu.ph',
-  role: 'admin',
+  role: 'super_admin',
 }
 
 const MOCK_AUTH = {

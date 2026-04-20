@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { ANY_ADMIN, ROLES, canManageGrade } = require('../utils/roles');
 
 // ─── Verify JWT Token ──────────────────────────────────────────
 const authenticate = (req, res, next) => {
@@ -33,4 +34,26 @@ const authorize = (...roles) => {
   };
 };
 
-module.exports = { authenticate, authorize };
+// Shortcuts for the common admin gates after the super/ece/elem split.
+const authorizeAnyAdmin    = authorize(...ANY_ADMIN);
+const authorizeSuperAdmin  = authorize(ROLES.SUPER_ADMIN);
+const authorizeAdminOrTeacher = authorize(...ANY_ADMIN, ROLES.TEACHER);
+
+// Throws 403 if the caller's role cannot manage the given grade level.
+// Use inside route handlers for mutations that target a specific grade row.
+function enforceGradeScope(req, gradeLevel) {
+  if (!canManageGrade(req.user?.role, gradeLevel)) {
+    const err = new Error(`Access denied. Grade '${gradeLevel}' is outside your scope.`);
+    err.status = 403;
+    throw err;
+  }
+}
+
+module.exports = {
+  authenticate,
+  authorize,
+  authorizeAnyAdmin,
+  authorizeSuperAdmin,
+  authorizeAdminOrTeacher,
+  enforceGradeScope,
+};

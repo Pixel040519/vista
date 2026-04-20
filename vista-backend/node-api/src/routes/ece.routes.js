@@ -4,10 +4,15 @@ const Joi     = require('joi')
 const { query } = require('../config/database')
 const { authenticate, authorize } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
+const { ROLES, isAnyAdmin } = require('../utils/roles')
 
 router.use(authenticate)
 
 const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
+
+// Roles that can touch ECE features. admin_elem is out of scope for ECE and
+// is therefore not in this list — the route will 403 for that role.
+const eceAllowed = authorize(ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE, ROLES.TEACHER)
 
 const getActiveSYId = async () => {
   const res = await query('SELECT id, label FROM school_years WHERE is_active=TRUE LIMIT 1')
@@ -26,7 +31,7 @@ const resolveSY = async (syId) => {
 
 // Verify teacher is assigned to this (grade_level, section) for an ECE grade in the active SY
 const verifyEceAssignment = async (req, gradeLevel, section) => {
-  if (req.user.role === 'admin') return
+  if (isAnyAdmin(req.user.role)) return
   if (!ECE_GRADES.includes(gradeLevel)) {
     throw new AppError('ECE features are only available for Pre-Nursery to Kinder.', 403)
   }
@@ -46,10 +51,10 @@ const verifyEceAssignment = async (req, gradeLevel, section) => {
 // GET /summary?quarter=<1-4>  (quarter auto-detected if omitted)
 // Teacher: scoped to their ECE assignments. Admin: school-wide.
 // Returns per-class completion stats + rating distribution + by_grade_level rollup.
-router.get('/summary', authorize('admin', 'teacher'), async (req, res, next) => {
+router.get('/summary', eceAllowed, async (req, res, next) => {
   try {
     const sy = await getActiveSYId()
-    const isAdmin = req.user.role === 'admin'
+    const isAdmin = isAnyAdmin(req.user.role)
 
     // Resolve the set of ECE (grade_level, section) pairs to aggregate over.
     // Teacher: their own assignments. Admin: every ECE class in the school.
@@ -202,7 +207,7 @@ router.get('/skills', async (req, res, next) => {
   } catch (e) { next(e) }
 })
 
-router.post('/skills', authorize('admin', 'teacher'), async (req, res, next) => {
+router.post('/skills', eceAllowed, async (req, res, next) => {
   try {
     const schema = Joi.object({
       subject_id: Joi.string().uuid().required(),
@@ -221,7 +226,7 @@ router.post('/skills', authorize('admin', 'teacher'), async (req, res, next) => 
   } catch (e) { next(e) }
 })
 
-router.put('/skills/:id', authorize('admin', 'teacher'), async (req, res, next) => {
+router.put('/skills/:id', eceAllowed, async (req, res, next) => {
   try {
     const schema = Joi.object({
       name: Joi.string().min(1).max(255).optional(),
@@ -250,7 +255,7 @@ router.put('/skills/:id', authorize('admin', 'teacher'), async (req, res, next) 
   } catch (e) { next(e) }
 })
 
-router.delete('/skills/:id', authorize('admin', 'teacher'), async (req, res, next) => {
+router.delete('/skills/:id', eceAllowed, async (req, res, next) => {
   try {
     const used = await query(
       `SELECT 1 FROM ece_competency_records WHERE skill_id=$1 LIMIT 1`, [req.params.id]

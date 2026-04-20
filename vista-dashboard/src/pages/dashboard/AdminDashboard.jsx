@@ -22,6 +22,9 @@ function formatTrendLabel(iso) {
 
 export default function AdminDashboard() {
   const { user } = useAuth()
+  const role = user?.role
+  const showEceCard = role !== 'admin_elem'   // ECE card hidden for elementary admin
+  const showAcademicDeclines = role !== 'admin_ece' // Academic Declines hidden for ECE admin (no DepEd grades)
   const [data, setData]   = useState(null)
   const [loading, setLoading] = useState(true)
   const [attModal, setAttModal] = useState({ open: false, filter: 'present' })
@@ -150,7 +153,11 @@ export default function AdminDashboard() {
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-800">Risk Distribution</h3>
-                  <p className="text-xs text-slate-400">All students</p>
+                  <p className="text-xs text-slate-400">
+                    {role === 'admin_ece' ? 'Pre-Nursery – Kinder'
+                      : role === 'admin_elem' ? 'Grade 1 – Grade 6'
+                      : 'All students'}
+                  </p>
                 </div>
                 <AlertTriangle size={16} className="text-slate-300" />
               </div>
@@ -190,8 +197,10 @@ export default function AdminDashboard() {
             </div>
           </div>
 
-          {/* Bottom Row */}
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
+          {/* Bottom Row — shrinks to 2 cols when Academic Declines is hidden */}
+          <div className={showAcademicDeclines
+            ? 'grid grid-cols-1 lg:grid-cols-4 gap-5'
+            : 'grid grid-cols-1 lg:grid-cols-2 gap-5'}>
             {/* SecurePass Oversight */}
             <div className="card p-5">
               <div className="flex items-center justify-between mb-4">
@@ -250,7 +259,8 @@ export default function AdminDashboard() {
               </ResponsiveContainer>
             </div>
 
-            {/* Academic Decline Alerts */}
+            {/* Academic Decline Alerts — hidden for ECE admin (no DepEd grades in ECE) */}
+            {showAcademicDeclines && (
             <div className="card p-5 lg:col-span-2">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -302,10 +312,11 @@ export default function AdminDashboard() {
                 </div>
               )}
             </div>
+            )}
           </div>
 
-          {/* ECE Competency Overview */}
-          <AdminEceOverviewCard />
+          {/* ECE Competency Overview — hidden for elementary admin */}
+          {showEceCard && <AdminEceOverviewCard />}
 
           {/* Enrollment by Grade */}
           {data?.overview?.enrollment_by_grade?.length > 0 && (

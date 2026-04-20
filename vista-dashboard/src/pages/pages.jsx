@@ -1767,8 +1767,8 @@ import { announcementApi } from '../api/client'
 import { Megaphone } from 'lucide-react'
 
 export function Announcements() {
-  const { user } = useAuth()
-  const isAdmin = user?.role === 'admin'
+  const { user, isAnyAdmin } = useAuth()
+  const isAdmin = isAnyAdmin
   const [announcements, setAnnouncements] = useState([])
   const [loading, setLoading]             = useState(true)
   const [showNew, setShowNew]             = useState(false)

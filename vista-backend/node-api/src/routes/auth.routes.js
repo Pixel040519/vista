@@ -7,6 +7,7 @@ const { query } = require('../config/database');
 const { authenticate } = require('../middleware/auth.middleware');
 const { AppError } = require('../middleware/error.middleware');
 const { normaliseName } = require('../utils/nameHelper');
+const { gradeScopeForRole } = require('../utils/roles');
 
 const registerSchema = Joi.object({
   email:       Joi.string().email().required(),
@@ -14,7 +15,7 @@ const registerSchema = Joi.object({
   surname:     Joi.string().min(1).required(),
   first_name:  Joi.string().min(1).required(),
   middle_name: Joi.string().optional().allow(''),
-  role:        Joi.string().valid('admin','teacher','parent').required(),
+  role:        Joi.string().valid('super_admin','admin_ece','admin_elem','teacher','parent').required(),
   phone:       Joi.string().optional().allow(''),
 });
 
@@ -69,7 +70,7 @@ router.post('/login', async (req, res, next) => {
     const user = result.rows[0];
     if (!await bcrypt.compare(value.password, user.password_hash)) throw new AppError('Invalid credentials.', 401);
 
-    const userData = { id: user.id, email: user.email, full_name: user.full_name, surname: user.surname, first_name: user.first_name, middle_name: user.middle_name, role: user.role };
+    const userData = { id: user.id, email: user.email, full_name: user.full_name, surname: user.surname, first_name: user.first_name, middle_name: user.middle_name, role: user.role, grade_scope: gradeScopeForRole(user.role) };
 
     if (user.role === 'teacher') {
       const asgn = await query(
@@ -116,6 +117,7 @@ router.get('/me', authenticate, async (req, res, next) => {
     );
     if (!result.rows.length) throw new AppError('User not found.', 404);
     const user = result.rows[0];
+    user.grade_scope = gradeScopeForRole(user.role);
 
     if (user.role === 'teacher') {
       const asgn = await query(

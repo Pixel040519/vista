@@ -2,8 +2,20 @@ const express = require('express')
 const router  = express.Router()
 const Joi     = require('joi')
 const { query, withTransaction } = require('../config/database')
-const { authenticate, authorize } = require('../middleware/auth.middleware')
+const { authenticate, authorizeAnyAdmin, authorizeSuperAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
+const { gradeScopeForRole, canManageGrade, isScopedAdmin, isSuperAdmin } = require('../utils/roles')
+
+// Look up a row's grade_level from one of the curriculum tables and enforce scope.
+const assertCurriculumRowInScope = async (req, table, id) => {
+  if (!isScopedAdmin(req.user.role)) return
+  const r = await query(`SELECT grade_level FROM ${table} WHERE id=$1`, [id])
+  if (!r.rows.length) throw new AppError('Not found.', 404)
+  if (!canManageGrade(req.user.role, r.rows[0].grade_level)) {
+    throw new AppError('Resource is outside your grade scope.', 403)
+  }
+  return r.rows[0].grade_level
+}
 
 const GRADE_LEVELS = ['Pre-Nursery','Pre-Kinder','Nursery','Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
 
@@ -61,7 +73,7 @@ router.get('/school-years', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-router.post('/school-years', authorize('admin'), async (req, res, next) => {
+router.post('/school-years', authorizeSuperAdmin, async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
       label:       Joi.string().pattern(/^\d{4}-\d{4}$/).required()
@@ -171,7 +183,7 @@ router.post('/school-years', authorize('admin'), async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-router.put('/school-years/:id', authorize('admin'), async (req, res, next) => {
+router.put('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
       label:       Joi.string().pattern(/^\d{4}-\d{4}$/).optional()
@@ -236,7 +248,7 @@ router.put('/school-years/:id', authorize('admin'), async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-router.delete('/school-years/:id', authorize('admin'), async (req, res, next) => {
+router.delete('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
   try {
     const sy = await query('SELECT label, is_active FROM school_years WHERE id=$1', [req.params.id])
     if (!sy.rows.length) throw new AppError('School year not found.', 404)
@@ -264,6 +276,10 @@ router.get('/subjects', async (req, res, next) => {
     const conditions = ['school_year_id=$1', 'is_active=TRUE']
     const params = [sy_id]
     if (req.query.grade_level) { params.push(req.query.grade_level); conditions.push(`grade_level=$${params.length}`) }
+    if (isScopedAdmin(req.user.role)) {
+      params.push(gradeScopeForRole(req.user.role))
+      conditions.push(`grade_level = ANY($${params.length}::text[])`)
+    }
 
     const result = await query(
       `SELECT id, name, grade_level, description, created_at,
@@ -278,20 +294,22 @@ router.get('/subjects', async (req, res, next) => {
 router.get('/subjects/grouped', async (req, res, next) => {
   try {
     const sy_id = await resolveSYId(req.query.sy_id)
+    const scope = gradeScopeForRole(req.user.role)
     const result = await query(
       `SELECT id, name, grade_level, description,
               EXISTS(SELECT 1 FROM grading_structure gs WHERE gs.subject_id=subjects.id AND gs.is_active=TRUE) AS has_grading
        FROM subjects WHERE school_year_id=$1 AND is_active=TRUE
-       ORDER BY ${GRADE_ORDER}, name`, [sy_id]
+         AND grade_level = ANY($2::text[])
+       ORDER BY ${GRADE_ORDER}, name`, [sy_id, scope]
     )
     const grouped = {}
-    for (const gl of GRADE_LEVELS) grouped[gl] = []
+    for (const gl of scope) grouped[gl] = []
     for (const row of result.rows) { if (grouped[row.grade_level]) grouped[row.grade_level].push(row) }
     res.json({ grouped })
   } catch (err) { next(err) }
 })
 
-router.post('/subjects', authorize('admin'), async (req, res, next) => {
+router.post('/subjects', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
       name:         Joi.string().min(1).max(100).required(),
@@ -300,6 +318,8 @@ router.post('/subjects', authorize('admin'), async (req, res, next) => {
       sy_id:        Joi.string().uuid().optional(),
     }).validate(req.body)
     if (error) throw new AppError(error.details[0].message, 422)
+
+    enforceGradeScope(req, value.grade_level)
 
     const sy_id = await resolveSYId(value.sy_id)
     const dup = await query(
@@ -317,7 +337,7 @@ router.post('/subjects', authorize('admin'), async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-router.put('/subjects/:id', authorize('admin'), async (req, res, next) => {
+router.put('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
       name:        Joi.string().min(1).max(100).optional(),
@@ -325,6 +345,9 @@ router.put('/subjects/:id', authorize('admin'), async (req, res, next) => {
       description: Joi.string().optional().allow(''),
     }).validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
+
+    await assertCurriculumRowInScope(req, 'subjects', req.params.id)
+    if (value.grade_level) enforceGradeScope(req, value.grade_level)
 
     const sets=[]; const params=[]
     if (value.name)        { params.push(value.name);        sets.push(`name=$${params.length}`) }
@@ -344,10 +367,13 @@ router.put('/subjects/:id', authorize('admin'), async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-router.delete('/subjects/:id', authorize('admin'), async (req, res, next) => {
+router.delete('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const sub = await query('SELECT name, grade_level FROM subjects WHERE id=$1', [req.params.id])
     if (!sub.rows.length) throw new AppError('Subject not found.', 404)
+    if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, sub.rows[0].grade_level)) {
+      throw new AppError('Subject is outside your grade scope.', 403)
+    }
 
     const inUse = await query('SELECT COUNT(*) FROM grades WHERE subject_id=$1', [req.params.id])
     if (parseInt(inUse.rows[0].count) > 0) {
@@ -368,6 +394,10 @@ router.get('/sections', async (req, res, next) => {
     const conditions = ['school_year_id=$1', 'is_active=TRUE']
     const params = [sy_id]
     if (req.query.grade_level) { params.push(req.query.grade_level); conditions.push(`grade_level=$${params.length}`) }
+    if (isScopedAdmin(req.user.role)) {
+      params.push(gradeScopeForRole(req.user.role))
+      conditions.push(`grade_level = ANY($${params.length}::text[])`)
+    }
 
     const result = await query(
       `SELECT id, name, grade_level, created_at
@@ -381,19 +411,21 @@ router.get('/sections', async (req, res, next) => {
 router.get('/sections/grouped', async (req, res, next) => {
   try {
     const sy_id = await resolveSYId(req.query.sy_id)
+    const scope = gradeScopeForRole(req.user.role)
     const result = await query(
       `SELECT id, name, grade_level
        FROM sections WHERE school_year_id=$1 AND is_active=TRUE
-       ORDER BY ${GRADE_ORDER}, name`, [sy_id]
+         AND grade_level = ANY($2::text[])
+       ORDER BY ${GRADE_ORDER}, name`, [sy_id, scope]
     )
     const grouped = {}
-    for (const gl of GRADE_LEVELS) grouped[gl] = []
+    for (const gl of scope) grouped[gl] = []
     for (const row of result.rows) { if (grouped[row.grade_level]) grouped[row.grade_level].push(row) }
     res.json({ grouped })
   } catch (err) { next(err) }
 })
 
-router.post('/sections', authorize('admin'), async (req, res, next) => {
+router.post('/sections', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
       name:        Joi.string().min(1).max(100).required(),
@@ -401,6 +433,8 @@ router.post('/sections', authorize('admin'), async (req, res, next) => {
       sy_id:       Joi.string().uuid().optional(),
     }).validate(req.body)
     if (error) throw new AppError(error.details[0].message, 422)
+
+    enforceGradeScope(req, value.grade_level)
 
     const sy_id = await resolveSYId(value.sy_id)
     const dup = await query(
@@ -418,13 +452,16 @@ router.post('/sections', authorize('admin'), async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-router.put('/sections/:id', authorize('admin'), async (req, res, next) => {
+router.put('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
       name:        Joi.string().min(1).max(100).optional(),
       grade_level: Joi.string().valid(...GRADE_LEVELS).optional(),
     }).validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
+
+    await assertCurriculumRowInScope(req, 'sections', req.params.id)
+    if (value.grade_level) enforceGradeScope(req, value.grade_level)
 
     const sets=[]; const params=[]
     if (value.name)        { params.push(value.name);        sets.push(`name=$${params.length}`) }
@@ -443,10 +480,13 @@ router.put('/sections/:id', authorize('admin'), async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-router.delete('/sections/:id', authorize('admin'), async (req, res, next) => {
+router.delete('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const sec = await query('SELECT name, grade_level FROM sections WHERE id=$1', [req.params.id])
     if (!sec.rows.length) throw new AppError('Section not found.', 404)
+    if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, sec.rows[0].grade_level)) {
+      throw new AppError('Section is outside your grade scope.', 403)
+    }
 
     const inUse = await query(
       `SELECT COUNT(*) FROM students
@@ -494,11 +534,14 @@ router.get('/subjects/:id/grading', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-router.put('/subjects/:id/grading', authorize('admin'), async (req, res, next) => {
+router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) => {
   try {
     // Validate subject exists
-    const sub = await query('SELECT id FROM subjects WHERE id=$1 AND is_active=TRUE', [req.params.id])
+    const sub = await query('SELECT id, grade_level FROM subjects WHERE id=$1 AND is_active=TRUE', [req.params.id])
     if (!sub.rows.length) throw new AppError('Subject not found.', 404)
+    if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, sub.rows[0].grade_level)) {
+      throw new AppError('Subject is outside your grade scope.', 403)
+    }
 
     const catSchema = Joi.object({
       id:         Joi.string().uuid().optional(),
@@ -646,8 +689,9 @@ router.put('/subjects/:id/grading', authorize('admin'), async (req, res, next) =
   } catch (err) { next(err) }
 })
 
-router.delete('/subjects/:id/grading', authorize('admin'), async (req, res, next) => {
+router.delete('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) => {
   try {
+    await assertCurriculumRowInScope(req, 'subjects', req.params.id)
     // Block if any component has recorded scores
     const withScores = await query(
       `SELECT DISTINCT gs.name
@@ -674,7 +718,7 @@ router.delete('/subjects/:id/grading', authorize('admin'), async (req, res, next
 
 // GET /api/curriculum/subjects/:id/grading/scores-check
 // Returns component IDs that have recorded student scores
-router.get('/subjects/:id/grading/scores-check', authorize('admin'), async (req, res, next) => {
+router.get('/subjects/:id/grading/scores-check', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const result = await query(
       `SELECT DISTINCT gs.id

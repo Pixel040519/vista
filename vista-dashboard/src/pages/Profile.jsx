@@ -8,15 +8,19 @@ import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
 const roleLabels = {
-  admin: 'Administrator',
-  teacher: 'Teacher',
-  parent: 'Parent / Guardian',
+  super_admin: 'Super Admin',
+  admin_ece:   'ECE Admin',
+  admin_elem:  'Elementary Admin',
+  teacher:     'Teacher',
+  parent:      'Parent / Guardian',
 }
 
 const roleStyles = {
-  admin:   'bg-purple-50 text-purple-700 border-purple-200',
-  teacher: 'bg-teal-50 text-teal-700 border-teal-200',
-  parent:  'bg-amber-50 text-amber-700 border-amber-200',
+  super_admin: 'bg-purple-50 text-purple-700 border-purple-200',
+  admin_ece:   'bg-indigo-50 text-indigo-700 border-indigo-200',
+  admin_elem:  'bg-sky-50 text-sky-700 border-sky-200',
+  teacher:     'bg-teal-50 text-teal-700 border-teal-200',
+  parent:      'bg-amber-50 text-amber-700 border-amber-200',
 }
 
 function formatMemberSince(iso) {

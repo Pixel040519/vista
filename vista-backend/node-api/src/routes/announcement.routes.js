@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../config/database');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorizeAnyAdmin } = require('../middleware/auth.middleware');
 
 router.use(authenticate);
 
@@ -16,7 +16,7 @@ router.get('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/', authorize('admin'), async (req, res, next) => {
+router.post('/', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { title, content, target_audience } = req.body;
     const result = await query(

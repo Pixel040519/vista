@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, authorizeAnyAdmin } = require('../middleware/auth.middleware');
 const { AppError } = require('../middleware/error.middleware');
 const { query } = require('../config/database');
+const { ROLES, ANY_ADMIN, gradeScopeForRole, isScopedAdmin } = require('../utils/roles');
 
 router.use(authenticate);
 
@@ -110,7 +111,7 @@ router.post('/predict-performance', async (req, res, next) => {
 
 // ─── POST /api/ai/risk-assessment ─────────────────────────────
 // Get risk level classification for a student
-router.post('/risk-assessment', authorize('admin', 'teacher'), async (req, res, next) => {
+router.post('/risk-assessment', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
   try {
     const { student_id } = req.body;
     if (!student_id) throw new AppError('student_id is required.', 400);
@@ -124,7 +125,7 @@ router.post('/risk-assessment', authorize('admin', 'teacher'), async (req, res, 
 
 // ─── POST /api/ai/sentiment ────────────────────────────────────
 // Analyze behavioral text sentiment
-router.post('/sentiment', authorize('admin', 'teacher'), async (req, res, next) => {
+router.post('/sentiment', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
   try {
     const { text } = req.body;
     if (!text) throw new AppError('text is required.', 400);
@@ -140,14 +141,30 @@ router.post('/sentiment', authorize('admin', 'teacher'), async (req, res, next) 
 // Get latest risk assessments for all active students.
 // Teachers receive a payload scoped to their (grade_level, section) assignments
 // under the active school year; admins get the full school-wide list.
-router.get('/risk-all', authorize('admin', 'teacher'), async (req, res, next) => {
+router.get('/risk-all', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
   try {
     const response = await axios.get(`${AI_URL}/classify/risk/all`, { timeout: 15000 });
+    const allStudents = response.data?.students || [];
 
-    if (req.user.role !== 'teacher') {
+    // Super_admin: full school-wide list passes through unfiltered.
+    if (req.user.role === ROLES.SUPER_ADMIN) {
       return res.json(response.data);
     }
 
+    // Scoped admins (admin_ece / admin_elem): filter to their grade scope.
+    if (isScopedAdmin(req.user.role)) {
+      const scope = new Set(gradeScopeForRole(req.user.role));
+      const students = allStudents.filter(s => scope.has(s.grade_level));
+      const summary = {
+        total: students.length,
+        stable:   students.filter(s => s.risk_level === 'Stable').length,
+        moderate: students.filter(s => s.risk_level === 'Moderate Risk').length,
+        high:     students.filter(s => s.risk_level === 'High Risk').length,
+      };
+      return res.json({ students, summary });
+    }
+
+    // Teacher: filter to their (grade_level, section) assignments.
     const syRes = await query(
       'SELECT label FROM school_years WHERE is_active = TRUE LIMIT 1'
     );
@@ -164,7 +181,6 @@ router.get('/risk-all', authorize('admin', 'teacher'), async (req, res, next) =>
       asgRes.rows.map(r => `${r.grade_level}||${r.section}`)
     );
 
-    const allStudents = response.data?.students || [];
     const students = allStudents.filter(s =>
       scope.has(`${s.grade_level}||${s.section}`)
     );
@@ -430,7 +446,7 @@ router.get('/class-health', authorize('teacher'), async (req, res, next) => {
 // latest quarter with records. Attendance + Behavior tiles reuse the same
 // rules as /class-health. Available to both admin (school-wide) and
 // teacher (scoped to their teacher_assignments for this student's class).
-router.get('/ece-class-health', authorize('admin', 'teacher'), async (req, res, next) => {
+router.get('/ece-class-health', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
   try {
     const { student_id } = req.query;
     if (!student_id) throw new AppError('student_id is required.', 400);
@@ -1050,10 +1066,56 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
 
 // ─── GET /api/ai/dashboard-summary ────────────────────────────
 // Get AI-generated summary for admin dashboard
-router.get('/dashboard-summary', authorize('admin'), async (req, res, next) => {
+router.get('/dashboard-summary', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const result = await axios.get(`${AI_URL}/dashboard/summary`, { timeout: 15000 });
-    res.json(result.data);
+    const payload = result.data;
+
+    // Super admin sees the full school-wide aggregate unchanged.
+    if (!isScopedAdmin(req.user.role)) {
+      return res.json(payload);
+    }
+
+    // Scoped admins (admin_ece / admin_elem): narrow counts to their grade scope.
+    const scope = gradeScopeForRole(req.user.role);
+    const scopeSet = new Set(scope);
+
+    // Filter enrollment_by_grade + academic_declines by grade.
+    if (Array.isArray(payload?.overview?.enrollment_by_grade)) {
+      payload.overview.enrollment_by_grade = payload.overview.enrollment_by_grade
+        .filter(r => scopeSet.has(r.grade));
+    }
+    if (Array.isArray(payload?.academic_declines)) {
+      payload.academic_declines = payload.academic_declines
+        .filter(d => scopeSet.has(d.grade_level));
+    }
+
+    // Recount overview.total_students from DB within scope.
+    try {
+      const totalRes = await query(
+        `SELECT COUNT(*)::int AS n FROM students
+          WHERE is_active = TRUE AND grade_level = ANY($1::text[])`,
+        [scope]
+      );
+      payload.overview = payload.overview || {};
+      payload.overview.total_students = totalRes.rows[0]?.n || 0;
+    } catch {}
+
+    // Recompute risk_distribution for the scope by re-hitting the live risk endpoint.
+    try {
+      const riskRes = await axios.get(`${AI_URL}/classify/risk/all`, { timeout: 15000 });
+      const allStudents = riskRes.data?.students || [];
+      const scoped = allStudents.filter(s => scopeSet.has(s.grade_level));
+      const dist = { stable: 0, moderate_risk: 0, high_risk: 0 };
+      for (const s of scoped) {
+        if (s.risk_level === 'Stable')             dist.stable++;
+        else if (s.risk_level === 'Moderate Risk') dist.moderate_risk++;
+        else if (s.risk_level === 'High Risk')     dist.high_risk++;
+      }
+      payload.risk_distribution = dist;
+    } catch {}
+
+    res.json(payload);
   } catch (err) {
     next(new AppError('Could not fetch dashboard summary.', 503));
   }

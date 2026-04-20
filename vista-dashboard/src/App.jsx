@@ -18,6 +18,7 @@ import CurriculumManagement from './pages/CurriculumManagement'
 import ScoreEntry from './pages/ScoreEntry'
 import EceCompetency from './pages/EceCompetency'
 import Profile from './pages/Profile'
+import { ROLES, ANY_ADMIN } from './utils/roles'
 
 
 function PrivateRoute({ children, roles }) {
@@ -66,21 +67,21 @@ export default function App() {
             } />
 
             <Route path="ece-competency" element={
-              <PrivateRoute roles={['admin', 'teacher']}><EceCompetency /></PrivateRoute>
+              <PrivateRoute roles={[ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE, ROLES.TEACHER]}><EceCompetency /></PrivateRoute>
             } />
 
             <Route path="behavior" element={<Behavior />} />
 
             <Route path="securepass" element={
-              <PrivateRoute roles={['admin', 'teacher']}><SecurePass /></PrivateRoute>
+              <PrivateRoute roles={[...ANY_ADMIN, ROLES.TEACHER]}><SecurePass /></PrivateRoute>
             } />
 
             <Route path="securepass/scan" element={
-              <PrivateRoute roles={['admin', 'teacher']}><SecurePassScan /></PrivateRoute>
+              <PrivateRoute roles={[...ANY_ADMIN, ROLES.TEACHER]}><SecurePassScan /></PrivateRoute>
             } />
 
             <Route path="risk" element={
-              <PrivateRoute roles={['admin', 'teacher']}><RiskOverview /></PrivateRoute>
+              <PrivateRoute roles={[...ANY_ADMIN, ROLES.TEACHER]}><RiskOverview /></PrivateRoute>
             } />
 
             <Route path="announcements" element={<Announcements />} />
@@ -88,11 +89,11 @@ export default function App() {
             <Route path="profile" element={<Profile />} />
 
             <Route path="accounts" element={
-              <PrivateRoute roles={['admin']}><AccountManagement /></PrivateRoute>
+              <PrivateRoute roles={ANY_ADMIN}><AccountManagement /></PrivateRoute>
             } />
 
             <Route path="curriculum" element={
-              <PrivateRoute roles={['admin']}><CurriculumManagement /></PrivateRoute>
+              <PrivateRoute roles={ANY_ADMIN}><CurriculumManagement /></PrivateRoute>
             } />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useMemo } from 'react'
 import { authApi } from '../api/client'
+import { gradeScopeForRole, isAnyAdmin, isSuperAdmin, isScopedAdmin, ROLES } from '../utils/roles'
 
 //this auth context is for preview mode only, to bypass to every page of the system.
 export const AuthContext = createContext(null)
@@ -47,8 +48,24 @@ export function AuthProvider({ children }) {
     setUser(prev => prev ? { ...prev, ...patch } : prev)
   }
 
+  const gradeScope = useMemo(
+    () => user?.grade_scope || (user?.role ? gradeScopeForRole(user.role) : []),
+    [user]
+  )
+
+  const roleFlags = useMemo(() => ({
+    isSuperAdmin:  isSuperAdmin(user?.role),
+    isAnyAdmin:    isAnyAdmin(user?.role),
+    isScopedAdmin: isScopedAdmin(user?.role),
+    isTeacher:     user?.role === ROLES.TEACHER,
+    isParent:      user?.role === ROLES.PARENT,
+  }), [user])
+
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading, activeAssignments, updateUser }}>
+    <AuthContext.Provider value={{
+      user, login, logout, loading, activeAssignments, updateUser,
+      gradeScope, ...roleFlags,
+    }}>
       {children}
     </AuthContext.Provider>
   )

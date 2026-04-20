@@ -70,8 +70,8 @@ function SkillItem({ skill, onEdit, onDelete }) {
 }
 
 export default function EceCompetency() {
-  const { user, activeAssignments } = useAuth()
-  const isReadOnly = user?.role === 'admin'
+  const { user, activeAssignments, isAnyAdmin } = useAuth()
+  const isReadOnly = isAnyAdmin
 
   // Admin: load all ECE sections school-wide (they have no activeAssignments).
   // Teacher: build class list from activeAssignments filtered to ECE grades.
