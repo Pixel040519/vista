@@ -741,9 +741,9 @@ export default function ScoreEntry() {
             <div key={cat.id} className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
               {/* Category header */}
               <div className="flex items-center gap-2 min-w-0">
-                <div className="w-2 h-2 rounded-full bg-teal-500 flex-shrink-0" />
+                <div className="w-2 h-2 rounded-full bg-brand-500 flex-shrink-0" />
                 <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide truncate">
-                  {cat.name} <span className="text-teal-600">{cat.weight}%</span>
+                  {cat.name} <span className="text-brand-600">{cat.weight}%</span>
                 </h2>
               </div>
 
@@ -753,10 +753,10 @@ export default function ScoreEntry() {
                 const isExpanded = expandedComps.has(comp.id)
 
                 return (
-                  <div key={comp.id} className="card overflow-hidden border border-teal-200">
+                  <div key={comp.id} className="card overflow-hidden border border-brand-200">
                     {/* Component header */}
                     <div
-                      className="flex items-center justify-between px-4 py-3 bg-teal-50/60 cursor-pointer select-none min-w-0"
+                      className="flex items-center justify-between px-4 py-3 bg-brand-50/60 cursor-pointer select-none min-w-0"
                       onClick={() => toggleComp(comp.id)}
                     >
                       <div className="flex items-center gap-2 min-w-0">
@@ -772,7 +772,7 @@ export default function ScoreEntry() {
                           <button
                             onClick={e => { e.stopPropagation(); handleSave() }}
                             disabled={saving || !hasChanges()}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 bg-teal-500 hover:bg-teal-600 text-white disabled:hover:bg-teal-500"
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 bg-brand-500 hover:bg-brand-600 text-white disabled:hover:bg-brand-500"
                           >
                             {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
                             {saving ? 'Saving...' : 'Save Scores'}
@@ -780,7 +780,7 @@ export default function ScoreEntry() {
                         )}
                         <button
                           onClick={e => { e.stopPropagation(); openItemManager(comp) }}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
                           title="Manage score items"
                         >
                           <Settings size={15} />
@@ -793,7 +793,7 @@ export default function ScoreEntry() {
                       items.length === 0 ? (
                         <div className="px-4 py-6 text-center text-sm text-slate-400">
                           No score items yet.
-                          <button onClick={() => openItemManager(comp)} className="ml-1 text-teal-600 hover:underline">
+                          <button onClick={() => openItemManager(comp)} className="ml-1 text-brand-600 hover:underline">
                             Add items
                           </button>
                         </div>
@@ -843,7 +843,7 @@ export default function ScoreEntry() {
                                             onChange={e => handleScoreChange(item.id, student.id, e.target.value)}
                                             className={clsx(
                                               'w-[62px] px-1 py-1 text-center text-sm rounded-lg border transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none',
-                                              'focus:outline-none focus:ring-2 focus:ring-teal-300 focus:border-teal-400',
+                                              'focus:outline-none focus:ring-2 focus:ring-brand-300 focus:border-brand-400',
                                               val != null && val > parseFloat(item.highest_possible_score)
                                                 ? 'border-red-300 bg-red-50 text-red-700'
                                                 : 'border-slate-200 bg-white text-slate-700'
@@ -854,7 +854,7 @@ export default function ScoreEntry() {
                                     })}
                                     <td className="text-center text-sm font-medium text-slate-600 bg-slate-50/50 !w-[56px] !px-1">{stats.total}</td>
                                     <td className="text-center text-sm font-medium text-slate-600 bg-slate-50/50 !w-[56px] !px-1">{stats.ps.toFixed(2)}</td>
-                                    <td className="text-center text-sm font-semibold text-teal-700 bg-slate-50/50 !w-[56px] !px-1">{ws.toFixed(2)}</td>
+                                    <td className="text-center text-sm font-semibold text-brand-700 bg-slate-50/50 !w-[56px] !px-1">{ws.toFixed(2)}</td>
                                   </tr>
                                 )
                               })}
@@ -870,7 +870,7 @@ export default function ScoreEntry() {
                                   {Math.floor(items.reduce((s, i) => s + parseFloat(i.highest_possible_score), 0))}
                                 </td>
                                 <td className="text-center text-sm font-semibold text-slate-600 !px-1">100</td>
-                                <td className="text-center text-sm font-semibold text-teal-700 !px-1">{comp.weight}</td>
+                                <td className="text-center text-sm font-semibold text-brand-700 !px-1">{comp.weight}</td>
                               </tr>
                             </tbody>
                           </table>
@@ -899,8 +899,8 @@ export default function ScoreEntry() {
                         <span className="font-normal text-slate-400">({cat.weight}%)</span>
                       </th>
                     ))}
-                    <th className="whitespace-nowrap text-center px-4 py-2.5 text-xs font-semibold text-teal-600 uppercase tracking-wider">Initial</th>
-                    <th className="whitespace-nowrap text-center px-4 py-2.5 text-xs font-semibold text-teal-600 uppercase tracking-wider">Final</th>
+                    <th className="whitespace-nowrap text-center px-4 py-2.5 text-xs font-semibold text-brand-600 uppercase tracking-wider">Initial</th>
+                    <th className="whitespace-nowrap text-center px-4 py-2.5 text-xs font-semibold text-brand-600 uppercase tracking-wider">Final</th>
                     <th className="whitespace-nowrap text-center px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">Remarks</th>
                   </tr>
                 </thead>
@@ -939,7 +939,7 @@ export default function ScoreEntry() {
                                 )
                               })}
                               <td className="text-center px-4 py-2.5 text-sm tabular-nums font-semibold text-slate-700">{initialGrade.toFixed(2)}</td>
-                              <td className={clsx('text-center px-4 py-2.5 text-sm tabular-nums font-bold', passed ? 'text-teal-600' : 'text-red-500')}>{transmuted}</td>
+                              <td className={clsx('text-center px-4 py-2.5 text-sm tabular-nums font-bold', passed ? 'text-emerald-600' : 'text-red-500')}>{transmuted}</td>
                               <td className="text-center px-4 py-2.5">
                                 <span className={clsx('inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold', passed ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500')}>
                                   {passed ? 'Passed' : 'Failed'}
@@ -982,7 +982,7 @@ export default function ScoreEntry() {
                 onDragEnd={handleItemDragEnd}
                 className={clsx(
                   'flex items-center gap-2 rounded-lg transition-all',
-                  itemDragIdx === idx ? 'opacity-40 bg-teal-50' : itemDragOverIdx === idx && itemDragIdx !== null ? 'ring-2 ring-teal-200' : ''
+                  itemDragIdx === idx ? 'opacity-40 bg-brand-50' : itemDragOverIdx === idx && itemDragIdx !== null ? 'ring-2 ring-brand-200' : ''
                 )}
               >
                 <div
@@ -1021,7 +1021,7 @@ export default function ScoreEntry() {
 
             <button
               onClick={addEditItem}
-              className="w-full py-2 border-2 border-dashed border-slate-200 rounded-xl text-sm text-slate-400 hover:text-teal-600 hover:border-teal-300 transition-colors flex items-center justify-center gap-1"
+              className="w-full py-2 border-2 border-dashed border-slate-200 rounded-xl text-sm text-slate-400 hover:text-brand-600 hover:border-brand-300 transition-colors flex items-center justify-center gap-1"
             >
               <Plus size={14} /> Add Item
             </button>

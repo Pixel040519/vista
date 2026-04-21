@@ -359,12 +359,12 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
           onDragOver={onDragOver}
           className={clsx(
             'border-2 border-dashed rounded-xl p-6 text-center transition-colors',
-            fileName ? 'border-teal-300 bg-teal-50/50' : 'border-slate-300 bg-slate-50 hover:border-teal-400 hover:bg-teal-50/30'
+            fileName ? 'border-brand-300 bg-brand-50/50' : 'border-slate-300 bg-slate-50 hover:border-brand-400 hover:bg-brand-50/30'
           )}
         >
           {fileName ? (
             <div className="flex items-center justify-center gap-3">
-              <FileText size={24} className="text-teal-600"/>
+              <FileText size={24} className="text-brand-600"/>
               <div className="text-left">
                 <p className="text-sm font-medium text-slate-800">{fileName}</p>
                 <p className="text-xs text-slate-500">

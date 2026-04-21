@@ -165,7 +165,7 @@ export default function TeacherDashboard() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="page-title">
-            Good {greeting}, <span className="text-teal-600">{firstName}</span> 👋
+            Good {greeting}, <span className="text-brand-600">{firstName}</span> 👋
           </h1>
           <p className="page-subtitle">
             You teach <span className="font-semibold text-slate-700">{activeAssignments.length}</span>{' '}
@@ -189,7 +189,7 @@ export default function TeacherDashboard() {
               value={my.total.toLocaleString()}
               subtitle={`Across ${my.sections} section${my.sections !== 1 ? 's' : ''}`}
               icon={Users}
-              color="teal"
+              color="brand"
               onClick={() => navigate('/students')}
             />
             <StatCard
@@ -256,7 +256,7 @@ export default function TeacherDashboard() {
                       onClick={() => goToAttendance(t.grade_level, t.section, t.subject_id)}
                       className={`text-xs font-medium px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors shrink-0 ${
                         t.pending
-                          ? 'bg-teal-50 text-teal-700 hover:bg-teal-100'
+                          ? 'bg-brand-50 text-brand-700 hover:bg-brand-100'
                           : 'text-slate-500 hover:bg-slate-100'
                       }`}
                     >
@@ -284,7 +284,7 @@ export default function TeacherDashboard() {
                   {mySectionsHealth.map((sec, i) => {
                     const total = sec.enrollment || 1
                     return (
-                      <div key={i} className="border border-slate-200 rounded-xl p-3 hover:border-teal-300 transition-colors">
+                      <div key={i} className="border border-slate-200 rounded-xl p-3 hover:border-brand-300 transition-colors">
                         <div className="flex items-start justify-between gap-2 mb-2">
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-slate-800 truncate">
@@ -323,7 +323,7 @@ export default function TeacherDashboard() {
                   <h3 className="text-sm font-semibold text-slate-800">Students to Watch</h3>
                   <p className="text-xs text-slate-400">From your classes</p>
                 </div>
-                <Link to="/risk" className="text-xs text-teal-600 font-medium hover:text-teal-700 flex items-center gap-1">
+                <Link to="/risk" className="text-xs text-brand-600 font-medium hover:text-brand-700 flex items-center gap-1">
                   All <ChevronRight size={13} />
                 </Link>
               </div>
@@ -335,7 +335,7 @@ export default function TeacherDashboard() {
                 <ul className="space-y-2">
                   {studentsToWatch.map(s => (
                     <li key={s.student_id} className="flex items-center justify-between gap-2">
-                      <Link to={`/students/${s.student_id}`} className="min-w-0 hover:text-teal-700">
+                      <Link to={`/students/${s.student_id}`} className="min-w-0 hover:text-brand-700">
                         <p className="text-sm font-medium text-slate-800 truncate">{s.full_name}</p>
                         <p className="text-[11px] text-slate-400">
                           {s.grade_level} · {s.section}
@@ -362,7 +362,7 @@ export default function TeacherDashboard() {
                 <h3 className="text-sm font-semibold text-slate-800">Score Entry Progress</h3>
                 <p className="text-xs text-slate-400">Components with score items per subject</p>
               </div>
-              <Link to="/score-entry" className="text-xs text-teal-600 font-medium hover:text-teal-700 flex items-center gap-1">
+              <Link to="/score-entry" className="text-xs text-brand-600 font-medium hover:text-brand-700 flex items-center gap-1">
                 Open <ChevronRight size={13} />
               </Link>
             </div>
@@ -412,7 +412,7 @@ export default function TeacherDashboard() {
                           <td>
                             <button
                               onClick={() => goToScoreEntry(sp.grade_level, sp.section, sp.subject_id, sp.latest_quarter)}
-                              className="text-xs text-teal-600 font-medium hover:text-teal-700 flex items-center gap-1"
+                              className="text-xs text-brand-600 font-medium hover:text-brand-700 flex items-center gap-1"
                             >
                               Resume <ArrowRight size={12} />
                             </button>
@@ -435,13 +435,13 @@ export default function TeacherDashboard() {
                   <h3 className="text-sm font-semibold text-slate-800">Recent Behavior Logs</h3>
                   <p className="text-xs text-slate-400">Your last 5 entries</p>
                 </div>
-                <Link to="/behavior" className="text-xs text-teal-600 font-medium hover:text-teal-700 flex items-center gap-1">
+                <Link to="/behavior" className="text-xs text-brand-600 font-medium hover:text-brand-700 flex items-center gap-1">
                   Add <ChevronRight size={13} />
                 </Link>
               </div>
               {(data?.behavior_recent || []).length === 0 ? (
                 <div className="text-center py-6 text-xs text-slate-400">
-                  No behavior logs yet. <Link to="/behavior" className="text-teal-600">Add the first one</Link>.
+                  No behavior logs yet. <Link to="/behavior" className="text-brand-600">Add the first one</Link>.
                 </div>
               ) : (
                 <ul className="space-y-3">

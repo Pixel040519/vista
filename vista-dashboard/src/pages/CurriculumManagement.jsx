@@ -42,7 +42,7 @@ const GRADE_COLORS = {
   'Kinder':      { bg:'bg-purple-50',  border:'border-purple-200',  badge:'bg-purple-100 text-purple-700',  dot:'bg-purple-400'  },
   'Grade 1':     { bg:'bg-blue-50',    border:'border-blue-200',    badge:'bg-blue-100 text-blue-700',      dot:'bg-blue-400'    },
   'Grade 2':     { bg:'bg-sky-50',     border:'border-sky-200',     badge:'bg-sky-100 text-sky-700',        dot:'bg-sky-400'     },
-  'Grade 3':     { bg:'bg-teal-50',    border:'border-teal-200',    badge:'bg-teal-100 text-teal-700',      dot:'bg-teal-400'    },
+  'Grade 3':     { bg:'bg-brand-50',    border:'border-brand-200',    badge:'bg-brand-100 text-brand-700',      dot:'bg-brand-400'    },
   'Grade 4':     { bg:'bg-emerald-50', border:'border-emerald-200', badge:'bg-emerald-100 text-emerald-700',dot:'bg-emerald-400' },
   'Grade 5':     { bg:'bg-amber-50',   border:'border-amber-200',   badge:'bg-amber-100 text-amber-700',    dot:'bg-amber-400'   },
   'Grade 6':     { bg:'bg-orange-50',  border:'border-orange-200',  badge:'bg-orange-100 text-orange-700',  dot:'bg-orange-400'  },
@@ -88,7 +88,7 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
 
   if (editing) {
     return (
-      <div className="flex flex-col gap-1.5 p-2 bg-white rounded-lg border-2 border-teal-300 shadow-sm">
+      <div className="flex flex-col gap-1.5 p-2 bg-white rounded-lg border-2 border-brand-300 shadow-sm">
         <input autoFocus
           className="text-sm font-medium text-slate-800 bg-transparent outline-none border-b border-slate-200 pb-1"
           value={name} onChange={e => setName(e.target.value)} onKeyDown={handleKey} placeholder="Name"/>
@@ -100,7 +100,7 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
           <button onClick={() => { setEditing(false); setName(item.name); setDesc(item.description||'') }}
             className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100"><X size={13}/></button>
           <button onClick={handleSave} disabled={saving || !name.trim()}
-            className="p-1 rounded text-teal-600 hover:text-teal-700 hover:bg-teal-50 disabled:opacity-40"><Check size={13}/></button>
+            className="p-1 rounded text-brand-600 hover:text-brand-700 hover:bg-brand-50 disabled:opacity-40"><Check size={13}/></button>
         </div>
       </div>
     )
@@ -112,7 +112,7 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
         <div className="flex items-center gap-1.5">
           <p className="text-sm font-medium text-slate-700 truncate">{item.name}</p>
           {type === 'subject' && item.has_grading && onGradingConfig && (
-            <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-teal-400" title="Grading structure configured" />
+            <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-brand-400" title="Grading structure configured" />
           )}
         </div>
         {type === 'subject' && item.description && (
@@ -122,7 +122,7 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
       <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-2">
         {type === 'subject' && onGradingConfig && (
           <button onClick={() => onGradingConfig(item)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-teal-500 hover:bg-teal-50 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-brand-500 hover:bg-brand-50 transition-colors"
             title="Configure grading structure">
             <SlidersHorizontal size={12}/>
           </button>
@@ -164,7 +164,7 @@ function AddItemForm({ gradeLevel, type, syId, onAdd, onClose }) {
 
   return (
     <form onSubmit={handleSubmit}
-      className="flex flex-col gap-1.5 p-2 bg-white rounded-lg border-2 border-teal-300 shadow-sm mt-1">
+      className="flex flex-col gap-1.5 p-2 bg-white rounded-lg border-2 border-brand-300 shadow-sm mt-1">
       <input autoFocus
         className="text-sm font-medium text-slate-800 outline-none border-b border-slate-200 pb-1 bg-transparent"
         value={name} onChange={e => setName(e.target.value)}
@@ -178,7 +178,7 @@ function AddItemForm({ gradeLevel, type, syId, onAdd, onClose }) {
         <button type="button" onClick={onClose}
           className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100"><X size={13}/></button>
         <button type="submit" disabled={saving || !name.trim()}
-          className="p-1 rounded text-teal-600 hover:text-teal-700 hover:bg-teal-50 disabled:opacity-40"><Check size={13}/></button>
+          className="p-1 rounded text-brand-600 hover:text-brand-700 hover:bg-brand-50 disabled:opacity-40"><Check size={13}/></button>
       </div>
     </form>
   )
@@ -203,7 +203,7 @@ function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradin
         </div>
         <div className="flex items-center gap-2">
           <button onClick={e => { e.stopPropagation(); setAdding(true); setOpen(true) }}
-            className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-teal-600 px-2 py-1 rounded-lg hover:bg-white/60 transition-colors">
+            className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-brand-600 px-2 py-1 rounded-lg hover:bg-white/60 transition-colors">
             <Plus size={13}/> Add
           </button>
           {open ? <ChevronDown size={15} className="text-slate-400"/> : <ChevronRight size={15} className="text-slate-400"/>}
@@ -214,7 +214,7 @@ function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradin
           {items.length === 0 && !adding && (
             <p className="text-xs text-slate-400 text-center py-3">
               No {type === 'subject' ? 'subjects' : 'sections'} yet.{' '}
-              <button onClick={() => setAdding(true)} className="text-teal-600 font-medium hover:text-teal-700">Add one</button>
+              <button onClick={() => setAdding(true)} className="text-brand-600 font-medium hover:text-brand-700">Add one</button>
             </p>
           )}
           {items.map(item => (
@@ -238,12 +238,12 @@ function SYSelector({ schoolYears, selectedSY, onSelect, onManage, canManage = t
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 hover:border-teal-300 transition-colors shadow-sm"
+        className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 hover:border-brand-300 transition-colors shadow-sm"
       >
-        <CalendarDays size={15} className="text-teal-500"/>
+        <CalendarDays size={15} className="text-brand-500"/>
         SY {current?.label || '—'}
         {current?.is_active
-          ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-teal-100 text-teal-700 font-medium">active</span>
+          ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">active</span>
           : current?.is_upcoming
             ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">upcoming</span>
             : current
@@ -262,12 +262,12 @@ function SYSelector({ schoolYears, selectedSY, onSelect, onManage, canManage = t
                 onClick={() => { onSelect(sy); setOpen(false) }}
                 className={clsx(
                   'w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 transition-colors',
-                  sy.id === selectedSY?.id && 'bg-teal-50'
+                  sy.id === selectedSY?.id && 'bg-brand-50'
                 )}>
                 <CalendarDays size={14} className="text-slate-400 flex-shrink-0"/>
                 <span className="flex-1 text-sm font-medium text-slate-800">SY {sy.label}</span>
                 {sy.is_active
-                  ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-teal-100 text-teal-700 font-medium">active</span>
+                  ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">active</span>
                   : sy.is_upcoming
                     ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">upcoming</span>
                     : <span className="text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 font-medium">archived</span>
@@ -277,7 +277,7 @@ function SYSelector({ schoolYears, selectedSY, onSelect, onManage, canManage = t
             {canManage && (
               <div className="border-t border-slate-100">
                 <button onClick={() => { setOpen(false); onManage() }}
-                  className="w-full flex items-center gap-2 px-4 py-3 text-sm text-teal-600 hover:bg-teal-50 transition-colors font-medium">
+                  className="w-full flex items-center gap-2 px-4 py-3 text-sm text-brand-600 hover:bg-brand-50 transition-colors font-medium">
                   <Plus size={14}/> Create New School Year
                 </button>
               </div>
@@ -335,10 +335,10 @@ function CreateSYModal({ schoolYears, onClose, onCreate }) {
       </div>
 
       {/* Copy from previous year */}
-      <div className={clsx('p-4 rounded-xl border-2 transition-colors', copyEnabled ? 'border-teal-300 bg-teal-50' : 'border-slate-200 bg-slate-50')}>
+      <div className={clsx('p-4 rounded-xl border-2 transition-colors', copyEnabled ? 'border-brand-300 bg-brand-50' : 'border-slate-200 bg-slate-50')}>
         <label className="flex items-center justify-between cursor-pointer">
           <div className="flex items-center gap-2.5">
-            <Copy size={15} className={copyEnabled ? 'text-teal-600' : 'text-slate-400'}/>
+            <Copy size={15} className={copyEnabled ? 'text-brand-600' : 'text-slate-400'}/>
             <div>
               <p className="text-sm font-medium text-slate-800">Copy from previous year</p>
               <p className="text-xs text-slate-500">Copy subjects &amp; sections</p>
@@ -348,7 +348,7 @@ function CreateSYModal({ schoolYears, onClose, onCreate }) {
           <button type="button" onClick={() => setCopyEnabled(!copyEnabled)}
             className={clsx(
               'relative w-11 h-6 rounded-full transition-colors flex-shrink-0',
-              copyEnabled ? 'bg-teal-500' : 'bg-slate-300'
+              copyEnabled ? 'bg-brand-500' : 'bg-slate-300'
             )}>
             <span className={clsx(
               'absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform',
@@ -631,8 +631,8 @@ export default function CurriculumManagement() {
           className={clsx(
             'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all',
             tab === 'subjects'
-              ? 'bg-teal-500 text-white shadow-md shadow-teal-200'
-              : 'bg-white text-slate-600 border border-slate-200 hover:border-teal-300 hover:text-teal-600'
+              ? 'bg-brand-500 text-white shadow-md shadow-brand-200'
+              : 'bg-white text-slate-600 border border-slate-200 hover:border-brand-300 hover:text-brand-600'
           )}>
           <BookOpen size={15}/>
           Subjects
@@ -647,8 +647,8 @@ export default function CurriculumManagement() {
           className={clsx(
             'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all',
             tab === 'sections'
-              ? 'bg-teal-500 text-white shadow-md shadow-teal-200'
-              : 'bg-white text-slate-600 border border-slate-200 hover:border-teal-300 hover:text-teal-600'
+              ? 'bg-brand-500 text-white shadow-md shadow-brand-200'
+              : 'bg-white text-slate-600 border border-slate-200 hover:border-brand-300 hover:text-brand-600'
           )}>
           <LayoutGrid size={15}/>
           Sections

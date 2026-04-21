@@ -24,7 +24,7 @@ const TABS = ['Overview', 'Grades', 'Attendance', 'Behavior', 'AI Insights']
 const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
 const ECE_RATINGS = [
   { value: 'E',  label: 'Excellent',        color: 'bg-emerald-500 text-white border-emerald-600' },
-  { value: 'G',  label: 'Good',             color: 'bg-teal-500 text-white border-teal-600' },
+  { value: 'G',  label: 'Good',             color: 'bg-brand-500 text-white border-brand-600' },
   { value: 'F',  label: 'Fair',             color: 'bg-amber-500 text-white border-amber-600' },
   { value: 'NA', label: 'Needs Assistance', color: 'bg-red-500 text-white border-red-600' },
 ]
@@ -324,8 +324,8 @@ export default function StudentDetail() {
         </button>
         <div className="flex-1 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3 sm:gap-4">
-            <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-2xl bg-teal-100 flex items-center justify-center flex-shrink-0">
-              <span className="text-teal-700 font-bold text-lg sm:text-xl">{nameInitial(student)}</span>
+            <div className="w-11 h-11 sm:w-14 sm:h-14 rounded-2xl bg-brand-100 flex items-center justify-center flex-shrink-0">
+              <span className="text-brand-700 font-bold text-lg sm:text-xl">{nameInitial(student)}</span>
             </div>
             <div>
               <h1 className="text-xl font-bold text-slate-900">{formatName(student)}</h1>
@@ -407,7 +407,7 @@ export default function StudentDetail() {
           <div className="card relative overflow-hidden">
             <div className="absolute inset-0 p-5 flex flex-col overflow-y-auto">
             <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2 flex-shrink-0">
-              <ClipboardCheck size={15} className="text-teal-500" /> Attendance Summary
+              <ClipboardCheck size={15} className="text-brand-500" /> Attendance Summary
             </h3>
             <div className="space-y-3">
               {[
@@ -441,7 +441,7 @@ export default function StudentDetail() {
                 {student.guardians.map(g => (
                   <div key={g.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100">
                     <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-sm font-bold text-teal-700 flex-shrink-0">
+                      <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-sm font-bold text-brand-700 flex-shrink-0">
                         {nameInitial(g)}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -476,7 +476,7 @@ export default function StudentDetail() {
         {!isTeacher && (
           <div className="card p-5">
             <h3 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
-              <MapPin size={15} className="text-teal-500" /> Home Address
+              <MapPin size={15} className="text-brand-500" /> Home Address
             </h3>
             {student.home_address ? (
               <p className="text-sm text-slate-700 leading-relaxed">{student.home_address}</p>
@@ -547,7 +547,7 @@ export default function StudentDetail() {
                           {isTeacher && (
                             <>
                               {' '}
-                              <Link to="/ece-competency" className="text-teal-600 hover:text-teal-700 font-medium">
+                              <Link to="/ece-competency" className="text-brand-600 hover:text-brand-700 font-medium">
                                 Open ECE Competency →
                               </Link>
                             </>
@@ -601,7 +601,7 @@ export default function StudentDetail() {
 
                 {isTeacher && (
                   <div className="flex justify-end">
-                    <Link to="/ece-competency" className="text-xs font-semibold text-teal-700 hover:text-teal-800 hover:underline">
+                    <Link to="/ece-competency" className="text-xs font-semibold text-brand-700 hover:text-brand-800 hover:underline">
                       Open ECE Competency →
                     </Link>
                   </div>
@@ -759,7 +759,7 @@ export default function StudentDetail() {
                         const mine = isTeacher && b.teacher_id === user?.id
                         return (
                         <div key={b.id} className="p-3 bg-slate-50 rounded-xl flex gap-4">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${mine ? 'bg-teal-50 text-teal-600' : 'bg-white text-slate-500 text-sm font-bold'}`}>
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${mine ? 'bg-brand-50 text-brand-600' : 'bg-white text-slate-500 text-sm font-bold'}`}>
                             {mine ? <Pencil size={14}/> : (b.teacher_name?.[0] || 'T')}
                           </div>
                           <div className="flex-1 min-w-0">
@@ -776,7 +776,7 @@ export default function StudentDetail() {
                               <div className="mt-2 flex items-center gap-2">
                                 <div className="flex-1 h-1.5 bg-slate-200 rounded-full max-w-24">
                                   <div
-                                    className={`h-full rounded-full ${b.sentiment === 'Positive' ? 'bg-teal-500' : b.sentiment === 'Negative' ? 'bg-red-500' : 'bg-slate-400'}`}
+                                    className={`h-full rounded-full ${b.sentiment === 'Positive' ? 'bg-brand-500' : b.sentiment === 'Negative' ? 'bg-red-500' : 'bg-slate-400'}`}
                                     style={{ width: `${Math.abs(b.sentiment_score) * 100}%` }}
                                   />
                                 </div>
@@ -823,8 +823,8 @@ export default function StudentDetail() {
 
             return (
               <div className="space-y-5">
-                <div className="rounded-xl border border-teal-100 bg-teal-50 px-4 py-3 text-xs text-teal-800 flex items-start gap-2">
-                  <Baby size={14} className="text-teal-600 mt-0.5 flex-shrink-0" />
+                <div className="rounded-xl border border-brand-100 bg-brand-50 px-4 py-3 text-xs text-brand-800 flex items-start gap-2">
+                  <Baby size={14} className="text-brand-600 mt-0.5 flex-shrink-0" />
                   <p>
                     <span className="font-semibold">ECE signals</span> replace grade-based predictions.
                     Competency ratings reflect the latest quarter with records.
@@ -834,7 +834,7 @@ export default function StudentDetail() {
                 <div className="card p-5">
                   <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
                     <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
-                      <Brain size={15} className="text-teal-500" />
+                      <Brain size={15} className="text-brand-500" />
                       {isTeacher ? 'Competency & Class Signals' : 'Competency Snapshot'}
                     </h3>
                     <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${bandStyles[overall_band]}`}>
@@ -1065,7 +1065,7 @@ export default function StudentDetail() {
                               {s.action && (
                                 <button
                                   onClick={() => runSuggestionAction(s.action)}
-                                  className="ml-2 inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800 hover:underline"
+                                  className="ml-2 inline-flex items-center gap-1 text-xs font-semibold text-brand-700 hover:text-brand-800 hover:underline"
                                 >
                                   {s.action.label || 'Open'} →
                                 </button>
@@ -1086,7 +1086,7 @@ export default function StudentDetail() {
       {tab === 'AI Insights' && !isECE && (
         <div className="space-y-5">
           {isTeacher && (
-            <div className="rounded-xl border border-teal-100 bg-teal-50 px-4 py-3 text-xs text-teal-800">
+            <div className="rounded-xl border border-brand-100 bg-brand-50 px-4 py-3 text-xs text-brand-800">
               <span className="font-semibold">Scoped view:</span> AI insights below are limited to the subjects you teach
               {student.section && <> in <span className="font-semibold">{student.grade_level} · {student.section}</span></>}.
             </div>
@@ -1120,7 +1120,7 @@ export default function StudentDetail() {
                   <div className="card p-5">
                     <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
                       <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
-                        <Brain size={15} className="text-teal-500" /> In Your Class
+                        <Brain size={15} className="text-brand-500" /> In Your Class
                       </h3>
                       <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${bandStyles[overall_band]}`}>
                         {bandLabels[overall_band]}
@@ -1206,7 +1206,7 @@ export default function StudentDetail() {
                                 {s.action && (
                                   <button
                                     onClick={() => runSuggestionAction(s.action)}
-                                    className="ml-2 inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-800 hover:underline"
+                                    className="ml-2 inline-flex items-center gap-1 text-xs font-semibold text-brand-700 hover:text-brand-800 hover:underline"
                                   >
                                     {s.action.label || 'Open'} →
                                   </button>
@@ -1228,7 +1228,7 @@ export default function StudentDetail() {
             risk ? (
               <div className="card p-5">
                 <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                  <Brain size={15} className="text-teal-500" /> Risk Assessment
+                  <Brain size={15} className="text-brand-500" /> Risk Assessment
                 </h3>
                 <div className="flex items-center gap-4 mb-4 flex-wrap">
                   <RiskBadge level={risk.risk_level} />
@@ -1307,7 +1307,7 @@ export default function StudentDetail() {
               </ResponsiveContainer>
 
               {subject.recommendation && (
-                <div className="mt-3 text-sm text-slate-600 bg-teal-50 rounded-xl p-3 border border-teal-100">
+                <div className="mt-3 text-sm text-slate-600 bg-brand-50 rounded-xl p-3 border border-brand-100">
                   {subject.recommendation}
                 </div>
               )}

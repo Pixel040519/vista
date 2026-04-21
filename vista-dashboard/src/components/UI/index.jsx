@@ -3,9 +3,9 @@ import clsx from 'clsx'
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
 
 // ── Stat Card ─────────────────────────────────────────────────
-export function StatCard({ title, value, subtitle, icon: Icon, color = 'teal', trend, onClick }) {
+export function StatCard({ title, value, subtitle, icon: Icon, color = 'brand', trend, onClick }) {
   const colorMap = {
-    teal:    'bg-teal-50 text-teal-600',
+    brand:   'bg-brand-50 text-brand-600',
     blue:    'bg-blue-50 text-blue-600',
     amber:   'bg-amber-50 text-amber-600',
     red:     'bg-red-50 text-red-600',
@@ -14,7 +14,7 @@ export function StatCard({ title, value, subtitle, icon: Icon, color = 'teal', t
   }
   return (
     <div
-      className={clsx('stat-card', onClick && 'cursor-pointer hover:ring-2 hover:ring-teal-200 transition-shadow')}
+      className={clsx('stat-card', onClick && 'cursor-pointer hover:ring-2 hover:ring-brand-200 transition-shadow')}
       onClick={onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
@@ -84,7 +84,7 @@ export function LoadingSpinner({ size = 'md' }) {
   const sz = { sm: 'w-5 h-5 border-2', md: 'w-8 h-8 border-3', lg: 'w-12 h-12 border-4' }[size]
   return (
     <div className="flex items-center justify-center py-12">
-      <div className={clsx(sz, 'border-teal-500 border-t-transparent rounded-full animate-spin')} />
+      <div className={clsx(sz, 'border-brand-500 border-t-transparent rounded-full animate-spin')} />
     </div>
   )
 }

@@ -89,7 +89,7 @@ function GuardianRow({ g, index, onChange, onRemove }) {
         {[['new','New Guardian'],['link','Link Existing Guardian']].map(([m,l]) => (
           <button key={m} type="button" onClick={() => switchMode(m)}
             className={clsx('flex-1 py-1.5 rounded-md text-xs font-medium transition-all',
-              mode === m ? 'bg-teal-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+              mode === m ? 'bg-brand-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
             {l}
           </button>
         ))}
@@ -116,8 +116,8 @@ function GuardianRow({ g, index, onChange, onRemove }) {
                 <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                   {searchResults.map(p => (
                     <button key={p.id} type="button" onClick={() => selectParent(p)}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-teal-50 transition-colors text-left border-b border-slate-100 last:border-0">
-                      <div className="w-7 h-7 rounded-full bg-teal-100 flex items-center justify-center text-xs font-bold text-teal-700 flex-shrink-0">
+                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-brand-50 transition-colors text-left border-b border-slate-100 last:border-0">
+                      <div className="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center text-xs font-bold text-brand-700 flex-shrink-0">
                         {p.surname?.[0] || '?'}
                       </div>
                       <div className="min-w-0">
@@ -137,8 +137,8 @@ function GuardianRow({ g, index, onChange, onRemove }) {
 
           {/* Show selected guardian with X to clear */}
           {g.link_parent_id && (
-            <div className="flex items-center justify-between gap-2 p-2.5 bg-teal-50 border border-teal-200 rounded-lg">
-              <span className="text-xs text-teal-700 font-medium">✓ Linked: {formatName(g)}</span>
+            <div className="flex items-center justify-between gap-2 p-2.5 bg-brand-50 border border-brand-200 rounded-lg">
+              <span className="text-xs text-brand-700 font-medium">✓ Linked: {formatName(g)}</span>
               <button type="button"
                 onClick={() => {
                   onChange(index, { ...g,
@@ -279,7 +279,7 @@ const calcAge = (dob) => {
 }
 
 // ── Student Form (shared by create + edit) ────────────────────
-function StudentForm({ initial, onSubmit, onClose, mode }) {
+function StudentForm({ initial, onSubmit, onClose, mode, gradeOptions }) {
   const [form, setForm] = useState({
     lrn:               initial?.lrn ?? '',
     surname:           initial?.surname ?? '',
@@ -414,7 +414,7 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
               <select className="input" value={form.grade_level}
                 onChange={e => set('grade_level', e.target.value)} required>
                 <option value="">— Select Grade —</option>
-                {GRADE_LEVELS.map(g => <option key={g}>{g}</option>)}
+                {(gradeOptions || GRADE_LEVELS).map(g => <option key={g}>{g}</option>)}
               </select>
             </div>
             <div>
@@ -435,13 +435,13 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" className="rounded accent-teal-500"
+              <input type="checkbox" className="rounded accent-brand-500"
                 checked={skipGuardians} onChange={e => setSkipGuardians(e.target.checked)}/>
               <span className="text-sm text-slate-600 font-medium cursor-pointer">Add guardians / parents later</span>
             </label>
             {!skipGuardians && (
               <button type="button" onClick={addG}
-                className="flex items-center gap-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors">
+                className="flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:text-brand-700 px-2.5 py-1.5 rounded-lg hover:bg-brand-50 transition-colors">
                 <Plus size={13}/> Add Guardian
               </button>
             )}
@@ -452,7 +452,7 @@ function StudentForm({ initial, onSubmit, onClose, mode }) {
               {form.guardians.length === 0 ? (
                 <div className="text-center py-8 text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">
                   No guardians added.
-                  <button type="button" onClick={addG} className="block mx-auto mt-2 text-teal-600 font-medium hover:text-teal-700">
+                  <button type="button" onClick={addG} className="block mx-auto mt-2 text-brand-600 font-medium hover:text-brand-700">
                     + Add Guardian
                   </button>
                 </div>
@@ -502,10 +502,10 @@ function GuardianForm({ initial, mode, onSubmit, onCancel }) {
   return (
     <form onSubmit={handleSubmit}
       className={clsx('p-4 rounded-xl border space-y-3',
-        isAdd ? 'bg-teal-50 border-teal-200' : 'bg-amber-50 border-amber-200'
+        isAdd ? 'bg-brand-50 border-brand-200' : 'bg-amber-50 border-amber-200'
       )}>
       <p className={clsx('text-xs font-semibold uppercase tracking-wide',
-        isAdd ? 'text-teal-700' : 'text-amber-700'
+        isAdd ? 'text-brand-700' : 'text-amber-700'
       )}>
         {isAdd ? 'New Guardian' : 'Edit Guardian'}
       </p>
@@ -657,7 +657,7 @@ function GuardianManager({ studentId, guardians, onRefresh }) {
         </p>
         {mode !== 'add' && (
           <button type="button" onClick={() => setMode('add')}
-            className="flex items-center gap-1 text-xs font-medium text-teal-600 hover:text-teal-700 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors">
+            className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 px-2.5 py-1.5 rounded-lg hover:bg-brand-50 transition-colors">
             <UserPlus size={13} /> Add Guardian
           </button>
         )}
@@ -683,7 +683,7 @@ function GuardianManager({ studentId, guardians, onRefresh }) {
                 ) : (
                   <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-sm font-bold text-teal-700 flex-shrink-0">
+                      <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-sm font-bold text-brand-700 flex-shrink-0">
                         {nameInitial(g)}
                       </div>
                       <div className="min-w-0">
@@ -766,9 +766,16 @@ function DeleteConfirm({ student, onConfirm, onClose }) {
 
 // ── Main Page ─────────────────────────────────────────────────
 export default function Students() {
-  const { user, activeAssignments, isAnyAdmin, isTeacher } = useAuth()
+  const { user, activeAssignments, isAnyAdmin, isTeacher, gradeScope } = useAuth()
   const isAdmin  = isAnyAdmin
   const assignments = activeAssignments
+
+  // Grade levels visible in the filter + Add/Edit form, scoped by admin role.
+  // super_admin's gradeScope contains all grades, so this is a no-op for them.
+  const scopedGrades = useMemo(
+    () => (gradeScope?.length ? GRADE_LEVELS.filter(g => gradeScope.includes(g)) : GRADE_LEVELS),
+    [gradeScope]
+  )
 
   // Derive unique grade_level + section pairs from teacher assignments
   const teacherSections = useMemo(() => {
@@ -934,7 +941,7 @@ export default function Students() {
             <select className="input pl-9 appearance-none cursor-pointer"
               value={gradeFilter} onChange={e => setGradeFilter(e.target.value)}>
               <option value="">All Grade Levels</option>
-              {GRADE_LEVELS.map(g => <option key={g}>{g}</option>)}
+              {scopedGrades.map(g => <option key={g}>{g}</option>)}
             </select>
           </div>
         )}
@@ -984,10 +991,10 @@ export default function Students() {
                     <tr key={s.id}>
                       <td>
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-teal-100 flex items-center justify-center flex-shrink-0">
+                          <div className="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
                             {s.profile_photo_url
                               ? <img src={s.profile_photo_url} className="w-full h-full rounded-full object-cover" alt=""/>
-                              : <span className="text-teal-700 font-semibold text-sm">{nameInitial(s)}</span>
+                              : <span className="text-brand-700 font-semibold text-sm">{nameInitial(s)}</span>
                             }
                           </div>
                           <p className="font-medium text-slate-800">{formatName(s)}</p>
@@ -1015,7 +1022,7 @@ export default function Students() {
                         <td>
                           <div className="flex items-center gap-1 justify-start">
                             <button onClick={() => setEditTarget(s)} title="Edit student info"
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors">
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors">
                               <Pencil size={15}/>
                             </button>
                             <button
@@ -1039,7 +1046,7 @@ export default function Students() {
                       <td>
                         <Link to={`/students/${s.id}`}
                           title="View student details"
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors inline-flex">
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors inline-flex">
                           <ChevronRight size={16}/>
                         </Link>
                       </td>
@@ -1070,7 +1077,7 @@ export default function Students() {
 
       {/* ── Modals ──────────────────────────────────────────── */}
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Add New Student" size="lg" selfScroll>
-        <StudentForm mode="create" onSubmit={handleCreate} onClose={() => setShowCreate(false)}/>
+        <StudentForm mode="create" onSubmit={handleCreate} onClose={() => setShowCreate(false)} gradeOptions={scopedGrades}/>
       </Modal>
 
       <BatchUploadModal
@@ -1080,14 +1087,14 @@ export default function Students() {
       />
 
       <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title="Edit Student Information" size="lg" selfScroll>
-        {editTarget && <StudentForm mode="edit" initial={editTarget} onSubmit={handleEdit} onClose={() => setEditTarget(null)}/>}
+        {editTarget && <StudentForm mode="edit" initial={editTarget} onSubmit={handleEdit} onClose={() => setEditTarget(null)} gradeOptions={scopedGrades}/>}
       </Modal>
 
       <Modal open={!!editGuardians} onClose={() => setEditGuardians(null)} title="Manage Guardians / Parents" size="lg">
         {editGuardians && (
           <div className="space-y-4">
             <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl">
-              <div className="w-9 h-9 rounded-full bg-teal-100 flex items-center justify-center font-bold text-teal-700">
+              <div className="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center font-bold text-brand-700">
                 {nameInitial(editGuardians.student)}
               </div>
               <div>

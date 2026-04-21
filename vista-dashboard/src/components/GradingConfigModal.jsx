@@ -247,7 +247,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
       title={`Grading Structure \u2014 ${subject.name}`}>
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <Loader2 size={24} className="animate-spin text-teal-500" />
+          <Loader2 size={24} className="animate-spin text-brand-500" />
         </div>
       ) : (
         <div className="space-y-4">
@@ -328,8 +328,8 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                   onDragEnd={handleDragEnd}
                   className={clsx(
                     'border rounded-xl overflow-hidden transition-all',
-                    dragIdx === catIdx ? 'opacity-40 border-teal-300 bg-teal-50/30'
-                      : dragOverIdx === catIdx && dragIdx !== null ? 'border-teal-400 ring-2 ring-teal-200'
+                    dragIdx === catIdx ? 'opacity-40 border-brand-300 bg-brand-50/30'
+                      : dragOverIdx === catIdx && dragIdx !== null ? 'border-brand-400 ring-2 ring-brand-200'
                       : 'border-slate-200'
                   )}>
                   {/* Category header */}
@@ -354,7 +354,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                       <input
                         type="number" min="0" max="100" step="0.01"
                         className={clsx('w-14 text-sm font-mono text-center bg-white border rounded-lg px-1.5 py-1 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none',
-                          catTotal > 100.01 ? 'border-red-400 text-red-600 focus:border-red-500' : 'border-slate-200 focus:border-teal-400'
+                          catTotal > 100.01 ? 'border-red-400 text-red-600 focus:border-red-500' : 'border-slate-200 focus:border-brand-400'
                         )}
                         placeholder="0"
                         value={cat.weight}
@@ -398,7 +398,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                             <input
                               type="number" min="0" max="100" step="0.01"
                               className={clsx('w-14 text-sm font-mono text-center bg-white border rounded-lg px-1.5 py-1 outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none',
-                                compTotal > catWeight + 0.01 ? 'border-red-400 text-red-600 focus:border-red-500' : 'border-slate-200 focus:border-teal-400'
+                                compTotal > catWeight + 0.01 ? 'border-red-400 text-red-600 focus:border-red-500' : 'border-slate-200 focus:border-brand-400'
                               )}
                               placeholder="0"
                               value={comp.weight}
@@ -416,7 +416,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                       ))}
 
                       <button type="button" onClick={() => addComponent(catIdx)}
-                        className="flex items-center gap-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 pl-5 py-1.5 hover:bg-teal-50 rounded transition-colors">
+                        className="flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:text-brand-700 pl-5 py-1.5 hover:bg-brand-50 rounded transition-colors">
                         <Plus size={12} /> Add Component
                       </button>
                     </div>
@@ -429,7 +429,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
           {/* Add Category + Copy from buttons */}
           <div className="flex gap-2">
             <button type="button" onClick={addCategory}
-              className="flex items-center gap-2 flex-1 justify-center py-2.5 border-2 border-dashed border-slate-200 rounded-xl text-sm font-medium text-slate-500 hover:text-teal-600 hover:border-teal-300 transition-colors">
+              className="flex items-center gap-2 flex-1 justify-center py-2.5 border-2 border-dashed border-slate-200 rounded-xl text-sm font-medium text-slate-500 hover:text-brand-600 hover:border-brand-300 transition-colors">
               <Plus size={15} /> Add Category
             </button>
             {!showCopy && (

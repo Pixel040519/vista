@@ -26,7 +26,7 @@ function PrivateRoute({ children, roles }) {
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
       <div className="flex flex-col items-center gap-3">
-        <div className="w-10 h-10 border-4 border-teal-500 border-t-transparent rounded-full animate-spin" />
+        <div className="w-10 h-10 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
         <p className="text-sm text-slate-500 font-medium">Loading VISTA...</p>
       </div>
     </div>
@@ -60,7 +60,9 @@ export default function App() {
 
             <Route path="attendance" element={<Attendance />} />
 
-            <Route path="grades" element={<Grades />} />
+            <Route path="grades" element={
+              <PrivateRoute roles={[ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM, ROLES.TEACHER]}><Grades /></PrivateRoute>
+            } />
 
             <Route path="score-entry" element={
               <PrivateRoute roles={['teacher']}><ScoreEntry /></PrivateRoute>

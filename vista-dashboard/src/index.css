@@ -54,7 +54,7 @@
 
   /* Buttons */
   .btn-primary {
-    @apply inline-flex items-center gap-2 px-4 py-2.5 bg-teal-500 hover:bg-teal-600
+    @apply inline-flex items-center gap-2 px-4 py-2.5 bg-brand-500 hover:bg-brand-600
            text-white text-sm font-medium rounded-xl transition-all duration-150
            shadow-sm hover:shadow-md active:scale-95;
   }
@@ -72,7 +72,7 @@
   .input {
     @apply w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm
            text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2
-           focus:ring-teal-500/30 focus:border-teal-500 transition-all duration-150;
+           focus:ring-brand-500/30 focus:border-brand-500 transition-all duration-150;
   }
 
   /* Table */
@@ -88,7 +88,7 @@
   .badge-high { @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-700; }
 
   /* Sentiment badges */
-  .badge-positive { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-teal-50 text-teal-700; }
+  .badge-positive { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700; }
   .badge-negative { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700; }
   .badge-neutral { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600; }
 
@@ -98,7 +98,7 @@
            text-slate-300 hover:text-white hover:bg-white/10 transition-all duration-150 cursor-pointer;
   }
   .nav-item.active {
-    @apply bg-teal-500/20 text-teal-400;
+    @apply bg-brand-500/20 text-brand-300;
   }
 
   /* Page header */

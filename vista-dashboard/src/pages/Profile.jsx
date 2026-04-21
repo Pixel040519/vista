@@ -19,7 +19,7 @@ const roleStyles = {
   super_admin: 'bg-purple-50 text-purple-700 border-purple-200',
   admin_ece:   'bg-indigo-50 text-indigo-700 border-indigo-200',
   admin_elem:  'bg-sky-50 text-sky-700 border-sky-200',
-  teacher:     'bg-teal-50 text-teal-700 border-teal-200',
+  teacher:     'bg-brand-50 text-brand-700 border-brand-200',
   parent:      'bg-amber-50 text-amber-700 border-amber-200',
 }
 
@@ -81,7 +81,7 @@ function PersonalInfoForm({ user, onSaved }) {
   return (
     <div className="card p-5 sm:p-6">
       <div className="flex items-center gap-3 mb-5">
-        <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+        <div className="w-9 h-9 rounded-xl bg-brand-50 text-brand-600 flex items-center justify-center">
           <UserCog size={18} />
         </div>
         <div>
@@ -348,7 +348,7 @@ function TeacherAssignmentsCard() {
               <span className="text-slate-400">·</span>
               <span>{a.section}</span>
               <span className="text-slate-400">·</span>
-              <span className="text-teal-700">{a.subject}</span>
+              <span className="text-brand-700">{a.subject}</span>
             </span>
           ))}
         </div>
@@ -389,8 +389,8 @@ export default function Profile() {
       {/* Account summary */}
       <div className="card p-5 sm:p-6">
         <div className="flex items-start gap-4 flex-wrap">
-          <div className="w-16 h-16 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center flex-shrink-0">
-            <span className="text-teal-600 text-2xl font-bold">{nameInitial(user)}</span>
+          <div className="w-16 h-16 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center flex-shrink-0">
+            <span className="text-brand-600 text-2xl font-bold">{nameInitial(user)}</span>
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-lg font-semibold text-slate-900 truncate">{formatName(user)}</h2>

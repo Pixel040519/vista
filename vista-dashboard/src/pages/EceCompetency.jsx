@@ -9,7 +9,7 @@ const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
 const QUARTERS = [1, 2, 3, 4]
 const RATINGS = [
   { value: 'E',  label: 'Excellent',       color: 'bg-emerald-500 text-white border-emerald-600' },
-  { value: 'G',  label: 'Good',            color: 'bg-teal-500 text-white border-teal-600' },
+  { value: 'G',  label: 'Good',            color: 'bg-brand-500 text-white border-brand-600' },
   { value: 'F',  label: 'Fair',            color: 'bg-amber-500 text-white border-amber-600' },
   { value: 'NA', label: 'Needs Assistance', color: 'bg-red-500 text-white border-red-600' },
 ]
@@ -39,7 +39,7 @@ function SkillForm({ initial, onSave, onCancel, saving }) {
         />
       </div>
       <div className="flex gap-1">
-        <button type="submit" disabled={saving} className="p-2 rounded-lg bg-teal-500 text-white hover:bg-teal-600 disabled:opacity-50 transition-colors">
+        <button type="submit" disabled={saving} className="p-2 rounded-lg bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-50 transition-colors">
           <Check size={14} />
         </button>
         <button type="button" onClick={onCancel} className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors">
@@ -471,7 +471,7 @@ export default function EceCompetency() {
             <button
               type="button"
               onClick={() => setRatingFilter(null)}
-              className="mt-3 text-xs text-teal-600 hover:text-teal-700 font-medium"
+              className="mt-3 text-xs text-brand-600 hover:text-brand-700 font-medium"
             >
               Clear filter
             </button>
@@ -503,8 +503,8 @@ export default function EceCompetency() {
                 onDrop={dragEnabled ? handleDrop(subjIdx) : undefined}
                 onDragEnd={dragEnabled ? handleDragEnd : undefined}
                 className={`card overflow-hidden transition-all ${
-                  dragIdx === subjIdx ? 'opacity-40 ring-2 ring-teal-300'
-                    : dragOverIdx === subjIdx && dragIdx !== null ? 'ring-2 ring-teal-400 shadow-lg'
+                  dragIdx === subjIdx ? 'opacity-40 ring-2 ring-brand-300'
+                    : dragOverIdx === subjIdx && dragIdx !== null ? 'ring-2 ring-brand-400 shadow-lg'
                     : ''
                 }`}
               >
@@ -524,8 +524,8 @@ export default function EceCompetency() {
                         onClick={() => setManagingSubject(managingSubject === subj.id ? null : subj.id)}
                         className={`text-xs font-medium px-2.5 py-1.5 rounded-lg transition-colors ${
                           managingSubject === subj.id
-                            ? 'bg-teal-100 text-teal-700'
-                            : 'text-slate-500 hover:text-teal-600 hover:bg-teal-50'
+                            ? 'bg-brand-100 text-brand-700'
+                            : 'text-slate-500 hover:text-brand-600 hover:bg-brand-50'
                         }`}
                       >
                         <Pencil size={12} className="inline -mt-0.5 mr-1" />
@@ -533,7 +533,7 @@ export default function EceCompetency() {
                       </button>
                       <button
                         onClick={() => { setAddingToSubject(subj.id); setEditingSkill(null) }}
-                        className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-teal-600 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors"
+                        className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-brand-600 px-2.5 py-1.5 rounded-lg hover:bg-brand-50 transition-colors"
                       >
                         <Plus size={13} /> Add
                       </button>
@@ -582,7 +582,7 @@ export default function EceCompetency() {
                   <div className="px-5 py-6 text-center text-sm text-slate-400">
                     {isReadOnly
                       ? 'No descriptions have been added for this subject yet.'
-                      : <>No descriptions yet. Click <span className="font-medium text-teal-600">+ Add</span> to create one.</>
+                      : <>No descriptions yet. Click <span className="font-medium text-brand-600">+ Add</span> to create one.</>
                     }
                   </div>
                 ) : (
@@ -604,7 +604,7 @@ export default function EceCompetency() {
                           }
                           setExpandedStudents(prev => ({ ...prev, ...updates }))
                         }}
-                        className="text-xs text-slate-500 hover:text-teal-600 font-medium transition-colors"
+                        className="text-xs text-slate-500 hover:text-brand-600 font-medium transition-colors"
                       >
                         {visibleStudents.every(v => expandedStudents[`${subj.id}::${v.student.id}`]) ? 'Collapse All' : 'Expand All'}
                       </button>

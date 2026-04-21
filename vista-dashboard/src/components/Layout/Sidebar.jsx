@@ -23,7 +23,8 @@ const adminNavGroups = [
     label: 'Student Management',
     items: [
       { to: '/students',    icon: Users,          label: 'Students'   },
-      { to: '/grades',       icon: BookOpen,       label: 'Grades'         },
+      { to: '/grades',       icon: BookOpen,       label: 'Grades',
+        roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM] },
       // ECE Competency visible to super_admin + admin_ece only (admin_elem has no ECE scope)
       { to: '/ece-competency', icon: Baby,         label: 'ECE Competency',
         roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE] },
@@ -167,8 +168,8 @@ export default function Sidebar({ open, onClose }) {
             )}
             title="View profile"
           >
-            <div className="w-8 h-8 rounded-full bg-teal-500/20 border border-teal-500/30 flex items-center justify-center flex-shrink-0">
-              <span className="text-teal-400 text-sm font-bold">
+            <div className="w-8 h-8 rounded-full bg-brand-500/20 border border-brand-500/30 flex items-center justify-center flex-shrink-0">
+              <span className="text-brand-400 text-sm font-bold">
                 {user ? nameInitial(user) : 'U'}
               </span>
             </div>

@@ -204,8 +204,8 @@ export default function AttendanceDetailModal({ open, onClose, filter = 'present
                         onClick={() => toggleSection(sectionKey)}
                         className="w-full flex items-center gap-2 px-4 py-2 bg-white border-b border-slate-100 hover:bg-slate-50 transition-colors text-left"
                       >
-                        {collapsedSections.has(sectionKey) ? <ChevronRight size={14} className="text-teal-400" /> : <ChevronDown size={14} className="text-teal-400" />}
-                        <span className="text-xs font-semibold text-teal-600 uppercase tracking-wider">{section}</span>
+                        {collapsedSections.has(sectionKey) ? <ChevronRight size={14} className="text-brand-400" /> : <ChevronDown size={14} className="text-brand-400" />}
+                        <span className="text-xs font-semibold text-brand-600 uppercase tracking-wider">{section}</span>
                         <span className="text-xs text-slate-400">{students.length} student{students.length !== 1 ? 's' : ''}</span>
                       </button>
 

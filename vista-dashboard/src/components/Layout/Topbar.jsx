@@ -78,7 +78,7 @@ export default function Topbar({ onMenuToggle }) {
                 ) : notifications.slice(0, 10).map(n => (
                   <div
                     key={n.id}
-                    className={`px-4 py-3 cursor-pointer hover:bg-slate-50 transition-colors ${!n.is_read ? 'bg-teal-50/50' : ''}`}
+                    className={`px-4 py-3 cursor-pointer hover:bg-slate-50 transition-colors ${!n.is_read ? 'bg-brand-50/50' : ''}`}
                     onClick={() => {
                       notificationApi.read(n.id).catch(() => {})
                       setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, is_read: true } : x))

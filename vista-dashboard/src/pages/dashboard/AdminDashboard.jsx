@@ -66,7 +66,7 @@ export default function AdminDashboard() {
         <div>
           <h1 className="page-title">
             Good {new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'},{' '}
-            <span className="text-teal-600">{user?.full_name?.split(' ')[0]}</span> 👋
+            <span className="text-brand-600">{user?.full_name?.split(' ')[0]}</span> 👋
           </h1>
           <p className="page-subtitle">Here's what's happening at school today.</p>
         </div>
@@ -84,7 +84,7 @@ export default function AdminDashboard() {
               value={total.toLocaleString()}
               subtitle="Active enrollees"
               icon={Users}
-              color="teal"
+              color="brand"
             />
             <StatCard
               title="Present Today"
@@ -211,7 +211,7 @@ export default function AdminDashboard() {
                 <Shield size={16} className={dismissal.curfew_breached ? 'text-red-400' : 'text-slate-300'} />
               </div>
               <div className="flex items-end gap-2">
-                <span className={`text-3xl font-bold ${dismissal.curfew_breached ? 'text-red-600' : 'text-teal-600'}`}>
+                <span className={`text-3xl font-bold ${dismissal.curfew_breached ? 'text-red-600' : 'text-brand-600'}`}>
                   {dismissal.still_on_campus ?? 0}
                 </span>
                 <span className="text-xs text-slate-500 mb-1">still on campus</span>
@@ -233,7 +233,7 @@ export default function AdminDashboard() {
                   </p>
                 </div>
               </div>
-              <Link to="/securepass" className="text-xs text-teal-600 font-medium hover:text-teal-700 flex items-center gap-1 mt-4">
+              <Link to="/securepass" className="text-xs text-brand-600 font-medium hover:text-brand-700 flex items-center gap-1 mt-4">
                 Open SecurePass <ChevronRight size={13} />
               </Link>
             </div>
@@ -267,7 +267,7 @@ export default function AdminDashboard() {
                   <h3 className="text-sm font-semibold text-slate-800">Academic Decline Alerts</h3>
                   <p className="text-xs text-slate-400">Recent grade drops needing review</p>
                 </div>
-                <Link to="/risk" className="text-xs text-teal-600 font-medium hover:text-teal-700 flex items-center gap-1">
+                <Link to="/risk" className="text-xs text-brand-600 font-medium hover:text-brand-700 flex items-center gap-1">
                   View all <ChevronRight size={13} />
                 </Link>
               </div>
@@ -293,7 +293,7 @@ export default function AdminDashboard() {
                       {declines.slice(0, 5).map((d, i) => (
                         <tr key={`${d.student_id}-${i}`}>
                           <td className="font-medium">
-                            <Link to={`/students/${d.student_id}`} className="text-slate-700 hover:text-teal-600">
+                            <Link to={`/students/${d.student_id}`} className="text-slate-700 hover:text-brand-600">
                               {d.student_name}
                             </Link>
                           </td>

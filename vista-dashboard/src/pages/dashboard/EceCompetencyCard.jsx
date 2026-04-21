@@ -5,7 +5,7 @@ import { eceApi } from '../../api/client'
 
 const RATING_COLORS = {
   E:  'bg-emerald-500',
-  G:  'bg-teal-500',
+  G:  'bg-brand-500',
   F:  'bg-amber-500',
   NA: 'bg-red-400',
 }

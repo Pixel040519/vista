@@ -295,7 +295,7 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
             </p>
           </div>
           <button type="button" onClick={addRow}
-            className="flex items-center gap-1.5 text-xs font-medium text-teal-600 hover:text-teal-700 px-2.5 py-1.5 rounded-lg hover:bg-teal-50 transition-colors">
+            className="flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:text-brand-700 px-2.5 py-1.5 rounded-lg hover:bg-brand-50 transition-colors">
             <Plus size={13} /> Add Row
           </button>
         </div>
@@ -394,7 +394,7 @@ function AssignmentTags({ assignments = [] }) {
   return (
     <div className="flex flex-wrap gap-1">
       {visible.map((a, i) => (
-        <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-50 text-teal-700 text-xs font-medium border border-teal-100">
+        <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-brand-50 text-brand-700 text-xs font-medium border border-brand-100">
           <BookOpen size={10} />
           {a.grade_level} · {a.section} · {a.subject}
         </span>
@@ -502,7 +502,7 @@ function AssignmentHistory({ teacher, onClose }) {
   return (
     <div className="space-y-4">
       <div className="p-4 bg-slate-50 rounded-xl flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold">
+        <div className="w-10 h-10 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold">
           {nameInitial(teacher)}
         </div>
         <div>
@@ -523,7 +523,7 @@ function AssignmentHistory({ teacher, onClose }) {
               <div className="space-y-1.5">
                 {grouped[sy].map(a => (
                   <div key={a.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-100">
-                    <BookOpen size={12} className="text-teal-500 flex-shrink-0" />
+                    <BookOpen size={12} className="text-brand-500 flex-shrink-0" />
                     <span className="text-sm text-slate-700">
                       {a.grade_level} &middot; {a.section} &middot; <span className="font-medium">{a.subject}</span>
                     </span>
@@ -808,7 +808,7 @@ export default function AccountManagement() {
             className={clsx(
               'px-4 py-2 text-sm font-semibold transition-colors border-b-2 -mb-px',
               tab === 'teachers'
-                ? 'border-teal-500 text-teal-600'
+                ? 'border-brand-500 text-brand-600'
                 : 'border-transparent text-slate-500 hover:text-slate-700'
             )}>
             Teachers
@@ -817,7 +817,7 @@ export default function AccountManagement() {
             className={clsx(
               'px-4 py-2 text-sm font-semibold transition-colors border-b-2 -mb-px',
               tab === 'admins'
-                ? 'border-teal-500 text-teal-600'
+                ? 'border-brand-500 text-brand-600'
                 : 'border-transparent text-slate-500 hover:text-slate-700'
             )}>
             Admins
@@ -845,7 +845,7 @@ export default function AccountManagement() {
               className={clsx(
                 'px-4 py-2 transition-colors',
                 filterActive === opt.val
-                  ? 'bg-teal-500 text-white'
+                  ? 'bg-brand-500 text-white'
                   : 'bg-white text-slate-600 hover:bg-slate-50'
               )}
             >
@@ -885,7 +885,7 @@ export default function AccountManagement() {
                       <div className="flex items-center gap-3">
                         <div className={clsx(
                           'w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0',
-                          t.is_active ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-400'
+                          t.is_active ? 'bg-brand-100 text-brand-700' : 'bg-slate-100 text-slate-400'
                         )}>
                           {nameInitial(t)}
                         </div>
@@ -938,7 +938,7 @@ export default function AccountManagement() {
 
                         <button
                           onClick={() => setEditTarget(t)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
                           title="Edit"
                         >
                           <Pencil size={15} />
@@ -993,7 +993,7 @@ export default function AccountManagement() {
                 className={clsx(
                   'px-4 py-2 transition-colors',
                   adminFilterActive === opt.val
-                    ? 'bg-teal-500 text-white'
+                    ? 'bg-brand-500 text-white'
                     : 'bg-white text-slate-600 hover:bg-slate-50'
                 )}
               >
@@ -1062,7 +1062,7 @@ export default function AccountManagement() {
                       <td>
                         <div className="flex items-center gap-1 justify-start">
                           <button onClick={() => setAdminEditTarget(a)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
                             title="Edit">
                             <Pencil size={15} />
                           </button>

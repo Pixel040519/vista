@@ -208,7 +208,7 @@ export function Attendance() {
                 <tr key={s.id}>
                   <td>
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-sm font-bold text-teal-700">
+                      <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-sm font-bold text-brand-700">
                         {nameInitial(s)}
                       </div>
                       <div>
@@ -354,7 +354,15 @@ export function Grades() {
   useEffect(() => { setSubjectId(''); setData(null) }, [selectedClass])
 
   // ── Resolve SY label ──────────────────────────────────────
-  const syLabel = schoolYears.find(sy => sy.id === syId)?.label || ''
+  const selectedSY = schoolYears.find(sy => sy.id === syId)
+  const syLabel = selectedSY?.label || ''
+  const syStatusChip = selectedSY
+    ? (selectedSY.is_active
+        ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">active</span>
+        : selectedSY.is_upcoming
+          ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">upcoming</span>
+          : <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 font-medium">archived</span>)
+    : null
 
   // ── Fetch grading sheet data ──────────────────────────────
   const filtersReady = syId && gradeLevel && section && subjectId
@@ -422,12 +430,16 @@ export function Grades() {
           {/* School Year */}
           {isTeacher ? (
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">School Year</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1 flex items-center gap-1.5">
+                School Year {syStatusChip}
+              </label>
               <div className="input bg-slate-50 text-slate-500 cursor-default">SY {syLabel || '—'}</div>
             </div>
           ) : (
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">School Year</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1 flex items-center gap-1.5">
+                School Year {syStatusChip}
+              </label>
               <select className="input" value={syId} onChange={e => setSyId(e.target.value)}>
                 <option value="">— Select —</option>
                 {schoolYears.map(sy => <option key={sy.id} value={sy.id}>{sy.label}</option>)}
@@ -487,7 +499,7 @@ export function Grades() {
               <button key={tab.key} onClick={() => setActiveTab(tab.key)}
                 className={clsx('px-5 py-3 text-sm font-medium transition-colors relative',
                   activeTab === tab.key
-                    ? 'text-teal-600 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-teal-500'
+                    ? 'text-brand-600 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-brand-500'
                     : 'text-slate-400 hover:text-slate-600'
                 )}>
                 {tab.label}
@@ -577,7 +589,7 @@ export function Grades() {
                   <button key={q} onClick={() => setClassQuarter(q)}
                     className={clsx('px-3 py-1 rounded-full text-xs font-medium transition-colors',
                       classQuarter === q
-                        ? 'bg-teal-500 text-white'
+                        ? 'bg-brand-500 text-white'
                         : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                     )}>
                     Q{q}
@@ -850,7 +862,7 @@ function TeacherBehavior() {
         <div className="space-y-3">
           {logs.map(b => (
             <div key={b.id} className="card p-4 flex gap-4">
-              <div className="w-8 h-8 rounded-full bg-teal-50 flex items-center justify-center text-teal-600 flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-brand-50 flex items-center justify-center text-brand-600 flex-shrink-0">
                 <Pencil size={14}/>
               </div>
               <div className="flex-1">
@@ -900,7 +912,7 @@ function TeacherBehavior() {
               onChange={e => { setForm(p => ({ ...p, observation: e.target.value })); setAiResult(null) }}
               required
             />
-            <button type="button" onClick={previewSentiment} className="mt-1.5 text-xs text-teal-600 hover:text-teal-700 font-medium">
+            <button type="button" onClick={previewSentiment} className="mt-1.5 text-xs text-brand-600 hover:text-brand-700 font-medium">
               ✨ Analyze sentiment preview
             </button>
             {aiResult && (
@@ -1017,7 +1029,7 @@ function AdminBehavior() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard title="Total logs" value={summary.total    ?? 0} icon={Heart} color="teal" />
+        <StatCard title="Total logs" value={summary.total    ?? 0} icon={Heart} color="brand" />
         <StatCard title="Positive"   value={summary.positive ?? 0} icon={Smile} color="emerald" />
         <StatCard title="Neutral"    value={summary.neutral  ?? 0} icon={Meh}   color="blue" />
         <StatCard title="Negative"   value={summary.negative ?? 0} icon={Frown} color="red" />
@@ -1124,7 +1136,7 @@ function AdminBehavior() {
                   <tr key={b.id}>
                     <td className="whitespace-nowrap">
                       <RouterLink to={`/students/${b.student_id}`}
-                        className="text-teal-600 hover:text-teal-700 font-medium">
+                        className="text-brand-600 hover:text-brand-700 font-medium">
                         {formatName(b)}
                       </RouterLink>
                     </td>
@@ -1163,7 +1175,7 @@ function AdminBehavior() {
               <div>
                 <p className="text-xs font-medium text-slate-500">Student</p>
                 <RouterLink to={`/students/${detailLog.student_id}`}
-                  className="text-teal-600 hover:text-teal-700 font-medium">
+                  className="text-brand-600 hover:text-brand-700 font-medium">
                   {formatName(detailLog)}
                 </RouterLink>
                 <p className="text-xs text-slate-400">{detailLog.grade_level} — {detailLog.section}</p>
@@ -1274,7 +1286,7 @@ export function SecurePass() {
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div className="card p-4">
           <p className="text-xs text-slate-400">Dismissed today</p>
-          <p className="text-2xl font-bold text-teal-600 mt-1">{successCount}</p>
+          <p className="text-2xl font-bold text-brand-600 mt-1">{successCount}</p>
         </div>
         <div className="card p-4">
           <p className="text-xs text-slate-400">Failed / Expired</p>
@@ -1300,7 +1312,7 @@ export function SecurePass() {
             <button
               type="button"
               onClick={() => setManualOpen(o => !o)}
-              className="text-xs text-teal-600 font-medium hover:text-teal-700"
+              className="text-xs text-brand-600 font-medium hover:text-brand-700"
             >
               {manualOpen ? 'Hide' : 'Show'}
             </button>
@@ -1547,7 +1559,7 @@ function TeacherRiskOverview({ data, loading, filter, setFilter, onRefresh }) {
                     <td className="font-medium">
                       <Link
                         to={`/students/${s.student_id}`}
-                        className="text-slate-800 hover:text-teal-600"
+                        className="text-slate-800 hover:text-brand-600"
                         onClick={e => e.stopPropagation()}
                       >
                         {s.full_name}
@@ -1715,7 +1727,7 @@ export function RiskOverview() {
                     <td className="font-medium">
                       <Link
                         to={`/students/${s.student_id}`}
-                        className="text-slate-800 hover:text-teal-600"
+                        className="text-slate-800 hover:text-brand-600"
                         onClick={e => e.stopPropagation()}
                       >
                         {s.full_name}
@@ -1820,8 +1832,8 @@ export function Announcements() {
             <div key={a.id} className="card p-5">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-start gap-4 flex-1">
-                  <div className="w-10 h-10 rounded-xl bg-teal-50 flex items-center justify-center flex-shrink-0">
-                    <Megaphone size={18} className="text-teal-600" />
+                  <div className="w-10 h-10 rounded-xl bg-brand-50 flex items-center justify-center flex-shrink-0">
+                    <Megaphone size={18} className="text-brand-600" />
                   </div>
                   <div className="flex-1">
                     <h3 className="font-semibold text-slate-900">{a.title}</h3>
@@ -1831,7 +1843,7 @@ export function Announcements() {
                       <span className="text-slate-300">·</span>
                       <span className="text-xs text-slate-400">{fmt(new Date(a.created_at), 'MMM d, yyyy')}</span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                        a.target_audience === 'all' ? 'bg-teal-50 text-teal-700' : 'bg-blue-50 text-blue-700'
+                        a.target_audience === 'all' ? 'bg-brand-50 text-brand-700' : 'bg-blue-50 text-blue-700'
                       }`}>
                         {a.target_audience === 'all' ? 'Everyone' : a.target_audience}
                       </span>

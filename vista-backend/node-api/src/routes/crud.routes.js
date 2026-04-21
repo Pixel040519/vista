@@ -6,7 +6,12 @@ const attendanceRouter = express.Router();
 const { query } = require('../config/database');
 const { authenticate, authorize, authorizeAnyAdmin } = require('../middleware/auth.middleware');
 const { AppError } = require('../middleware/error.middleware');
-const { ANY_ADMIN, isAnyAdmin, isScopedAdmin, gradeScopeForRole } = require('../utils/roles');
+const { ROLES, ANY_ADMIN, isAnyAdmin, isScopedAdmin, gradeScopeForRole } = require('../utils/roles');
+
+// Grade routes serve elementary only — ECE grade levels (Pre-Nursery–Kinder)
+// use the ECE Competency tracker instead of the grades table. Reject admin_ece
+// to match the pattern where ECE routes reject admin_elem.
+const GRADE_ROLES = [ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM, ROLES.TEACHER];
 
 attendanceRouter.use(authenticate);
 
@@ -163,6 +168,7 @@ module.exports = { attendanceRouter };
 const gradeRouter = express.Router();
 
 gradeRouter.use(authenticate);
+gradeRouter.use(authorize(...GRADE_ROLES));
 
 // GET /api/grades?student_id=&school_year=
 gradeRouter.get('/', async (req, res, next) => {
@@ -215,7 +221,7 @@ gradeRouter.get('/', async (req, res, next) => {
 });
 
 // POST /api/grades — Submit grades (batch)
-gradeRouter.post('/', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
+gradeRouter.post('/', async (req, res, next) => {
   try {
     const { records } = req.body; // [{ student_id, subject_id, quarter, school_year, score, grade }]
 
