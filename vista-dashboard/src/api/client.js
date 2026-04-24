@@ -87,6 +87,7 @@ export const studentApi = {
   addGuardian:    (id, d)   => api.post(`/students/${id}/guardians`, d),
   updateGuardian: (id, gid, d) => api.put(`/students/${id}/guardians/${gid}`, d),
   removeGuardian: (id, gid) => api.delete(`/students/${id}/guardians/${gid}`),
+  setAcademicAccess: (id, data) => api.patch(`/students/${id}/academic-access`, data),
 }
 
 // ── Attendance ────────────────────────────────────────────────
@@ -175,6 +176,12 @@ export const accountApi = {
   createAdmin:   (data)    => api.post('/accounts/admins', data),
   updateAdmin:   (id, d)   => api.put(`/accounts/admins/${id}`, d),
   deleteAdmin:   (id)      => api.delete(`/accounts/admins/${id}`),
+
+  // Security-guard accounts (super_admin only)
+  listGuards:    (params)  => api.get('/accounts/guards', { params }),
+  createGuard:   (data)    => api.post('/accounts/guards', data),
+  updateGuard:   (id, d)   => api.put(`/accounts/guards/${id}`, d),
+  deleteGuard:   (id)      => api.delete(`/accounts/guards/${id}`),
 }
 
 // ── Scores (Score Items & Student Scores) ────────────────────

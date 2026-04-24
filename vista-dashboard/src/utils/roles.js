@@ -3,11 +3,12 @@ export const ELEM_GRADES = ['Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5
 export const ALL_GRADES  = [...ECE_GRADES, ...ELEM_GRADES]
 
 export const ROLES = {
-  SUPER_ADMIN: 'super_admin',
-  ADMIN_ECE:   'admin_ece',
-  ADMIN_ELEM:  'admin_elem',
-  TEACHER:     'teacher',
-  PARENT:      'parent',
+  SUPER_ADMIN:    'super_admin',
+  ADMIN_ECE:      'admin_ece',
+  ADMIN_ELEM:     'admin_elem',
+  TEACHER:        'teacher',
+  PARENT:         'parent',
+  SECURITY_GUARD: 'security_guard',
 }
 
 export const ANY_ADMIN      = [ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE, ROLES.ADMIN_ELEM]
@@ -16,12 +17,14 @@ export const SCOPED_ADMINS  = [ROLES.ADMIN_ECE, ROLES.ADMIN_ELEM]
 export function gradeScopeForRole(role) {
   if (role === ROLES.ADMIN_ECE)  return [...ECE_GRADES]
   if (role === ROLES.ADMIN_ELEM) return [...ELEM_GRADES]
+  if (role === ROLES.SECURITY_GUARD) return []
   return [...ALL_GRADES]
 }
 
-export function isAnyAdmin(role)     { return ANY_ADMIN.includes(role) }
-export function isSuperAdmin(role)   { return role === ROLES.SUPER_ADMIN }
-export function isScopedAdmin(role)  { return SCOPED_ADMINS.includes(role) }
+export function isAnyAdmin(role)       { return ANY_ADMIN.includes(role) }
+export function isSuperAdmin(role)     { return role === ROLES.SUPER_ADMIN }
+export function isScopedAdmin(role)    { return SCOPED_ADMINS.includes(role) }
+export function isSecurityGuard(role)  { return role === ROLES.SECURITY_GUARD }
 
 export function canManageGrade(role, gradeLevel) {
   if (!gradeLevel) return true
@@ -29,9 +32,10 @@ export function canManageGrade(role, gradeLevel) {
 }
 
 export const ROLE_LABELS = {
-  super_admin: 'Super Admin',
-  admin_ece:   'ECE Admin',
-  admin_elem:  'Elementary Admin',
-  teacher:     'Teacher',
-  parent:      'Parent',
+  super_admin:    'Super Admin',
+  admin_ece:      'ECE Admin',
+  admin_elem:     'Elementary Admin',
+  teacher:        'Teacher',
+  parent:         'Parent',
+  security_guard: 'Security Guard',
 }

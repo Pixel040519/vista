@@ -1,0 +1,233 @@
+import 'package:dio/dio.dart';
+
+import 'api_client.dart';
+import 'models/attendance.dart';
+import 'models/behavior.dart';
+import 'models/dismissal.dart';
+import 'models/ece.dart';
+import 'models/grade.dart';
+import 'models/notification.dart';
+import 'models/parent_summary.dart';
+import 'models/student.dart';
+
+/// Thin wrapper around the parent-scoped REST endpoints. Every call goes
+/// through [ApiClient] so Bearer auth + 401 refresh are handled upstream.
+class ParentApi {
+  ParentApi(this.client);
+
+  final ApiClient client;
+
+  Future<List<Student>> children() async {
+    try {
+      final r = await client.raw.get('/api/students');
+      final list = (r.data['students'] as List? ?? r.data as List? ?? const [])
+          .cast<Map>()
+          .map((m) => Student.fromJson(m.cast<String, dynamic>()))
+          .toList();
+      return list;
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<Student> child(String studentId) async {
+    try {
+      final r = await client.raw.get('/api/students/$studentId');
+      final data = (r.data['student'] as Map? ?? r.data as Map)
+          .cast<String, dynamic>();
+      return Student.fromJson(data);
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<ParentSummary> summary(String studentId) async {
+    try {
+      final r = await client.raw.get('/api/ai/parent-summary/$studentId');
+      return ParentSummary.fromJson(
+          (r.data as Map).cast<String, dynamic>());
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<List<AttendanceRecord>> attendance(String studentId,
+      {String? from, String? to}) async {
+    try {
+      final r = await client.raw.get('/api/attendance', queryParameters: {
+        'student_id': studentId,
+        if (from != null) 'from': from,
+        if (to != null) 'to': to,
+      });
+      final list = (r.data['records'] as List? ?? r.data as List? ?? const [])
+          .cast<Map>()
+          .map((m) => AttendanceRecord.fromJson(m.cast<String, dynamic>()))
+          .toList();
+      return list;
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<List<Grade>> grades(String studentId, {int? quarter}) async {
+    try {
+      final r = await client.raw.get('/api/grades', queryParameters: {
+        'student_id': studentId,
+        if (quarter != null) 'quarter': quarter,
+      });
+      final list = (r.data['grades'] as List? ?? r.data as List? ?? const [])
+          .cast<Map>()
+          .map((m) => Grade.fromJson(m.cast<String, dynamic>()))
+          .toList();
+      return list;
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<EceStudentRecords> eceRecords(String studentId,
+      {int? quarter, String? syId}) async {
+    try {
+      final r = await client.raw.get('/api/ece/student-records',
+          queryParameters: {
+            'student_id': studentId,
+            if (quarter != null) 'quarter': quarter,
+            if (syId != null) 'sy_id': syId,
+          });
+      return EceStudentRecords.fromJson((r.data as Map).cast<String, dynamic>());
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<List<BehaviorLog>> behavior(String studentId) async {
+    try {
+      final r = await client.raw.get('/api/behavior', queryParameters: {
+        'student_id': studentId,
+      });
+      final list = (r.data['logs'] as List? ?? r.data as List? ?? const [])
+          .cast<Map>()
+          .map((m) => BehaviorLog.fromJson(m.cast<String, dynamic>()))
+          .toList();
+      return list;
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<List<DismissalLog>> dismissalLogs({String? studentId}) async {
+    try {
+      final r = await client.raw.get('/api/dismissal/logs', queryParameters: {
+        if (studentId != null) 'student_id': studentId,
+      });
+      final list = (r.data['logs'] as List? ?? r.data as List? ?? const [])
+          .cast<Map>()
+          .map((m) => DismissalLog.fromJson(m.cast<String, dynamic>()))
+          .toList();
+      return list;
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  /// Asks the backend for a short-lived pickup QR payload. Parents get a
+  /// 2-minute TTL so screenshots don't become a bypass.
+  Future<PickupQr> generateQr(String studentId) async {
+    try {
+      final r = await client.raw.post('/api/students/$studentId/generate-qr');
+      return PickupQr.fromJson((r.data as Map).cast<String, dynamic>());
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<List<AppNotification>> notifications() async {
+    try {
+      final r = await client.raw.get('/api/notifications');
+      final list = (r.data['notifications'] as List? ??
+              r.data as List? ??
+              const [])
+          .cast<Map>()
+          .map((m) => AppNotification.fromJson(m.cast<String, dynamic>()))
+          .toList();
+      return list;
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<void> markNotificationRead(String id) async {
+    try {
+      await client.raw.patch('/api/notifications/$id/read');
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<void> registerDevice({required String token, required String platform}) async {
+    try {
+      await client.raw.post('/api/devices/register',
+          data: {'token': token, 'platform': platform});
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<void> unregisterDevice(String token) async {
+    try {
+      await client.raw.delete('/api/devices/$token');
+    } catch (_) {
+      // Logout should not fail on a stale token delete.
+    }
+  }
+}
+
+class PickupQr {
+  PickupQr({required this.payload, required this.expiresAt});
+  final String payload;
+  final DateTime expiresAt;
+
+  factory PickupQr.fromJson(Map<String, dynamic> json) {
+    // Backend returns either `qr_payload` (string) or a nested object.
+    final payload = (json['qr_payload'] ?? json['payload'] ?? '').toString();
+    final exp = json['expires_at'] ?? json['expiresAt'];
+    return PickupQr(
+      payload: payload,
+      expiresAt: exp is String
+          ? DateTime.parse(exp)
+          : DateTime.now().add(const Duration(minutes: 2)),
+    );
+  }
+}
+
+class EceStudentRecords {
+  EceStudentRecords({
+    required this.skills,
+    required this.records,
+    this.quarter,
+    this.schoolYear,
+  });
+
+  final List<EceSkill> skills;
+  final List<EceRecord> records;
+  final int? quarter;
+  final String? schoolYear;
+
+  factory EceStudentRecords.fromJson(Map<String, dynamic> json) {
+    final skillList = (json['skills'] as List? ?? const [])
+        .cast<Map>()
+        .map((m) => EceSkill.fromJson(m.cast<String, dynamic>()))
+        .toList();
+    final recList = (json['records'] as List? ?? const [])
+        .cast<Map>()
+        .map((m) => EceRecord.fromJson(m.cast<String, dynamic>()))
+        .toList();
+    final sy = json['school_year'];
+    return EceStudentRecords(
+      skills: skillList,
+      records: recList,
+      quarter: json['quarter'] as int?,
+      schoolYear: sy is Map ? sy['name'] as String? : sy as String?,
+    );
+  }
+}

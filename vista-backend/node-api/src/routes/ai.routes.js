@@ -1121,6 +1121,161 @@ router.get('/dashboard-summary', authorizeAnyAdmin, async (req, res, next) => {
   }
 });
 
+// ─── GET /api/ai/parent-summary/:student_id ───────────────────
+// Lightweight single-student rollup for the vista_parent mobile Overview tab.
+// Returns risk tier, 30-day attendance rate, quarter grade avg (or ECE quarter
+// rated/total), latest behavior sentiment, and unread-notification count.
+// Gated with enforceParentLinked so parents only see their own children; staff
+// can also call it (handy for QA) since it's read-only and cheap.
+const { enforceParentLinked } = require('../middleware/parentScope');
+router.get('/parent-summary/:student_id', enforceParentLinked, async (req, res, next) => {
+  try {
+    const studentId = req.params.student_id;
+
+    const studentRes = await query(
+      `SELECT id, full_name, grade_level, section, profile_photo_url,
+              academic_access_suspended, academic_access_suspended_reason
+         FROM students WHERE id = $1 AND is_active = TRUE`,
+      [studentId]
+    );
+    if (!studentRes.rows.length) throw new AppError('Student not found.', 404);
+    const student = studentRes.rows[0];
+    const isEce = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder'].includes(student.grade_level);
+
+    const activeSY = await query(
+      `SELECT id, label FROM school_years WHERE is_active = TRUE LIMIT 1`
+    );
+    const syId = activeSY.rows[0]?.id || null;
+    const syLabel = activeSY.rows[0]?.label || null;
+
+    // Risk tier — newest assessment (FastAPI /classify/risk/all could also work,
+    // but we prefer the stored value for a cheap single-student read).
+    const riskRes = await query(
+      `SELECT risk_level, risk_score, assessed_at
+         FROM risk_assessments
+        WHERE student_id = $1
+        ORDER BY assessed_at DESC LIMIT 1`,
+      [studentId]
+    );
+    const risk = riskRes.rows[0] || null;
+
+    // Attendance rate over the last 30 days (any subject counts as "present").
+    const attRes = await query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status IN ('Present','Late'))::int AS present_days,
+         COUNT(DISTINCT date)::int AS total_days
+         FROM attendance
+        WHERE student_id = $1
+          AND date >= CURRENT_DATE - INTERVAL '30 days'`,
+      [studentId]
+    );
+    const { present_days = 0, total_days = 0 } = attRes.rows[0] || {};
+    const attendanceRate = total_days > 0 ? Math.round((present_days / total_days) * 1000) / 10 : null;
+
+    // Academic rollup: non-ECE = latest-quarter avg grade; ECE = rated/total for latest quarter.
+    let academic = null;
+    if (!isEce && syLabel) {
+      const gRes = await query(
+        `SELECT MAX(quarter) AS q FROM grades WHERE student_id=$1 AND school_year=$2`,
+        [studentId, syLabel]
+      );
+      const q = gRes.rows[0]?.q || null;
+      if (q) {
+        const avgRes = await query(
+          `SELECT AVG(grade)::float AS avg_grade
+             FROM grades WHERE student_id=$1 AND school_year=$2 AND quarter=$3`,
+          [studentId, syLabel, q]
+        );
+        academic = {
+          quarter: q,
+          avg_grade: avgRes.rows[0]?.avg_grade ? Math.round(avgRes.rows[0].avg_grade * 10) / 10 : null,
+        };
+      }
+    } else if (isEce && syId) {
+      const qRes = await query(
+        `SELECT MAX(quarter) AS q
+           FROM ece_competency_records
+          WHERE student_id=$1 AND school_year_id=$2`,
+        [studentId, syId]
+      );
+      const q = qRes.rows[0]?.q || null;
+      if (q) {
+        const distRes = await query(
+          `SELECT rating, COUNT(*)::int AS cnt
+             FROM ece_competency_records
+            WHERE student_id=$1 AND school_year_id=$2 AND quarter=$3
+            GROUP BY rating`,
+          [studentId, syId, q]
+        );
+        const dist = { E: 0, G: 0, F: 0, NA: 0 };
+        for (const r of distRes.rows) if (r.rating in dist) dist[r.rating] = r.cnt;
+        const rated = dist.E + dist.G + dist.F + dist.NA;
+
+        const totalRes = await query(
+          `SELECT COUNT(*)::int AS n
+             FROM competency_skills cs
+             JOIN subjects sub ON sub.id = cs.subject_id
+            WHERE cs.is_active = TRUE AND sub.grade_level = $1`,
+          [student.grade_level]
+        );
+        academic = {
+          quarter: q,
+          rated,
+          total_skills: totalRes.rows[0]?.n || 0,
+          distribution: dist,
+        };
+      }
+    }
+
+    // Latest behavior observation (any teacher).
+    const bRes = await query(
+      `SELECT sentiment, sentiment_score, category, observed_at
+         FROM behavior_logs
+        WHERE student_id=$1
+        ORDER BY observed_at DESC LIMIT 1`,
+      [studentId]
+    );
+    const latestBehavior = bRes.rows[0] || null;
+
+    // Unread notifications for the parent (across all their children, not just this one).
+    let unreadNotifications = 0;
+    if (req.user.role === ROLES.PARENT) {
+      const nRes = await query(
+        `SELECT COUNT(*)::int AS n FROM notifications
+          WHERE recipient_id=$1 AND is_read=FALSE`,
+        [req.user.id]
+      );
+      unreadNotifications = nRes.rows[0]?.n || 0;
+    }
+
+    res.json({
+      student: {
+        id: student.id,
+        full_name: student.full_name,
+        grade_level: student.grade_level,
+        section: student.section,
+        profile_photo_url: student.profile_photo_url,
+        academic_access_suspended: student.academic_access_suspended,
+        academic_access_suspended_reason: student.academic_access_suspended_reason,
+      },
+      is_ece: isEce,
+      risk: risk ? {
+        tier: risk.risk_level,
+        score: risk.risk_score ? Number(risk.risk_score) : null,
+        assessed_at: risk.assessed_at,
+      } : null,
+      attendance: {
+        rate_pct: attendanceRate,
+        present_days,
+        total_days,
+      },
+      academic,
+      latest_behavior: latestBehavior,
+      unread_notifications: unreadNotifications,
+    });
+  } catch (err) { next(err); }
+});
+
 // ─── GET /api/ai/teacher-dashboard ────────────────────────────
 // Teacher-scoped dashboard summary (only the teacher's assignments)
 router.get('/teacher-dashboard', authorize('teacher'), async (req, res, next) => {

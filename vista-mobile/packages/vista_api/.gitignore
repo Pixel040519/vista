@@ -1,0 +1,16 @@
+# Files and directories created by pub.
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+pubspec.lock.bak
+
+# Conventional directory for build outputs.
+build/
+
+# Directory created by dartdoc.
+doc/api/
+
+# Flutter pub plugin artifacts (not used by a pure-Dart package but harmless).
+.flutter-plugins
+.flutter-plugins-dependencies

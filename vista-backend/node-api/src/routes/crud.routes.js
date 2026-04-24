@@ -7,18 +7,26 @@ const { query } = require('../config/database');
 const { authenticate, authorize, authorizeAnyAdmin } = require('../middleware/auth.middleware');
 const { AppError } = require('../middleware/error.middleware');
 const { ROLES, ANY_ADMIN, isAnyAdmin, isScopedAdmin, gradeScopeForRole } = require('../utils/roles');
+const {
+  enforceParentLinked,
+  getParentLinkedStudentIds,
+  rejectIfAcademicSuspended,
+} = require('../middleware/parentScope');
+const pushService = require('../services/push.service');
 
 // Grade routes serve elementary only — ECE grade levels (Pre-Nursery–Kinder)
 // use the ECE Competency tracker instead of the grades table. Reject admin_ece
-// to match the pattern where ECE routes reject admin_elem.
-const GRADE_ROLES = [ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM, ROLES.TEACHER];
+// to match the pattern where ECE routes reject admin_elem. Parents of linked
+// Grade 1–6 students are allowed (mobile app); parents of ECE students will
+// simply get no rows (ECE kids don't have `grades` entries).
+const GRADE_ROLES = [ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM, ROLES.TEACHER, ROLES.PARENT];
 
 attendanceRouter.use(authenticate);
 
 // Read access for admin + teacher; write access for teacher only below
 
 // GET /api/attendance?student_id=&start_date=&end_date=
-attendanceRouter.get('/', async (req, res, next) => {
+attendanceRouter.get('/', enforceParentLinked, async (req, res, next) => {
   try {
     const { student_id, start_date, end_date } = req.query;
     if (!student_id) throw new AppError('student_id is required.', 400);
@@ -171,10 +179,16 @@ gradeRouter.use(authenticate);
 gradeRouter.use(authorize(...GRADE_ROLES));
 
 // GET /api/grades?student_id=&school_year=
-gradeRouter.get('/', async (req, res, next) => {
+gradeRouter.get('/', enforceParentLinked, async (req, res, next) => {
   try {
     const { student_id, school_year } = req.query;
     if (!student_id) throw new AppError('student_id is required.', 400);
+
+    // Parents cannot see grades for a student whose academic access is suspended
+    // (Conditional Access Controller per the manuscript). Staff bypass this gate.
+    if (req.user.role === ROLES.PARENT) {
+      if (await rejectIfAcademicSuspended(res, student_id)) return;
+    }
 
     const params = [student_id, school_year || null];
     let teacherFilter = '';
@@ -363,8 +377,9 @@ const teacherOwnsStudent = async (teacherId, studentId) => {
 
 // GET /api/behavior
 // Teacher: requires student_id, scoped to own logs for students in own classes.
+// Parent:  requires student_id; must be linked to the student (enforceParentLinked).
 // Admin:   student_id optional; supports teacher_id, category, sentiment, date_from, date_to, limit, offset.
-behaviorRouter.get('/', async (req, res, next) => {
+behaviorRouter.get('/', enforceParentLinked, async (req, res, next) => {
   try {
     const isAdmin = isAnyAdmin(req.user.role);
     const {
@@ -574,7 +589,9 @@ const dismissalRouter = express.Router();
 dismissalRouter.use(authenticate);
 
 // POST /api/dismissal/verify — Scan & verify QR code
-dismissalRouter.post('/verify', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
+// Security guards (vista_guard mobile app) are the primary caller; admin + teacher
+// retained for the web SecurePass scanner fallback.
+dismissalRouter.post('/verify', authorize(...ANY_ADMIN, ROLES.TEACHER, ROLES.SECURITY_GUARD), async (req, res, next) => {
   try {
     const { qrPayload, authorized_by } = req.body;
 
@@ -621,6 +638,7 @@ dismissalRouter.post('/verify', authorize(...ANY_ADMIN, 'teacher'), async (req, 
     }
 
     // Log successful dismissal and invalidate QR
+    const scannedAt = new Date();
     await query(
       `INSERT INTO dismissal_logs (student_id, authorized_by, scanned_by, qr_token, status)
        VALUES ($1, $2, $3, $4, 'Success')`,
@@ -633,11 +651,35 @@ dismissalRouter.post('/verify', authorize(...ANY_ADMIN, 'teacher'), async (req, 
       [studentId]
     );
 
+    // Insert an in-app notification row for every linked parent so the bell
+    // icon in the parent mobile app reflects the event even if push was
+    // dropped by the OS / offline / permissions-denied.
+    await query(
+      `INSERT INTO notifications (recipient_id, title, body, type, reference_id)
+       SELECT ps.parent_id,
+              $2 || ' has been picked up',
+              $3 || ' just signed out ' || $2 || ' at the gate.',
+              'pickup',
+              $1
+         FROM parent_student ps
+        WHERE ps.student_id = $1 AND ps.parent_id IS NOT NULL`,
+      [studentId, studentResult.rows[0].full_name, authCheck.rows[0].full_name]
+    );
+
+    // Fire-and-forget push. Failures are logged inside the service and must
+    // not bubble up — the gate is unblocked regardless of FCM health.
+    pushService.sendPickupAlert({
+      studentId,
+      studentName: studentResult.rows[0].full_name,
+      guardianName: authCheck.rows[0].full_name,
+      scannedAt,
+    }).catch(() => {});
+
     res.json({
       message: 'Student released successfully.',
       student: studentResult.rows[0].full_name,
       authorizedGuardian: authCheck.rows[0].full_name,
-      dismissedAt: new Date().toISOString()
+      dismissedAt: scannedAt.toISOString()
     });
   } catch (err) {
     next(err);
@@ -645,8 +687,27 @@ dismissalRouter.post('/verify', authorize(...ANY_ADMIN, 'teacher'), async (req, 
 });
 
 // GET /api/dismissal/logs?date=
-dismissalRouter.get('/logs', authorizeAnyAdmin, async (req, res, next) => {
+// Admin/guard: full school-wide logs (guard optionally filtered by date for the
+// "Today's log" screen). Parent: last 30 rows across every linked student, date
+// filter ignored (the mobile UI is a simple history scroll, not a date picker).
+dismissalRouter.get('/logs', authorize(...ANY_ADMIN, ROLES.SECURITY_GUARD, ROLES.PARENT), async (req, res, next) => {
   try {
+    if (req.user.role === ROLES.PARENT) {
+      const studentIds = await getParentLinkedStudentIds(req.user.id);
+      if (studentIds.length === 0) return res.json({ logs: [] });
+      const r = await query(
+        `SELECT dl.*, s.full_name as student_name, u.full_name as guardian_name
+           FROM dismissal_logs dl
+           JOIN students s ON s.id = dl.student_id
+           JOIN users u ON u.id = dl.authorized_by
+          WHERE dl.student_id = ANY($1)
+          ORDER BY dl.scanned_at DESC
+          LIMIT 30`,
+        [studentIds]
+      );
+      return res.json({ logs: r.rows });
+    }
+
     const { date } = req.query;
     const params = [date || null];
     let scopeClause = '';

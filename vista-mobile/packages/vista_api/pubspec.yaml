@@ -1,0 +1,17 @@
+name: vista_api
+description: Shared API client, auth repository, and DTOs for the VISTA Flutter apps (vista_parent + vista_guard).
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dio: ^5.4.0
+  flutter_secure_storage: ^9.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

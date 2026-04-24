@@ -7,7 +7,7 @@ const { query, withTransaction } = require('../config/database')
 const { authenticate, authorizeAnyAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
 const { normaliseName } = require('../utils/nameHelper')
-const { gradeScopeForRole, canManageGrade, isScopedAdmin } = require('../utils/roles')
+const { ROLES, gradeScopeForRole, canManageGrade, isScopedAdmin } = require('../utils/roles')
 
 // Throws 403 if the targeted student's grade_level is outside the caller's scope.
 // Super_admin, teachers, and parents are untouched (teachers/parents are scoped
@@ -252,6 +252,15 @@ router.get('/:id', async (req, res, next) => {
       throw new AppError('Student not found.', 404)
     }
 
+    // Parents may only read their own linked children.
+    if (req.user.role === ROLES.PARENT) {
+      const link = await query(
+        'SELECT 1 FROM parent_student WHERE parent_id=$1 AND student_id=$2 LIMIT 1',
+        [req.user.id, req.params.id]
+      )
+      if (!link.rowCount) throw new AppError('Student not found.', 404)
+    }
+
     if (req.user.role === 'teacher') {
       delete student.home_address
       for (const g of student.guardians || []) {
@@ -262,6 +271,37 @@ router.get('/:id', async (req, res, next) => {
     }
 
     res.json({ student })
+  } catch (err) { next(err) }
+})
+
+// PATCH /api/students/:id/academic-access — admin toggle for the Conditional
+// Access Controller. When suspended, parent grade + ECE reads return 423 Locked.
+// Safety surfaces (attendance, behavior, dismissal, risk) stay visible.
+router.patch('/:id/academic-access', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const schema = Joi.object({
+      suspended: Joi.boolean().required(),
+      reason: Joi.string().allow('').max(500).optional(),
+    })
+    const { error, value } = schema.validate(req.body, { stripUnknown: true })
+    if (error) throw new AppError(error.details[0].message, 422)
+
+    await assertStudentInScope(req, req.params.id)
+
+    const r = await query(
+      `UPDATE students
+         SET academic_access_suspended = $1,
+             academic_access_suspended_reason = $2,
+             updated_at = NOW()
+       WHERE id = $3 AND is_active = TRUE
+       RETURNING id, full_name, academic_access_suspended, academic_access_suspended_reason`,
+      [value.suspended, value.suspended ? (value.reason || null) : null, req.params.id]
+    )
+    if (!r.rows.length) throw new AppError('Student not found.', 404)
+    res.json({
+      message: value.suspended ? 'Academic access suspended.' : 'Academic access restored.',
+      student: r.rows[0],
+    })
   } catch (err) { next(err) }
 })
 
@@ -514,10 +554,32 @@ router.delete('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, 
 })
 
 // POST /api/students/:id/generate-qr
-router.post('/:id/generate-qr', authorizeAnyAdmin, async (req, res, next) => {
+// Admins (school web console) and linked authorized-pickup parents (vista_parent
+// mobile app, "Pickup QR" tab) may both generate a SecurePass QR. Parents get a
+// shorter default expiry because the mobile UI refreshes the code periodically.
+router.post('/:id/generate-qr', async (req, res, next) => {
   try {
-    await assertStudentInScope(req, req.params.id)
-    const { expiresInMinutes=30 } = req.body
+    const role = req.user?.role
+    const isAdmin = role === ROLES.SUPER_ADMIN || role === ROLES.ADMIN_ECE || role === ROLES.ADMIN_ELEM
+
+    if (isAdmin) {
+      await assertStudentInScope(req, req.params.id)
+    } else if (role === ROLES.PARENT) {
+      const link = await query(
+        `SELECT 1 FROM parent_student
+          WHERE parent_id=$1 AND student_id=$2 AND is_authorized_pickup=TRUE
+          LIMIT 1`,
+        [req.user.id, req.params.id]
+      )
+      if (!link.rowCount) {
+        throw new AppError('You are not an authorized pickup guardian for this student.', 403)
+      }
+    } else {
+      throw new AppError('Not authorized to generate a pickup QR.', 403)
+    }
+
+    const defaultExpiry = role === ROLES.PARENT ? 2 : 30
+    const expiresInMinutes = Number.parseInt(req.body?.expiresInMinutes, 10) || defaultExpiry
     const token     = uuidv4()
     const expiresAt = new Date(Date.now() + expiresInMinutes*60000)
     const qrImage   = await QRCode.toDataURL(

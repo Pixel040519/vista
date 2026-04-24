@@ -5,6 +5,7 @@ const { query } = require('../config/database')
 const { authenticate, authorize } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
 const { ROLES, isAnyAdmin } = require('../utils/roles')
+const { enforceParentLinked, rejectIfAcademicSuspended } = require('../middleware/parentScope')
 
 router.use(authenticate)
 
@@ -303,6 +304,69 @@ router.get('/records', async (req, res, next) => {
     res.json({
       school_year: sy,
       students: students.rows,
+      records: records.rows,
+    })
+  } catch (e) { next(e) }
+})
+
+// GET /student-records?student_id=&quarter=&sy_id=
+// Parent-scoped single-student view for the vista_parent mobile Academics tab.
+// Returns: { school_year, student, skills[], records[] } — skills are every
+// active skill for the student's grade level (so the UI can show "Not rated"
+// placeholders), records are the student's ratings for the given quarter.
+// Staff (admin + teacher) can call it too; parents are gated by link + the
+// academic_access_suspended flag (423 Locked when suspended).
+router.get('/student-records', enforceParentLinked, async (req, res, next) => {
+  try {
+    const studentId = req.parentStudentId || req.query.student_id
+    const { quarter, sy_id } = req.query
+    if (!studentId || !quarter) {
+      throw new AppError('student_id and quarter are required.', 400)
+    }
+
+    if (req.user.role === ROLES.PARENT) {
+      if (await rejectIfAcademicSuspended(res, studentId)) return
+    }
+
+    const studentRes = await query(
+      `SELECT id, full_name, grade_level, section, gender
+         FROM students WHERE id=$1 AND is_active=TRUE`,
+      [studentId]
+    )
+    if (!studentRes.rows.length) throw new AppError('Student not found.', 404)
+    const student = studentRes.rows[0]
+    if (!ECE_GRADES.includes(student.grade_level)) {
+      throw new AppError('Student is not in an ECE grade level.', 400)
+    }
+
+    // Teachers can only view their own assigned classes
+    if (req.user.role === ROLES.TEACHER) {
+      await verifyEceAssignment(req, student.grade_level, student.section)
+    }
+
+    const sy = await resolveSY(sy_id)
+
+    const skills = await query(
+      `SELECT cs.id, cs.subject_id, cs.name, cs.description, cs.display_order,
+              sub.name AS subject_name
+         FROM competency_skills cs
+         JOIN subjects sub ON sub.id = cs.subject_id
+        WHERE cs.is_active = TRUE AND sub.grade_level = $1
+        ORDER BY sub.name, cs.display_order, cs.name`,
+      [student.grade_level]
+    )
+
+    const records = await query(
+      `SELECT skill_id, rating, notes
+         FROM ece_competency_records
+        WHERE student_id=$1 AND school_year_id=$2 AND quarter=$3`,
+      [studentId, sy.id, quarter]
+    )
+
+    res.json({
+      school_year: sy,
+      student,
+      skills: skills.rows,
       records: records.rows,
     })
   } catch (e) { next(e) }

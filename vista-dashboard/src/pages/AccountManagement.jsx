@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   UserCog, Plus, Search, Pencil, Trash2, ShieldOff,
-  ShieldCheck, Eye, EyeOff, X, BookOpen, ChevronDown, History
+  ShieldCheck, Eye, EyeOff, X, BookOpen, ChevronDown, History, Shield
 } from 'lucide-react'
 import { accountApi, curriculumApi } from '../api/client'
 import { LoadingSpinner, EmptyState, Modal, PhoneInput } from '../components/UI'
@@ -657,6 +657,108 @@ function AdminForm({ initial, onSubmit, onClose, mode }) {
   )
 }
 
+// ── Guard Form ───────────────────────────────────────────────
+function GuardForm({ initial, onSubmit, onClose, mode }) {
+  const [form, setForm] = useState({
+    surname:     initial?.surname     || '',
+    first_name:  initial?.first_name  || '',
+    middle_name: initial?.middle_name || '',
+    email:       initial?.email       || '',
+    phone:       initial?.phone       || '',
+    password:    '',
+  })
+  const [showPw, setShowPw] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
+
+  const handleSubmit = async e => {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      const payload = { ...form }
+      if (mode === 'edit') {
+        delete payload.email
+        if (!payload.password) delete payload.password
+      }
+      await onSubmit(payload)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-5">
+      <div>
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Account Information</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Surname *</label>
+            <input className="input" value={form.surname}
+              onChange={e => setField('surname', e.target.value)}
+              onBlur={e => setField('surname', titleCase(e.target.value))} required />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">First Name *</label>
+            <input className="input" value={form.first_name}
+              onChange={e => setField('first_name', e.target.value)}
+              onBlur={e => setField('first_name', titleCase(e.target.value))} required />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">
+              Middle Name <span className="text-slate-400 font-normal">(optional)</span>
+            </label>
+            <input className="input" value={form.middle_name}
+              onChange={e => setField('middle_name', e.target.value)}
+              onBlur={e => setField('middle_name', titleCase(e.target.value))} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Email *</label>
+            <input className="input" type="email" value={form.email}
+              onChange={e => setField('email', e.target.value)}
+              required disabled={mode === 'edit'} />
+            {mode === 'edit' && <p className="text-xs text-slate-400 mt-1">Email cannot be changed.</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Phone *</label>
+            <PhoneInput className="input pr-10" value={form.phone}
+              onChange={v => setField('phone', v)} required />
+          </div>
+          <div className="col-span-2">
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">
+              {mode === 'edit' ? 'New Password (leave blank to keep current)' : 'Password *'}
+            </label>
+            <div className="relative">
+              <input
+                className="input pr-10"
+                type={showPw ? 'text' : 'password'}
+                placeholder={mode === 'edit' ? '••••••••' : 'Min. 8 characters'}
+                value={form.password}
+                onChange={e => setField('password', e.target.value)}
+                required={mode === 'create'}
+              />
+              <button type="button" onClick={() => setShowPw(!showPw)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                {showPw ? <EyeOff size={15}/> : <Eye size={15}/>}
+              </button>
+            </div>
+          </div>
+        </div>
+        <p className="text-xs text-slate-400 mt-3">
+          Guard accounts sign in to the VISTA Guard mobile app to scan pickup QRs at the gate. They have no access to grades, attendance, or admin features.
+        </p>
+      </div>
+
+      <div className="flex gap-3 pt-2 border-t border-slate-100">
+        <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+        <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
+          {saving ? 'Saving...' : (mode === 'edit' ? 'Save Changes' : 'Create Guard')}
+        </button>
+      </div>
+    </form>
+  )
+}
+
 export default function AccountManagement() {
   const { isSuperAdmin } = useAuth()
   const [tab, setTab] = useState('teachers')
@@ -778,6 +880,58 @@ export default function AccountManagement() {
     fetchAdmins()
   }
 
+  // ── Security Guards (super_admin only) ────────────────────
+  const [guards, setGuards] = useState([])
+  const [guardsLoading, setGuardsLoading] = useState(false)
+  const [guardSearch, setGuardSearch] = useState('')
+  const [guardFilterActive, setGuardFilterActive] = useState('all')
+  const [showGuardCreate, setShowGuardCreate] = useState(false)
+  const [guardEditTarget, setGuardEditTarget] = useState(null)
+  const [guardDeleteTarget, setGuardDeleteTarget] = useState(null)
+
+  const fetchGuards = useCallback(async () => {
+    if (!isSuperAdmin) return
+    setGuardsLoading(true)
+    try {
+      const params = {}
+      if (guardSearch) params.search = guardSearch
+      if (guardFilterActive !== 'all') params.is_active = guardFilterActive
+      const res = await accountApi.listGuards(params)
+      setGuards(res.data.guards || [])
+    } catch {}
+    setGuardsLoading(false)
+  }, [isSuperAdmin, guardSearch, guardFilterActive])
+
+  useEffect(() => {
+    if (tab !== 'guards') return
+    const t = setTimeout(fetchGuards, 300)
+    return () => clearTimeout(t)
+  }, [tab, fetchGuards])
+
+  const handleCreateGuard = async (data) => {
+    await accountApi.createGuard(data)
+    toast.success(`${formatName(data)}'s guard account created!`)
+    setShowGuardCreate(false)
+    fetchGuards()
+  }
+  const handleEditGuard = async (data) => {
+    await accountApi.updateGuard(guardEditTarget.id, data)
+    toast.success('Guard account updated.')
+    setGuardEditTarget(null)
+    fetchGuards()
+  }
+  const handleDeleteGuard = async () => {
+    await accountApi.deleteGuard(guardDeleteTarget.id)
+    toast.success(`${formatName(guardDeleteTarget)} deactivated.`)
+    setGuardDeleteTarget(null)
+    fetchGuards()
+  }
+  const handleReactivateGuard = async (g) => {
+    await accountApi.updateGuard(g.id, { is_active: true })
+    toast.success(`${formatName(g)}'s guard account reactivated.`)
+    fetchGuards()
+  }
+
   return (
     <div className="space-y-5 animate-fade-in">
       {/* Header */}
@@ -787,16 +941,24 @@ export default function AccountManagement() {
           <p className="page-subtitle">
             {tab === 'teachers'
               ? `${active.length} active · ${inactive.length} inactive teacher${teachers.length !== 1 ? 's' : ''}`
-              : `${admins.length} admin account${admins.length !== 1 ? 's' : ''}`}
+              : tab === 'admins'
+              ? `${admins.length} admin account${admins.length !== 1 ? 's' : ''}`
+              : `${guards.length} guard account${guards.length !== 1 ? 's' : ''}`}
           </p>
         </div>
-        {tab === 'teachers' ? (
+        {tab === 'teachers' && (
           <button onClick={() => setShowCreate(true)} className="btn-primary">
             <Plus size={16} /> Add Teacher
           </button>
-        ) : (
+        )}
+        {tab === 'admins' && (
           <button onClick={() => setShowAdminCreate(true)} className="btn-primary">
             <Plus size={16} /> Add Admin
+          </button>
+        )}
+        {tab === 'guards' && (
+          <button onClick={() => setShowGuardCreate(true)} className="btn-primary">
+            <Plus size={16} /> Add Guard
           </button>
         )}
       </div>
@@ -821,6 +983,15 @@ export default function AccountManagement() {
                 : 'border-transparent text-slate-500 hover:text-slate-700'
             )}>
             Admins
+          </button>
+          <button onClick={() => setTab('guards')}
+            className={clsx(
+              'px-4 py-2 text-sm font-semibold transition-colors border-b-2 -mb-px',
+              tab === 'guards'
+                ? 'border-brand-500 text-brand-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            )}>
+            Guards
           </button>
         </div>
       )}
@@ -1090,6 +1261,146 @@ export default function AccountManagement() {
           )}
         </div>
       </>)}
+
+      {/* Guards tab body (super_admin only) */}
+      {tab === 'guards' && isSuperAdmin && (<>
+        <div className="card p-4 flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input className="input pl-10" placeholder="Search by name or email..."
+              value={guardSearch} onChange={e => setGuardSearch(e.target.value)} />
+          </div>
+          <div className="flex rounded-xl border border-slate-200 overflow-hidden text-sm font-medium">
+            {[
+              { val: 'all',  label: 'All'      },
+              { val: 'true', label: 'Active'   },
+              { val: 'false',label: 'Inactive' },
+            ].map(opt => (
+              <button
+                key={opt.val}
+                onClick={() => setGuardFilterActive(opt.val)}
+                className={clsx(
+                  'px-4 py-2 transition-colors',
+                  guardFilterActive === opt.val
+                    ? 'bg-brand-500 text-white'
+                    : 'bg-white text-slate-600 hover:bg-slate-50'
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="card overflow-hidden">
+          {guardsLoading ? <LoadingSpinner /> : guards.length === 0 ? (
+            <EmptyState
+              icon={Shield}
+              title="No guard accounts yet"
+              description="Create a security-guard account to issue credentials for the VISTA Guard mobile app."
+              action={<button onClick={() => setShowGuardCreate(true)} className="btn-primary">Add Guard</button>}
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table-base">
+                <thead>
+                  <tr>
+                    <th>Guard</th>
+                    <th>Contact</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th className="text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {guards.map(g => (
+                    <tr key={g.id} className={!g.is_active ? 'opacity-50' : ''}>
+                      <td>
+                        <div className="flex items-center gap-3">
+                          <div className={clsx(
+                            'w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0',
+                            g.is_active ? 'bg-brand-100 text-brand-700' : 'bg-slate-100 text-slate-400'
+                          )}>
+                            {nameInitial(g)}
+                          </div>
+                          <div>
+                            <p className="font-medium text-slate-800">{formatName(g)}</p>
+                            <p className="text-xs text-slate-400">{g.email}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="text-sm text-slate-500">{g.phone || '—'}</td>
+                      <td>
+                        <span className={clsx(
+                          'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
+                          g.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                        )}>
+                          <span className={clsx('w-1.5 h-1.5 rounded-full', g.is_active ? 'bg-emerald-500' : 'bg-slate-400')} />
+                          {g.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="text-xs text-slate-400 font-mono whitespace-nowrap">
+                        {new Date(g.created_at).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </td>
+                      <td>
+                        <div className="flex items-center gap-1 justify-start">
+                          <button onClick={() => setGuardEditTarget(g)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
+                            title="Edit">
+                            <Pencil size={15} />
+                          </button>
+                          {!g.is_active && (
+                            <button onClick={() => handleReactivateGuard(g)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                              title="Reactivate">
+                              <ShieldCheck size={15} />
+                            </button>
+                          )}
+                          {g.is_active && (
+                            <button onClick={() => setGuardDeleteTarget(g)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                              title="Deactivate">
+                              <Trash2 size={15} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </>)}
+
+      {/* ── Guard Create / Edit / Delete Modals ──────────────── */}
+      <Modal open={showGuardCreate} onClose={() => setShowGuardCreate(false)}
+        title="Create Guard Account" size="lg">
+        <GuardForm mode="create" onSubmit={handleCreateGuard} onClose={() => setShowGuardCreate(false)} />
+      </Modal>
+      <Modal open={!!guardEditTarget} onClose={() => setGuardEditTarget(null)}
+        title="Edit Guard Account" size="lg">
+        {guardEditTarget && (
+          <GuardForm mode="edit" initial={guardEditTarget} onSubmit={handleEditGuard} onClose={() => setGuardEditTarget(null)} />
+        )}
+      </Modal>
+      <Modal open={!!guardDeleteTarget} onClose={() => setGuardDeleteTarget(null)}
+        title="Deactivate Guard Account">
+        {guardDeleteTarget && (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              Deactivate <b>{formatName(guardDeleteTarget)}</b>'s account? They won't be able to sign in to the VISTA Guard app. Historical dismissal logs are preserved.
+            </p>
+            <div className="flex gap-3 pt-2 border-t border-slate-100">
+              <button type="button" onClick={() => setGuardDeleteTarget(null)} className="btn-secondary flex-1">Cancel</button>
+              <button type="button" onClick={handleDeleteGuard} className="btn-primary flex-1 justify-center !bg-red-600 hover:!bg-red-700">
+                Deactivate
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* ── Admin Create / Edit / Delete Modals ─────────────── */}
       <Modal open={showAdminCreate} onClose={() => setShowAdminCreate(false)}

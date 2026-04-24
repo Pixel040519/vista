@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ClipboardCheck, Heart, QrCode, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby } from 'lucide-react'
+import { ArrowLeft, BookOpen, ClipboardCheck, Heart, QrCode, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi, eceApi, curriculumApi } from '../api/client'
 import { RiskBadge, SentimentBadge, LoadingSpinner, GradeChip } from '../components/UI'
@@ -33,7 +33,7 @@ const ECE_RATING_BY_VALUE = Object.fromEntries(ECE_RATINGS.map(r => [r.value, r]
 export default function StudentDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, isAnyAdmin } = useAuth()
   const isTeacher = user?.role === 'teacher'
   const [student, setStudent]   = useState(null)
   const [grades, setGrades]     = useState([])
@@ -245,6 +245,36 @@ export default function StudentDetail() {
     setGeneratingQr(false)
   }
 
+  const handleToggleAcademicAccess = async () => {
+    if (!student) return
+    const currentlySuspended = !!student.academic_access_suspended
+    if (currentlySuspended) {
+      if (!window.confirm('Restore academic access for this student? The parent app will show grades + ECE records again.')) return
+      try {
+        await studentApi.setAcademicAccess(id, { suspended: false })
+        setStudent({ ...student, academic_access_suspended: false, academic_access_suspended_reason: null })
+        toast.success('Academic access restored.')
+      } catch (e) {
+        toast.error(e?.response?.data?.error || 'Unable to update access.')
+      }
+      return
+    }
+    const reason = window.prompt('Reason for suspending academic access (shown to the parent):', 'Outstanding tuition balance.')
+    if (reason == null) return
+    const trimmed = reason.trim()
+    if (!trimmed) {
+      toast.error('A reason is required.')
+      return
+    }
+    try {
+      await studentApi.setAcademicAccess(id, { suspended: true, reason: trimmed })
+      setStudent({ ...student, academic_access_suspended: true, academic_access_suspended_reason: trimmed })
+      toast.success('Academic access suspended.')
+    } catch (e) {
+      toast.error(e?.response?.data?.error || 'Unable to update access.')
+    }
+  }
+
   const attSummary = attendance.reduce((a, r) => {
     a[r.status] = (a[r.status] || 0) + 1
     return a
@@ -336,18 +366,53 @@ export default function StudentDetail() {
               </div>
             </div>
           </div>
-          {!isTeacher && (
-            <button
-              onClick={handleGenerateQR}
-              disabled={generatingQr}
-              className="btn-secondary"
-            >
-              <QrCode size={16} />
-              {generatingQr ? 'Generating...' : 'Generate QR'}
-            </button>
-          )}
+
+
+          {/* HIDE BUTTON OF 'Suspend Academic Access' and 'Generate QR' TEMPORARILY */}
+
+          {/* <div className="flex items-center gap-2 flex-wrap">
+            {isAnyAdmin && (
+              <button
+                onClick={handleToggleAcademicAccess}
+                className="btn-secondary"
+                title={student.academic_access_suspended ? 'Restore parent academic view' : 'Suspend parent academic view'}
+              >
+                {student.academic_access_suspended
+                  ? (<><Unlock size={16} /> Restore Access</>)
+                  : (<><Lock size={16} /> Suspend Access</>)}
+              </button>
+            )}
+            {!isTeacher && (
+              <button
+                onClick={handleGenerateQR}
+                disabled={generatingQr}
+                className="btn-secondary"
+              >
+                <QrCode size={16} />
+                {generatingQr ? 'Generating...' : 'Generate QR'}
+              </button>
+            )}
+          </div> */}
+
+
         </div>
       </div>
+
+      {/* Academic access suspended banner */}
+      {student.academic_access_suspended && (
+        <div className="card p-4 flex items-start gap-3 border-l-4 border-amber-500 bg-amber-50">
+          <Lock size={18} className="text-amber-600 mt-0.5 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-amber-900">Parent academic view suspended</p>
+            <p className="text-xs text-amber-800 mt-1">
+              {student.academic_access_suspended_reason || 'No reason recorded.'}
+            </p>
+            <p className="text-xs text-amber-700 mt-1">
+              Attendance, behavior, pickup QR, and dismissal history remain visible to the parent.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* QR code display */}
       {qr && (
