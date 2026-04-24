@@ -9,8 +9,10 @@ const { ROLES } = require('../utils/roles');
 // req.query.student_id, req.body.student_id. 400s if missing for a parent
 // caller, 403s if the link doesn't exist.
 //
-// On success, attaches `req.parentStudentId = <number>` so downstream handlers
+// On success, attaches `req.parentStudentId = <uuid>` so downstream handlers
 // don't have to re-parse the parameter.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function enforceParentLinked(req, res, next) {
   try {
     if (req.user?.role !== ROLES.PARENT) return next();
@@ -21,8 +23,8 @@ async function enforceParentLinked(req, res, next) {
       req.query?.student_id ??
       req.body?.student_id;
 
-    const studentId = Number.parseInt(raw, 10);
-    if (!Number.isInteger(studentId) || studentId <= 0) {
+    const studentId = typeof raw === 'string' ? raw.trim() : '';
+    if (!UUID_RE.test(studentId)) {
       return res.status(400).json({ error: 'student_id is required for parent access.' });
     }
 

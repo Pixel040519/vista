@@ -23,7 +23,14 @@ class BehaviorLog {
         observedAt: DateTime.parse(json['observed_at'] as String),
         category: json['category'] as String?,
         sentiment: json['sentiment'] as String?,
-        sentimentScore: (json['sentiment_score'] as num?)?.toDouble(),
+        sentimentScore: _toDouble(json['sentiment_score']),
         teacherName: json['teacher_name'] as String?,
       );
+}
+
+double? _toDouble(Object? v) {
+  if (v == null) return null;
+  if (v is num) return v.toDouble();
+  if (v is String) return double.tryParse(v);
+  return null;
 }

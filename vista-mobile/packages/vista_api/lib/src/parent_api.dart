@@ -56,10 +56,10 @@ class ParentApi {
     try {
       final r = await client.raw.get('/api/attendance', queryParameters: {
         'student_id': studentId,
-        if (from != null) 'from': from,
-        if (to != null) 'to': to,
+        if (from != null) 'start_date': from,
+        if (to != null) 'end_date': to,
       });
-      final list = (r.data['records'] as List? ?? r.data as List? ?? const [])
+      final list = (r.data['attendance'] as List? ?? const [])
           .cast<Map>()
           .map((m) => AttendanceRecord.fromJson(m.cast<String, dynamic>()))
           .toList();
