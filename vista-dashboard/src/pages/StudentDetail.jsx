@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ClipboardCheck, Heart, QrCode, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock } from 'lucide-react'
+import { ArrowLeft, BookOpen, ClipboardCheck, Heart, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi, eceApi, curriculumApi } from '../api/client'
 import { RiskBadge, SentimentBadge, LoadingSpinner, GradeChip } from '../components/UI'
@@ -47,8 +47,6 @@ export default function StudentDetail() {
   const [eceHealthError, setEceHealthError] = useState(null)
   const [loading, setLoading]   = useState(true)
   const [tab, setTab]           = useState('Overview')
-  const [qr, setQr]             = useState(null)
-  const [generatingQr, setGeneratingQr] = useState(false)
   const [expandedSYs, setExpandedSYs] = useState(() => new Set())
   const [expandedAttMonths, setExpandedAttMonths] = useState(() => new Set())
   const [expandedBehMonths, setExpandedBehMonths] = useState(() => new Set())
@@ -235,16 +233,6 @@ export default function StudentDetail() {
     }
   }
 
-  const handleGenerateQR = async () => {
-    setGeneratingQr(true)
-    try {
-      const res = await studentApi.generateQR(id, 30)
-      setQr(res.data)
-      toast.success('QR code generated! Valid for 30 minutes.')
-    } catch {}
-    setGeneratingQr(false)
-  }
-
   const handleToggleAcademicAccess = async () => {
     if (!student) return
     const currentlySuspended = !!student.academic_access_suspended
@@ -368,9 +356,7 @@ export default function StudentDetail() {
           </div>
 
 
-          {/* HIDE BUTTON OF 'Suspend Academic Access' and 'Generate QR' TEMPORARILY */}
-
-          {/* <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
             {isAnyAdmin && (
               <button
                 onClick={handleToggleAcademicAccess}
@@ -382,19 +368,7 @@ export default function StudentDetail() {
                   : (<><Lock size={16} /> Suspend Access</>)}
               </button>
             )}
-            {!isTeacher && (
-              <button
-                onClick={handleGenerateQR}
-                disabled={generatingQr}
-                className="btn-secondary"
-              >
-                <QrCode size={16} />
-                {generatingQr ? 'Generating...' : 'Generate QR'}
-              </button>
-            )}
-          </div> */}
-
-
+          </div>
         </div>
       </div>
 
@@ -409,20 +383,6 @@ export default function StudentDetail() {
             </p>
             <p className="text-xs text-amber-700 mt-1">
               Attendance, behavior, pickup QR, and dismissal history remain visible to the parent.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* QR code display */}
-      {qr && (
-        <div className="card p-5 flex flex-col sm:flex-row items-center gap-5">
-          <img src={qr.qrImage} alt="SecurePass QR" className="w-28 h-28 rounded-xl flex-shrink-0" />
-          <div>
-            <p className="font-semibold text-slate-800">SecurePass QR Generated</p>
-            <p className="text-sm text-slate-500 mt-1">Show this to the guardian during dismissal.</p>
-            <p className="text-xs text-amber-600 font-medium mt-1.5">
-              ⏰ Expires: {format(new Date(qr.expiresAt), 'h:mm a, MMM d')}
             </p>
           </div>
         </div>
