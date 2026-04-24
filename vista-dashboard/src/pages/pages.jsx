@@ -1710,7 +1710,10 @@ export function Announcements() {
   const [loading, setLoading]             = useState(true)
   const [showNew, setShowNew]             = useState(false)
   const [saving, setSaving]               = useState(false)
+  const [editing, setEditing]             = useState(null) // announcement being edited, or null for new
   const [form, setForm]                   = useState({ title: '', content: '', target_audience: 'all' })
+  const [deleting, setDeleting]           = useState(null) // announcement pending delete
+  const [scope, setScope]                 = useState('all') // 'all' | 'mine'
 
   const fetch_ = () => {
     announcementApi.list()
@@ -1720,18 +1723,52 @@ export function Announcements() {
   }
   useEffect(() => { fetch_() }, [])
 
+  const openNew = () => {
+    setEditing(null)
+    setForm({ title: '', content: '', target_audience: 'all' })
+    setShowNew(true)
+  }
+
+  const openEdit = (a) => {
+    setEditing(a)
+    setForm({ title: a.title, content: a.content, target_audience: a.target_audience || 'all' })
+    setShowNew(true)
+  }
+
   const handlePost = async e => {
     e.preventDefault()
     setSaving(true)
     try {
-      await announcementApi.create(form)
-      toast.success('Announcement posted!')
+      if (editing) {
+        await announcementApi.update(editing.id, form)
+        toast.success('Announcement updated!')
+      } else {
+        await announcementApi.create(form)
+        toast.success('Announcement posted!')
+      }
       setShowNew(false)
+      setEditing(null)
       setForm({ title: '', content: '', target_audience: 'all' })
       fetch_()
     } catch {}
     setSaving(false)
   }
+
+  const handleDelete = async () => {
+    if (!deleting) return
+    setSaving(true)
+    try {
+      await announcementApi.remove(deleting.id)
+      toast.success('Announcement deleted.')
+      setDeleting(null)
+      fetch_()
+    } catch {}
+    setSaving(false)
+  }
+
+  const visible = scope === 'mine'
+    ? announcements.filter(a => a.posted_by === user?.id)
+    : announcements
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -1740,48 +1777,100 @@ export function Announcements() {
           <h1 className="page-title">Announcements</h1>
           <p className="page-subtitle">School-wide notices and updates</p>
         </div>
-        {isAdmin && (
-          <button onClick={() => setShowNew(true)} className="btn-primary">
-            <PlusIcon size={16} /> Post Announcement
-          </button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {isAdmin && (
+            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+              <button
+                onClick={() => setScope('all')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md ${
+                  scope === 'all' ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                All
+              </button>
+              <button
+                onClick={() => setScope('mine')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md ${
+                  scope === 'mine' ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                My Posts
+              </button>
+            </div>
+          )}
+          {isAdmin && (
+            <button onClick={openNew} className="btn-primary">
+              <PlusIcon size={16} /> Post Announcement
+            </button>
+          )}
+        </div>
       </div>
 
-      {loading ? <LoadingSpinner /> : announcements.length === 0 ? (
+      {loading ? <LoadingSpinner /> : visible.length === 0 ? (
         <div className="card">
-          <EmptyState icon={Megaphone} title="No announcements yet" description="Check back later for school updates." />
+          <EmptyState
+            icon={Megaphone}
+            title={scope === 'mine' ? "You haven't posted anything yet" : 'No announcements yet'}
+            description={scope === 'mine' ? 'Posts you create will appear here.' : 'Check back later for school updates.'}
+          />
         </div>
       ) : (
         <div className="space-y-4">
-          {announcements.map(a => (
+          {visible.map(a => {
+            const canManage = a.posted_by === user?.id
+            return (
             <div key={a.id} className="card p-5">
               <div className="flex items-start justify-between gap-4">
-                <div className="flex items-start gap-4 flex-1">
+                <div className="flex items-start gap-4 flex-1 min-w-0">
                   <div className="w-10 h-10 rounded-xl bg-brand-50 flex items-center justify-center flex-shrink-0">
                     <Megaphone size={18} className="text-brand-600" />
                   </div>
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <h3 className="font-semibold text-slate-900">{a.title}</h3>
-                    <p className="text-sm text-slate-600 mt-1.5 leading-relaxed">{a.content}</p>
-                    <div className="flex items-center gap-3 mt-3">
+                    <p className="text-sm text-slate-600 mt-1.5 leading-relaxed whitespace-pre-wrap">{a.content}</p>
+                    <div className="flex items-center gap-3 mt-3 flex-wrap">
                       <span className="text-xs text-slate-400">By {a.posted_by_name}</span>
                       <span className="text-slate-300">·</span>
                       <span className="text-xs text-slate-400">{fmt(new Date(a.created_at), 'MMM d, yyyy')}</span>
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                        a.target_audience === 'all' ? 'bg-brand-50 text-brand-700' : 'bg-blue-50 text-blue-700'
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${
+                        a.target_audience === 'all'    ? 'bg-brand-50 text-brand-700'
+                        : a.target_audience === 'admins' ? 'bg-amber-50 text-amber-700'
+                        :                                  'bg-blue-50 text-blue-700'
                       }`}>
-                        {a.target_audience === 'all' ? 'Everyone' : a.target_audience}
+                        {a.target_audience === 'all'    ? 'Everyone'
+                        : a.target_audience === 'admins' ? 'Admins Only'
+                        : a.target_audience === 'parents' ? 'Parents Only'
+                        : a.target_audience === 'teachers' ? 'Teachers Only'
+                        : a.target_audience}
                       </span>
                     </div>
                   </div>
                 </div>
+                {canManage && (
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button
+                      onClick={() => openEdit(a)}
+                      className="p-2 rounded-lg text-slate-500 hover:text-brand-700 hover:bg-brand-50"
+                      title="Edit announcement"
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      onClick={() => setDeleting(a)}
+                      className="p-2 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50"
+                      title="Delete announcement"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
-          ))}
+          )})}
         </div>
       )}
 
-      <Modal open={showNew} onClose={() => setShowNew(false)} title="Post Announcement">
+      <Modal open={showNew} onClose={() => { setShowNew(false); setEditing(null) }} title={editing ? 'Edit Announcement' : 'Post Announcement'}>
         <form onSubmit={handlePost} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Title *</label>
@@ -1798,17 +1887,31 @@ export function Announcements() {
             <select className="input" value={form.target_audience}
               onChange={e => setForm(p => ({ ...p, target_audience: e.target.value }))}>
               <option value="all">Everyone</option>
+              <option value="admins">Admins Only</option>
               <option value="parents">Parents Only</option>
               <option value="teachers">Teachers Only</option>
             </select>
           </div>
           <div className="flex gap-3 pt-1">
-            <button type="button" onClick={() => setShowNew(false)} className="btn-secondary flex-1">Cancel</button>
+            <button type="button" onClick={() => { setShowNew(false); setEditing(null) }} className="btn-secondary flex-1">Cancel</button>
             <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
-              {saving ? 'Posting...' : 'Post Announcement'}
+              {saving ? (editing ? 'Saving...' : 'Posting...') : (editing ? 'Save Changes' : 'Post Announcement')}
             </button>
           </div>
         </form>
+      </Modal>
+
+      <Modal open={!!deleting} onClose={() => setDeleting(null)} title="Delete announcement?" size="sm">
+        <p className="text-sm text-slate-600">
+          This will remove "{deleting?.title}" from the list. This action cannot be undone.
+        </p>
+        <div className="flex gap-3 pt-4">
+          <button type="button" onClick={() => setDeleting(null)} className="btn-secondary flex-1">Cancel</button>
+          <button type="button" onClick={handleDelete} disabled={saving}
+            className="btn-primary flex-1 justify-center !bg-red-600 hover:!bg-red-700">
+            {saving ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
       </Modal>
     </div>
   )

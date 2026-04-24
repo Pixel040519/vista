@@ -121,8 +121,10 @@ export const dismissalApi = {
 
 // ── Announcements ─────────────────────────────────────────────
 export const announcementApi = {
-  list:   ()     => api.get('/announcements'),
-  create: (data) => api.post('/announcements', data),
+  list:   ()         => api.get('/announcements'),
+  create: (data)     => api.post('/announcements', data),
+  update: (id, data) => api.put(`/announcements/${id}`, data),
+  remove: (id)       => api.delete(`/announcements/${id}`),
 }
 
 // ── Notifications ─────────────────────────────────────────────
