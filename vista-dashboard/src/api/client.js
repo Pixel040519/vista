@@ -116,8 +116,7 @@ export const behaviorApi = {
 
 // ── Dismissal ─────────────────────────────────────────────────
 export const dismissalApi = {
-  verify: (data) => api.post('/dismissal/verify', data),
-  logs:   (date) => api.get('/dismissal/logs', { params: { date } }),
+  logs: (date) => api.get('/dismissal/logs', { params: { date } }),
 }
 
 // ── Announcements ─────────────────────────────────────────────

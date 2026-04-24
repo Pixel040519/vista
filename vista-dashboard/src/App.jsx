@@ -10,7 +10,6 @@ import Attendance from './pages/Attendance'
 import Grades from './pages/Grades'
 import Behavior from './pages/Behavior'
 import SecurePass from './pages/SecurePass'
-import SecurePassScan from './pages/SecurePassScan'
 import Announcements from './pages/Announcements'
 import RiskOverview from './pages/RiskOverview'
 import AccountManagement from './pages/AccountManagement'
@@ -76,10 +75,6 @@ export default function App() {
 
             <Route path="securepass" element={
               <PrivateRoute roles={[...ANY_ADMIN, ROLES.TEACHER]}><SecurePass /></PrivateRoute>
-            } />
-
-            <Route path="securepass/scan" element={
-              <PrivateRoute roles={[...ANY_ADMIN, ROLES.TEACHER]}><SecurePassScan /></PrivateRoute>
             } />
 
             <Route path="risk" element={

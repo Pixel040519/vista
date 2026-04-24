@@ -1229,16 +1229,12 @@ function AdminBehavior() {
 // SECUREPASS QR PAGE
 // ============================================================
 import { dismissalApi } from '../api/client'
-import { QrCode, CheckCircle, XCircle, Clock } from 'lucide-react'
+import { Clock } from 'lucide-react'
 import { format as fmt } from 'date-fns'
 
 export function SecurePass() {
   const [logs, setLogs]         = useState([])
   const [loading, setLoading]   = useState(true)
-  const [manualInput, setManualInput] = useState('')
-  const [manualOpen, setManualOpen] = useState(false)
-  const [manualResult, setManualResult] = useState(null)
-  const [manualBusy, setManualBusy] = useState(false)
 
   const loadLogs = () => {
     setLoading(true)
@@ -1250,36 +1246,15 @@ export function SecurePass() {
 
   useEffect(() => { loadLogs() }, [])
 
-  const handleManualVerify = async e => {
-    e.preventDefault()
-    setManualBusy(true)
-    setManualResult(null)
-    try {
-      const res = await dismissalApi.verify({ qrPayload: manualInput })
-      setManualResult({ success: true, ...res.data })
-      toast.success('Student dismissed!')
-      setManualInput('')
-      loadLogs()
-    } catch (err) {
-      setManualResult({ success: false, message: err.response?.data?.error || 'Verification failed.' })
-    }
-    setManualBusy(false)
-  }
-
   // Daily counts
   const successCount = logs.filter(l => l.status === 'Success').length
   const failedCount = logs.filter(l => l.status === 'Failed' || l.status === 'Expired').length
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="page-title">SecurePass Oversight</h1>
-          <p className="page-subtitle">Monitor today's dismissal activity</p>
-        </div>
-        <Link to="/securepass/scan" className="btn-primary">
-          <QrCode size={16} /> Open Scanner
-        </Link>
+      <div>
+        <h1 className="page-title">SecurePass Oversight</h1>
+        <p className="page-subtitle">Monitor today's dismissal activity</p>
       </div>
 
       {/* Stat strip */}
@@ -1298,87 +1273,37 @@ export function SecurePass() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Manual fallback (collapsed by default) */}
-        <div className="card p-6">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center">
-              <QrCode size={20} className="text-slate-500" />
-            </div>
-            <div className="flex-1">
-              <h3 className="font-semibold text-slate-800">Manual Verify</h3>
-              <p className="text-xs text-slate-400">Fallback when the camera is unavailable</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setManualOpen(o => !o)}
-              className="text-xs text-brand-600 font-medium hover:text-brand-700"
-            >
-              {manualOpen ? 'Hide' : 'Show'}
-            </button>
-          </div>
-
-          {manualOpen && (
-            <form onSubmit={handleManualVerify} className="space-y-3">
-              <textarea
-                className="input min-h-24 resize-none font-mono text-xs"
-                placeholder='Paste QR payload JSON'
-                value={manualInput}
-                onChange={e => setManualInput(e.target.value)}
-                required
-              />
-              <button type="submit" disabled={manualBusy} className="btn-secondary w-full justify-center">
-                {manualBusy ? 'Verifying...' : 'Verify'}
-              </button>
-              {manualResult && (
-                <div className={`p-3 rounded-xl flex items-start gap-2 ${manualResult.success ? 'bg-emerald-50' : 'bg-red-50'}`}>
-                  {manualResult.success
-                    ? <CheckCircle size={16} className="text-emerald-600 flex-shrink-0 mt-0.5" />
-                    : <XCircle size={16} className="text-red-600 flex-shrink-0 mt-0.5" />
-                  }
-                  <p className={`text-xs ${manualResult.success ? 'text-emerald-700' : 'text-red-700'}`}>
-                    {manualResult.success
-                      ? `${manualResult.student} → ${manualResult.authorizedGuardian}`
-                      : manualResult.message}
-                  </p>
-                </div>
-              )}
-            </form>
-          )}
+      {/* Today's Dismissal Log */}
+      <div className="card overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
+          <Clock size={15} className="text-slate-400" />
+          <h3 className="text-sm font-semibold text-slate-800">Today's Dismissal Log</h3>
         </div>
-
-        {/* Today's Dismissal Log */}
-        <div className="card overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
-            <Clock size={15} className="text-slate-400" />
-            <h3 className="text-sm font-semibold text-slate-800">Today's Dismissal Log</h3>
+        {logs.length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-400">No dismissals recorded today.</div>
+        ) : (
+          <div className="overflow-x-auto">
+          <table className="table-base">
+            <thead><tr><th>Student</th><th>Guardian</th><th>Status</th><th>Time</th></tr></thead>
+            <tbody>
+              {logs.map(l => (
+                <tr key={l.id}>
+                  <td className="font-medium text-sm">{l.student_name}</td>
+                  <td className="text-sm text-slate-500">{l.guardian_name}</td>
+                  <td>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                      l.status === 'Success' ? 'bg-emerald-50 text-emerald-700' :
+                      l.status === 'Expired' ? 'bg-amber-50 text-amber-700' :
+                      'bg-red-50 text-red-700'
+                    }`}>{l.status}</span>
+                  </td>
+                  <td className="text-xs text-slate-400 font-mono">{fmt(new Date(l.scanned_at), 'h:mm a')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
           </div>
-          {logs.length === 0 ? (
-            <div className="p-8 text-center text-sm text-slate-400">No dismissals recorded today.</div>
-          ) : (
-            <div className="overflow-x-auto">
-            <table className="table-base">
-              <thead><tr><th>Student</th><th>Guardian</th><th>Status</th><th>Time</th></tr></thead>
-              <tbody>
-                {logs.map(l => (
-                  <tr key={l.id}>
-                    <td className="font-medium text-sm">{l.student_name}</td>
-                    <td className="text-sm text-slate-500">{l.guardian_name}</td>
-                    <td>
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
-                        l.status === 'Success' ? 'bg-emerald-50 text-emerald-700' :
-                        l.status === 'Expired' ? 'bg-amber-50 text-amber-700' :
-                        'bg-red-50 text-red-700'
-                      }`}>{l.status}</span>
-                    </td>
-                    <td className="text-xs text-slate-400 font-mono">{fmt(new Date(l.scanned_at), 'h:mm a')}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
-          )}
-        </div>
+        )}
       </div>
     </div>
   )
