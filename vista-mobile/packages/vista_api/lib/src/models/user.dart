@@ -4,6 +4,9 @@ class VistaUser {
     required this.email,
     required this.role,
     required this.fullName,
+    this.surname,
+    this.firstName,
+    this.middleName,
     this.phone,
     this.gradeScope = const [],
   });
@@ -12,6 +15,9 @@ class VistaUser {
   final String email;
   final String role;
   final String fullName;
+  final String? surname;
+  final String? firstName;
+  final String? middleName;
   final String? phone;
   final List<String> gradeScope;
 
@@ -26,6 +32,9 @@ class VistaUser {
         email: json['email'] as String,
         role: json['role'] as String,
         fullName: (json['full_name'] ?? json['fullName'] ?? '') as String,
+        surname: json['surname'] as String?,
+        firstName: (json['first_name'] ?? json['firstName']) as String?,
+        middleName: (json['middle_name'] ?? json['middleName']) as String?,
         phone: json['phone'] as String?,
         gradeScope: (json['grade_scope'] as List?)?.cast<String>() ?? const [],
       );

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'providers.dart';
 import 'screens/child_detail_screen.dart';
 import 'screens/children_screen.dart';
+import 'screens/edit_profile_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/notifications_screen.dart';
 import 'screens/profile_screen.dart';
@@ -51,6 +52,10 @@ GoRouter buildRouter(WidgetRef ref) {
       GoRoute(
         path: '/profile',
         builder: (_, __) => const ProfileScreen(),
+      ),
+      GoRoute(
+        path: '/profile/edit',
+        builder: (_, __) => const EditProfileScreen(),
       ),
     ],
   );

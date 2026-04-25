@@ -9,6 +9,7 @@ import 'models/grade.dart';
 import 'models/notification.dart';
 import 'models/parent_summary.dart';
 import 'models/student.dart';
+import 'models/user.dart';
 
 /// Thin wrapper around the parent-scoped REST endpoints. Every call goes
 /// through [ApiClient] so Bearer auth + 401 refresh are handled upstream.
@@ -178,6 +179,40 @@ class ParentApi {
       await client.raw.delete('/api/devices/$token');
     } catch (_) {
       // Logout should not fail on a stale token delete.
+    }
+  }
+
+  Future<VistaUser> updateProfile({
+    required String surname,
+    required String firstName,
+    String? middleName,
+    required String phone,
+  }) async {
+    try {
+      final r = await client.raw.put('/api/profile/me', data: {
+        'surname': surname,
+        'first_name': firstName,
+        'middle_name': middleName ?? '',
+        'phone': phone,
+      });
+      return VistaUser.fromJson(
+          (r.data['user'] as Map).cast<String, dynamic>());
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    try {
+      await client.raw.patch('/api/profile/me/password', data: {
+        'currentPassword': currentPassword,
+        'newPassword': newPassword,
+      });
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
     }
   }
 }

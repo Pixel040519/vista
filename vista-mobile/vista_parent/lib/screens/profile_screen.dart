@@ -20,22 +20,48 @@ class ProfileScreen extends ConsumerWidget {
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 children: [
-                  Text(user?.fullName ?? '—',
+                  CircleAvatar(
+                    radius: 28,
+                    backgroundColor: VistaColors.brand.withOpacity(0.12),
+                    child: Text(
+                      (user?.fullName.isNotEmpty ?? false)
+                          ? user!.fullName[0].toUpperCase()
+                          : '?',
                       style: const TextStyle(
-                          fontSize: 20,
+                          color: VistaColors.brand,
                           fontWeight: FontWeight.w700,
-                          color: VistaColors.navy950)),
-                  const SizedBox(height: 4),
-                  Text(user?.email ?? '',
-                      style: const TextStyle(color: Colors.black54)),
+                          fontSize: 22),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(user?.fullName ?? '—',
+                            style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700,
+                                color: VistaColors.navy950)),
+                        const SizedBox(height: 4),
+                        Text(user?.email ?? '',
+                            style: const TextStyle(color: Colors.black54)),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 16),
+          FilledButton.icon(
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('Edit profile'),
+            onPressed: () => context.push('/profile/edit'),
+          ),
+          const SizedBox(height: 12),
           FilledButton.icon(
             style: FilledButton.styleFrom(backgroundColor: VistaColors.danger),
             icon: const Icon(Icons.logout),
