@@ -1,5 +1,9 @@
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:gal/gal.dart';
 import 'package:intl/intl.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:vista_api/vista_api.dart';
@@ -932,6 +936,7 @@ class _PickupQrTabState extends ConsumerState<_PickupQrTab> {
   String? _error;
   bool _loading = false;
   bool _loadingPersons = true;
+  bool _sharing = false;
   List<AuthorizedPickupPerson> _persons = const [];
   _FetcherChoice? _selected;
 
@@ -1039,6 +1044,77 @@ class _PickupQrTabState extends ConsumerState<_PickupQrTab> {
     _regenerate();
   }
 
+  /// Renders the active QR to a PNG and saves it to the device photo gallery
+  /// so the parent can hand it off to the authorized fetcher (forwarding it
+  /// from Photos / Gallery via Messenger, email, print, etc.). Only relevant
+  /// when the chosen fetcher is an authorized_pickup_persons row — the 'self'
+  /// QR is timed and used by the parent themselves at the gate.
+  Future<void> _shareToFetcher() async {
+    final qr = _qr;
+    final choice = _selected;
+    if (qr == null || choice == null || choice.isSelf || _sharing) return;
+
+    setState(() {
+      _sharing = true;
+      _error = null;
+    });
+    try {
+      // Gal's add-only access scope is enough — we never read the gallery.
+      final hasAccess = await Gal.hasAccess(toAlbum: true);
+      if (!hasAccess) {
+        final granted = await Gal.requestAccess(toAlbum: true);
+        if (!granted) {
+          throw Exception('Gallery permission denied.');
+        }
+      }
+
+      final children = ref.read(childrenProvider).valueOrNull ?? const [];
+      final student = children
+          .where((s) => s.id == widget.studentId)
+          .cast<Student?>()
+          .firstOrNull;
+      final studentName = student?.fullName ?? 'child';
+      final gradeLine = <String>[
+        if ((student?.gradeLevel ?? '').isNotEmpty) student!.gradeLevel,
+        if ((student?.section ?? '').isNotEmpty) student!.section!,
+      ].join(' · ');
+      final fetcherLine = (choice.relationship?.isNotEmpty ?? false)
+          ? '${choice.displayName} (${choice.relationship})'
+          : choice.displayName;
+      final generatedAt = DateFormat('MMM d, y · h:mm a').format(DateTime.now());
+
+      final bytes = await _composePickupQrPng(
+        payload: qr.payload,
+        studentName: studentName,
+        gradeLine: gradeLine,
+        fetcherLine: fetcherLine,
+        generatedAt: generatedAt,
+      );
+
+      final fileName =
+          'vista-pickup-${studentName.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '-').toLowerCase()}-${DateTime.now().millisecondsSinceEpoch}';
+
+      await Gal.putImageBytes(
+        bytes,
+        album: 'VISTA',
+        name: fileName,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'QR saved to your gallery — share it with ${choice.displayName}.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'Could not save QR to gallery: $e');
+    } finally {
+      if (mounted) setState(() => _sharing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loadingPersons && _qr == null) {
@@ -1095,7 +1171,9 @@ class _PickupQrTabState extends ConsumerState<_PickupQrTab> {
             qr: _qr!,
             choice: _selected ?? selfChoice,
             loading: _loading,
+            sharing: _sharing,
             onRefresh: _regenerate,
+            onSendToFetcher: _shareToFetcher,
           )
         else if (_loading)
           const Padding(
@@ -1183,19 +1261,34 @@ class _QrCard extends StatelessWidget {
     required this.qr,
     required this.choice,
     required this.loading,
+    required this.sharing,
     required this.onRefresh,
+    required this.onSendToFetcher,
   });
 
   final PickupQr qr;
   final _FetcherChoice choice;
   final bool loading;
+  final bool sharing;
   final VoidCallback onRefresh;
+  final VoidCallback onSendToFetcher;
 
   @override
   Widget build(BuildContext context) {
-    final remaining = qr.expiresAt.difference(DateTime.now());
     final relSuffix =
         choice.relationship != null ? ' (${choice.relationship})' : '';
+    final exp = qr.expiresAt;
+    final remaining = exp?.difference(DateTime.now());
+    final String statusLine;
+    if (exp == null) {
+      // Authorized-fetcher QR: single use only, no timer.
+      statusLine = 'Single use — auto-invalidates after the guard scans it.';
+    } else if (remaining!.isNegative) {
+      statusLine = 'Expired — tap Refresh';
+    } else {
+      statusLine =
+          'Expires in ${remaining.inMinutes}m ${remaining.inSeconds % 60}s';
+    }
     return Column(
       children: [
         const Text(
@@ -1226,17 +1319,33 @@ class _QrCard extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         Text(
-          remaining.isNegative
-              ? 'Expired — tap Refresh'
-              : 'Expires in ${remaining.inMinutes}m ${remaining.inSeconds % 60}s',
+          statusLine,
+          textAlign: TextAlign.center,
           style: const TextStyle(color: Colors.black54),
         ),
         const SizedBox(height: 16),
         FilledButton.icon(
-          onPressed: loading ? null : onRefresh,
+          onPressed: loading || sharing ? null : onRefresh,
           icon: const Icon(Icons.refresh),
-          label: const Text('Refresh QR'),
+          label: Text(exp == null ? 'Generate new QR' : 'Refresh QR'),
         ),
+        // 'Upload to gallery' is only meaningful for authorized fetchers —
+        // the 'self' QR is timed and used by the parent themselves at the
+        // gate, so saving it as a photo doesn't fit that flow.
+        if (!choice.isSelf) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: loading || sharing ? null : onSendToFetcher,
+            icon: sharing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.download_outlined),
+            label: Text(sharing ? 'Downloading...' : 'Download QR'),
+          ),
+        ],
       ],
     );
   }
@@ -1292,3 +1401,173 @@ Widget _errorList(String message) => ListView(
         Text(message, style: const TextStyle(color: Colors.black54)),
       ],
     );
+
+/// Renders the Pickup QR PNG that gets saved to the gallery: a navy header
+/// band ("VISTA Pickup QR" + timestamp), the QR module, and a labeled info
+/// block (student, fetcher, single-use reminder) so whoever holds the photo
+/// can read who it's for without opening the app.
+Future<Uint8List> _composePickupQrPng({
+  required String payload,
+  required String studentName,
+  required String gradeLine,
+  required String fetcherLine,
+  required String generatedAt,
+}) async {
+  const w = 800.0;
+  const h = 1180.0;
+  const pad = 48.0;
+  const headerH = 140.0;
+
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+
+  // White page background.
+  canvas.drawRect(
+    const Rect.fromLTWH(0, 0, w, h),
+    Paint()..color = const Color(0xFFFFFFFF),
+  );
+
+  // Navy header band.
+  canvas.drawRect(
+    const Rect.fromLTWH(0, 0, w, headerH),
+    Paint()..color = VistaColors.brand,
+  );
+
+  double y = 32;
+  y = _drawCentered(canvas, w, 'VISTA Pickup QR', y,
+      const TextStyle(
+        color: Colors.white,
+        fontSize: 34,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 0.4,
+      ));
+  y += 4;
+  _drawCentered(canvas, w, 'Single-use code · $generatedAt', y,
+      const TextStyle(color: Colors.white70, fontSize: 16));
+
+  // QR module — sits below the header on a white card.
+  const qrSize = 540.0;
+  const qrX = (w - qrSize) / 2;
+  const qrY = headerH + 40;
+  canvas.drawRRect(
+    RRect.fromRectAndRadius(
+      const Rect.fromLTWH(qrX - 16, qrY - 16, qrSize + 32, qrSize + 32),
+      const Radius.circular(20),
+    ),
+    Paint()..color = const Color(0xFFFFFFFF),
+  );
+  canvas.drawRRect(
+    RRect.fromRectAndRadius(
+      const Rect.fromLTWH(qrX - 16, qrY - 16, qrSize + 32, qrSize + 32),
+      const Radius.circular(20),
+    ),
+    Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..color = const Color(0xFFE3E7EE),
+  );
+  canvas.save();
+  canvas.translate(qrX, qrY);
+  QrPainter(
+    data: payload,
+    version: QrVersions.auto,
+    errorCorrectionLevel: QrErrorCorrectLevel.H,
+    gapless: true,
+    eyeStyle: const QrEyeStyle(
+      eyeShape: QrEyeShape.square,
+      color: Color(0xFF000000),
+    ),
+    dataModuleStyle: const QrDataModuleStyle(
+      dataModuleShape: QrDataModuleShape.square,
+      color: Color(0xFF000000),
+    ),
+  ).paint(canvas, const Size(qrSize, qrSize));
+  canvas.restore();
+
+  // Info block.
+  double infoY = qrY + qrSize + 56;
+  infoY = _drawCentered(canvas, w, 'STUDENT', infoY,
+      const TextStyle(
+        color: Color(0xFF7A8597),
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.4,
+      ));
+  infoY += 4;
+  infoY = _drawCentered(canvas, w, studentName, infoY,
+      const TextStyle(
+        color: VistaColors.navy950,
+        fontSize: 26,
+        fontWeight: FontWeight.w700,
+      ));
+  if (gradeLine.isNotEmpty) {
+    infoY += 2;
+    infoY = _drawCentered(canvas, w, gradeLine, infoY,
+        const TextStyle(color: Color(0xFF6B7280), fontSize: 16));
+  }
+
+  infoY += 20;
+  infoY = _drawCentered(canvas, w, 'AUTHORIZED FETCHER', infoY,
+      const TextStyle(
+        color: Color(0xFF7A8597),
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.4,
+      ));
+  infoY += 4;
+  infoY = _drawCentered(canvas, w, fetcherLine, infoY,
+      const TextStyle(
+        color: VistaColors.navy950,
+        fontSize: 22,
+        fontWeight: FontWeight.w600,
+      ),
+      maxWidth: w - pad * 2);
+
+  // Footer pill — single-use notice.
+  const footerH = 56.0;
+  const footerY = h - pad - footerH;
+  canvas.drawRRect(
+    RRect.fromRectAndRadius(
+      const Rect.fromLTWH(pad, footerY, w - pad * 2, footerH),
+      const Radius.circular(14),
+    ),
+    Paint()..color = const Color(0xFFF1F4F9),
+  );
+  _drawCentered(
+    canvas,
+    w,
+    'Present this at the school gate. Auto-invalidates after one scan.',
+    footerY + (footerH - 18) / 2,
+    const TextStyle(
+      color: VistaColors.navy950,
+      fontSize: 15,
+      fontWeight: FontWeight.w500,
+    ),
+    maxWidth: w - pad * 2,
+  );
+
+  final image = await recorder.endRecording().toImage(w.toInt(), h.toInt());
+  final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+  if (bytes == null) throw Exception('Failed to render Pickup QR PNG.');
+  return bytes.buffer.asUint8List();
+}
+
+/// Lays out [text] centered horizontally on [canvas] at [y] and returns the
+/// next y-cursor (i.e. y + textHeight).
+double _drawCentered(
+  Canvas canvas,
+  double pageWidth,
+  String text,
+  double y,
+  TextStyle style, {
+  double? maxWidth,
+}) {
+  final tp = TextPainter(
+    text: TextSpan(text: text, style: style),
+    textAlign: TextAlign.center,
+    textDirection: ui.TextDirection.ltr,
+  );
+  tp.layout(maxWidth: maxWidth ?? pageWidth);
+  tp.paint(canvas, Offset((pageWidth - tp.width) / 2, y));
+  return y + tp.height;
+}

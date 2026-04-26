@@ -616,7 +616,11 @@ dismissalRouter.post('/scan', authorize(...ANY_ADMIN, ROLES.TEACHER, ROLES.SECUR
 
     const { studentId, token, expiresAt } = parsed;
 
-    if (new Date() > new Date(expiresAt)) {
+    // Time-based expiry only applies when the issuer included `expiresAt`
+    // (parent-self / admin QRs). 'auth'-bound QRs carry no timer and are
+    // invalidated only by one-time use on /verify. Either way, a missing
+    // `qr_code` row means the QR was already consumed → 404.
+    if (expiresAt && new Date() > new Date(expiresAt)) {
       throw new AppError('QR code has expired. Please generate a new one.', 410);
     }
 
@@ -708,7 +712,7 @@ dismissalRouter.post('/scan', authorize(...ANY_ADMIN, ROLES.TEACHER, ROLES.SECUR
         section: studentRow.section,
       },
       authorizedGuardians: guardians,
-      expiresAt,
+      expiresAt: expiresAt ?? null,
     });
   } catch (err) {
     next(err);
@@ -736,7 +740,8 @@ dismissalRouter.post('/verify', authorize(...ANY_ADMIN, ROLES.TEACHER, ROLES.SEC
 
     const { studentId, token, expiresAt } = parsed;
 
-    // Verify token against DB
+    // A missing `qr_code` row means the QR was already consumed by a previous
+    // /verify (one-time use, applies to every fetcher type).
     const studentResult = await query(
       'SELECT * FROM students WHERE id = $1 AND qr_code = $2',
       [studentId, token]
@@ -795,8 +800,9 @@ dismissalRouter.post('/verify', authorize(...ANY_ADMIN, ROLES.TEACHER, ROLES.SEC
       fetcherFullName = r.rows[0].full_name;
     }
 
-    // Check expiry (after resolving parentId so the Expired log row has a valid UUID)
-    if (new Date() > new Date(expiresAt)) {
+    // Time-based expiry only applies when the issuer embedded `expiresAt`
+    // (parent-self / admin QRs). 'auth' QRs skip this check entirely.
+    if (expiresAt && new Date() > new Date(expiresAt)) {
       await query(
         `INSERT INTO dismissal_logs
            (student_id, authorized_by, scanned_by, qr_token, status, gate_label,
@@ -807,7 +813,7 @@ dismissalRouter.post('/verify', authorize(...ANY_ADMIN, ROLES.TEACHER, ROLES.SEC
       throw new AppError('QR code has expired. Please generate a new one.', 410);
     }
 
-    // Log successful dismissal and invalidate QR
+    // Log successful dismissal and invalidate QR (one-time use)
     const scannedAt = new Date();
     await query(
       `INSERT INTO dismissal_logs

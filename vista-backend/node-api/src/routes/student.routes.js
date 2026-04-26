@@ -555,8 +555,17 @@ router.delete('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, 
 
 // POST /api/students/:id/generate-qr
 // Admins (school web console) and linked authorized-pickup parents (vista_parent
-// mobile app, "Pickup QR" tab) may both generate a SecurePass QR. Parents get a
-// shorter default expiry because the mobile UI refreshes the code periodically.
+// mobile app, "Pickup QR" tab) may both generate a SecurePass QR.
+//
+// Expiry policy depends on the chosen fetcher:
+//   • fetcher_type='self' (default — parent themself, or admin path)
+//       → time-based expiry (20 min parents, 30 min admins) PLUS one-time use.
+//         The account holder is at the gate and can refresh on their phone.
+//   • fetcher_type='auth' (an authorized_pickup_persons row, e.g. yaya/driver)
+//       → ONE-TIME USE ONLY, no time expiry. The fetcher does not have access
+//         to the parent's account, so they cannot regenerate if a timer ran out
+//         while they were on the way. The QR is invalidated only by a
+//         successful /verify (which clears `qr_code`).
 router.post('/:id/generate-qr', async (req, res, next) => {
   try {
     const role = req.user?.role
@@ -608,11 +617,19 @@ router.post('/:id/generate-qr', async (req, res, next) => {
       fetcherId = candidate
     }
 
-    const defaultExpiry = role === ROLES.PARENT ? 20 : 30
-    const expiresInMinutes = Number.parseInt(req.body?.expiresInMinutes, 10) || defaultExpiry
-    const token     = uuidv4()
-    const expiresAt = new Date(Date.now() + expiresInMinutes*60000)
-    const qrPayload = JSON.stringify({ studentId: req.params.id, token, expiresAt, type: 'VISTA_SECUREPASS' })
+    const token = uuidv4()
+
+    // 'auth' QRs never carry a timer; 'self' / admin QRs use the time-based
+    // expiry the dashboard and parent app have always relied on.
+    let expiresAt = null
+    let qrPayloadObj = { studentId: req.params.id, token, type: 'VISTA_SECUREPASS' }
+    if (fetcherType !== 'auth') {
+      const defaultExpiry = role === ROLES.PARENT ? 20 : 30
+      const expiresInMinutes = Number.parseInt(req.body?.expiresInMinutes, 10) || defaultExpiry
+      expiresAt = new Date(Date.now() + expiresInMinutes * 60000)
+      qrPayloadObj.expiresAt = expiresAt
+    }
+    const qrPayload = JSON.stringify(qrPayloadObj)
     const qrImage   = await QRCode.toDataURL(qrPayload, { errorCorrectionLevel: 'H', width: 300, margin: 2 })
     await query(
       `UPDATE students

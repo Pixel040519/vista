@@ -30,6 +30,8 @@
 	<string>Take a photo of an authorized fetcher so the school guard can verify them at pickup.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Choose a photo of an authorized fetcher so the school guard can verify them at pickup.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save the Pickup QR to your photos so you can share it with an authorized fetcher.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

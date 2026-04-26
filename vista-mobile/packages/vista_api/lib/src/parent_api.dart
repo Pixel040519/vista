@@ -316,19 +316,18 @@ class ParentApi {
 }
 
 class PickupQr {
-  PickupQr({required this.payload, required this.expiresAt});
+  PickupQr({required this.payload, this.expiresAt});
   final String payload;
-  final DateTime expiresAt;
+  // Null when the QR was generated for an authorized fetcher (no time-based
+  // expiry — single-use only). Non-null for parent-self / admin QRs.
+  final DateTime? expiresAt;
 
   factory PickupQr.fromJson(Map<String, dynamic> json) {
-    // Backend returns either `qr_payload` (string) or a nested object.
     final payload = (json['qr_payload'] ?? json['payload'] ?? '').toString();
     final exp = json['expires_at'] ?? json['expiresAt'];
     return PickupQr(
       payload: payload,
-      expiresAt: exp is String
-          ? DateTime.parse(exp)
-          : DateTime.now().add(const Duration(minutes: 2)),
+      expiresAt: exp is String ? DateTime.tryParse(exp) : null,
     );
   }
 }
