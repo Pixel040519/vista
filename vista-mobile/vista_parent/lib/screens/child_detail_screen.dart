@@ -51,6 +51,11 @@ class _ChildDetailScreenState extends ConsumerState<ChildDetailScreen>
     super.dispose();
   }
 
+  void _jumpToTab(String name) {
+    final i = _tabNames.indexOf(name);
+    if (i >= 0) _tab.animateTo(i);
+  }
+
   @override
   Widget build(BuildContext context) {
     final children = ref.watch(childrenProvider).valueOrNull ?? const [];
@@ -83,7 +88,7 @@ class _ChildDetailScreenState extends ConsumerState<ChildDetailScreen>
       body: TabBarView(
         controller: _tab,
         children: [
-          _OverviewTab(studentId: widget.studentId),
+          _OverviewTab(studentId: widget.studentId, onJumpToTab: _jumpToTab),
           _AttendanceTab(studentId: widget.studentId),
           _AcademicsTab(student: student),
           _BehaviorTab(studentId: widget.studentId),
@@ -98,8 +103,9 @@ class _ChildDetailScreenState extends ConsumerState<ChildDetailScreen>
 /* ─────────────────────────── Overview ─────────────────────────── */
 
 class _OverviewTab extends ConsumerWidget {
-  const _OverviewTab({required this.studentId});
+  const _OverviewTab({required this.studentId, required this.onJumpToTab});
   final String studentId;
+  final void Function(String tab) onJumpToTab;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -118,10 +124,7 @@ class _OverviewTab extends ConsumerWidget {
         data: (s) => ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            _StatCard(
-              label: 'Risk',
-              child: RiskChip(s.riskTier),
-            ),
+            _RiskCard(summary: s, onJumpToTab: onJumpToTab),
             const SizedBox(height: 12),
             _StatCard(
               label: 'Attendance (last 30 days)',
@@ -197,6 +200,143 @@ class _StatCard extends StatelessWidget {
                   style:
                       const TextStyle(color: Colors.black54, fontSize: 12)),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/* ─────────────────────────── Risk card ─────────────────────────── */
+
+class _RiskDriver {
+  const _RiskDriver(this.text, this.tab, this.severity);
+  final String text;
+  final String tab;
+  final double severity; // lower = worse, used for sort
+}
+
+List<_RiskDriver> _driversFor(ParentSummary s) {
+  final tier = s.riskTier;
+  if (tier == null || tier == 'Stable') return const [];
+  final out = <_RiskDriver>[];
+
+  final att = s.riskAttendanceFactor;
+  if (att != null && att < 0.85) {
+    out.add(_RiskDriver(
+        'Attendance has dropped recently', 'attendance', att));
+  }
+
+  if (s.isEce) {
+    final comp = s.riskCompetencyFactor;
+    if (comp != null && comp < 0.70) {
+      out.add(_RiskDriver(
+          'Competency progress is behind pace this quarter',
+          'academics',
+          comp));
+    }
+  } else {
+    final acad = s.riskAcademicFactor;
+    if (acad != null && acad < 0.80) {
+      out.add(_RiskDriver(
+          'Quarter grades have slipped below passing', 'academics', acad));
+    }
+  }
+
+  final beh = s.riskBehavioralFactor;
+  if (beh != null && beh < 0.0) {
+    out.add(_RiskDriver(
+        'Recent classroom observations have been negative',
+        'behavior',
+        1.0 + beh));
+  }
+
+  out.sort((a, b) => a.severity.compareTo(b.severity));
+  return out.take(2).toList();
+}
+
+class _RiskCard extends StatelessWidget {
+  const _RiskCard({required this.summary, required this.onJumpToTab});
+  final ParentSummary summary;
+  final void Function(String tab) onJumpToTab;
+
+  @override
+  Widget build(BuildContext context) {
+    final drivers = _driversFor(summary);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Risk',
+                style: TextStyle(
+                    color: Colors.black54,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            RiskChip(summary.riskTier),
+            if (drivers.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              const Divider(height: 1),
+              const SizedBox(height: 12),
+              const Text("What's driving this",
+                  style: TextStyle(
+                      color: Colors.black54,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              ...drivers.map((d) => _DriverRow(
+                    driver: d,
+                    onTap: () => onJumpToTab(d.tab),
+                  )),
+              const SizedBox(height: 8),
+              const Text(
+                "Your child's class teacher can share more context.",
+                style: TextStyle(color: Colors.black54, fontSize: 11),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DriverRow extends StatelessWidget {
+  const _DriverRow({required this.driver, required this.onTap});
+  final _RiskDriver driver;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              margin: const EdgeInsets.only(right: 10),
+              decoration: const BoxDecoration(
+                color: VistaColors.brand,
+                shape: BoxShape.circle,
+              ),
+            ),
+            Expanded(
+              child: Text(
+                driver.text,
+                style: const TextStyle(
+                    fontSize: 14,
+                    color: VistaColors.navy950,
+                    height: 1.3),
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Colors.black38, size: 20),
           ],
         ),
       ),
@@ -459,12 +599,19 @@ class _GradeAcademics extends ConsumerWidget {
             byQuarter.putIfAbsent(g.quarter, () => []).add(g);
           }
           final quarters = byQuarter.keys.toList()..sort();
+          final schoolYear = list
+              .map((g) => g.schoolYear)
+              .firstWhere((sy) => sy != null && sy.isNotEmpty,
+                  orElse: () => null);
           return ListView.builder(
             padding: const EdgeInsets.all(16),
             physics: const AlwaysScrollableScrollPhysics(),
-            itemCount: quarters.length,
+            itemCount: quarters.length + 1,
             itemBuilder: (c, i) {
-              final q = quarters[i];
+              if (i == 0) {
+                return _SchoolYearHeader(schoolYear: schoolYear);
+              }
+              final q = quarters[i - 1];
               final rows = byQuarter[q]!
                 ..sort((a, b) => a.subjectName.compareTo(b.subjectName));
               final graded = rows.where((g) => g.grade != null).toList();
@@ -635,37 +782,40 @@ class _EceAcademics extends ConsumerWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           physics: const AlwaysScrollableScrollPhysics(),
-          children: bySubject.entries.map((e) {
-            return Card(
-              margin: const EdgeInsets.only(bottom: 12),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(e.key,
-                        style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: VistaColors.navy950)),
-                    const SizedBox(height: 8),
-                    ...e.value.map((skill) {
-                      final rating = ratingsBySkill[skill.id]?.rating;
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Row(
-                          children: [
-                            Expanded(child: Text(skill.name)),
-                            _EceBadge(rating),
-                          ],
-                        ),
-                      );
-                    }),
-                  ],
+          children: [
+            _SchoolYearHeader(schoolYear: data.schoolYear),
+            ...bySubject.entries.map((e) {
+              return Card(
+                margin: const EdgeInsets.only(bottom: 12),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(e.key,
+                          style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: VistaColors.navy950)),
+                      const SizedBox(height: 8),
+                      ...e.value.map((skill) {
+                        final rating = ratingsBySkill[skill.id]?.rating;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            children: [
+                              Expanded(child: Text(skill.name)),
+                              _EceBadge(rating),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
                 ),
-              ),
-            );
-          }).toList(),
+              );
+            }),
+          ],
         );
       },
       ),
@@ -693,6 +843,60 @@ class _EceBadge extends StatelessWidget {
       child: Text(label,
           style: TextStyle(
               color: fg, fontSize: 12, fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+class _SchoolYearHeader extends StatelessWidget {
+  const _SchoolYearHeader({required this.schoolYear});
+  final String? schoolYear;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = (schoolYear == null || schoolYear!.isEmpty)
+        ? 'Current school year'
+        : 'S.Y. $schoolYear';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: VistaColors.brand.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: VistaColors.brand.withOpacity(0.18)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.calendar_month_outlined,
+              size: 18, color: VistaColors.brand),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'School Year',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.8,
+                    color: VistaColors.brand,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: VistaColors.navy950,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

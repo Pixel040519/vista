@@ -1148,10 +1148,13 @@ router.get('/parent-summary/:student_id', enforceParentLinked, async (req, res, 
     const syId = activeSY.rows[0]?.id || null;
     const syLabel = activeSY.rows[0]?.label || null;
 
-    // Risk tier — newest assessment (FastAPI /classify/risk/all could also work,
-    // but we prefer the stored value for a cheap single-student read).
+    // Risk tier + factor breakdown — newest assessment (FastAPI /classify/risk/all
+    // could also work, but we prefer the stored value for a cheap single-student
+    // read). Factor columns drive the parent-app "What's driving this" section.
     const riskRes = await query(
-      `SELECT risk_level, risk_score, assessed_at
+      `SELECT risk_level, risk_score, assessed_at,
+              attendance_factor, academic_factor,
+              behavioral_factor, ece_competency_factor
          FROM risk_assessments
         WHERE student_id = $1
         ORDER BY assessed_at DESC LIMIT 1`,
@@ -1159,14 +1162,25 @@ router.get('/parent-summary/:student_id', enforceParentLinked, async (req, res, 
     );
     const risk = riskRes.rows[0] || null;
 
-    // Attendance rate over the last 30 days (any subject counts as "present").
+    // Attendance rate over the last 30 days. Numerator and denominator are
+    // both in days — collapsing per-subject rows via BOOL_OR so a student
+    // marked Present/Late in any subject for that day counts as present, and
+    // total_days counts distinct calendar days with any record. Without the
+    // per-day collapse, multi-subject days inflated present_days against a
+    // distinct-date denominator and produced rates above 100%.
     const attRes = await query(
-      `SELECT
-         COUNT(*) FILTER (WHERE status IN ('Present','Late'))::int AS present_days,
-         COUNT(DISTINCT date)::int AS total_days
-         FROM attendance
-        WHERE student_id = $1
-          AND date >= CURRENT_DATE - INTERVAL '30 days'`,
+      `WITH per_day AS (
+         SELECT date,
+                BOOL_OR(status IN ('Present','Late')) AS counted_present
+           FROM attendance
+          WHERE student_id = $1
+            AND date >= CURRENT_DATE - INTERVAL '30 days'
+          GROUP BY date
+       )
+       SELECT
+         COUNT(*) FILTER (WHERE counted_present)::int AS present_days,
+         COUNT(*)::int AS total_days
+         FROM per_day`,
       [studentId]
     );
     const { present_days = 0, total_days = 0 } = attRes.rows[0] || {};
@@ -1263,6 +1277,12 @@ router.get('/parent-summary/:student_id', enforceParentLinked, async (req, res, 
         tier: risk.risk_level,
         score: risk.risk_score ? Number(risk.risk_score) : null,
         assessed_at: risk.assessed_at,
+        factors: {
+          attendance: risk.attendance_factor     != null ? Number(risk.attendance_factor)     : null,
+          academic:   risk.academic_factor       != null ? Number(risk.academic_factor)       : null,
+          behavioral: risk.behavioral_factor     != null ? Number(risk.behavioral_factor)     : null,
+          competency: risk.ece_competency_factor != null ? Number(risk.ece_competency_factor) : null,
+        },
       } : null,
       attendance: {
         rate_pct: attendanceRate,

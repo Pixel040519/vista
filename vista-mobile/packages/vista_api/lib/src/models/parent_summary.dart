@@ -3,6 +3,11 @@ class ParentSummary {
     required this.isEce,
     this.riskTier,
     this.riskScore,
+    this.riskAssessedAt,
+    this.riskAttendanceFactor,
+    this.riskAcademicFactor,
+    this.riskBehavioralFactor,
+    this.riskCompetencyFactor,
     this.attendanceRatePct,
     this.attendancePresentDays = 0,
     this.attendanceTotalDays = 0,
@@ -20,6 +25,11 @@ class ParentSummary {
   final bool isEce;
   final String? riskTier;
   final double? riskScore;
+  final DateTime? riskAssessedAt;
+  final double? riskAttendanceFactor;
+  final double? riskAcademicFactor;
+  final double? riskBehavioralFactor;
+  final double? riskCompetencyFactor;
   final double? attendanceRatePct;
   final int attendancePresentDays;
   final int attendanceTotalDays;
@@ -37,17 +47,23 @@ class ParentSummary {
     final academic = json['academic'] as Map<String, dynamic>?;
     final attendance = json['attendance'] as Map<String, dynamic>?;
     final risk = json['risk'] as Map<String, dynamic>?;
+    final factors = (risk?['factors'] as Map?)?.cast<String, dynamic>();
     final behavior = json['latest_behavior'] as Map<String, dynamic>?;
     final student = (json['student'] as Map<String, dynamic>?) ?? const {};
     final dist = (academic?['distribution'] as Map?)?.cast<String, dynamic>();
     return ParentSummary(
       isEce: json['is_ece'] == true,
       riskTier: risk?['tier'] as String?,
-      riskScore: (risk?['score'] as num?)?.toDouble(),
-      attendanceRatePct: (attendance?['rate_pct'] as num?)?.toDouble(),
+      riskScore: _toDouble(risk?['score']),
+      riskAssessedAt: _toDate(risk?['assessed_at']),
+      riskAttendanceFactor: _toDouble(factors?['attendance']),
+      riskAcademicFactor: _toDouble(factors?['academic']),
+      riskBehavioralFactor: _toDouble(factors?['behavioral']),
+      riskCompetencyFactor: _toDouble(factors?['competency']),
+      attendanceRatePct: _toDouble(attendance?['rate_pct']),
       attendancePresentDays: (attendance?['present_days'] ?? 0) as int,
       attendanceTotalDays: (attendance?['total_days'] ?? 0) as int,
-      academicAvgGrade: (academic?['avg_grade'] as num?)?.toDouble(),
+      academicAvgGrade: _toDouble(academic?['avg_grade']),
       academicQuarter: academic?['quarter'] as int?,
       eceRated: (academic?['rated'] ?? 0) as int,
       eceTotalSkills: (academic?['total_skills'] ?? 0) as int,
@@ -61,4 +77,16 @@ class ParentSummary {
           student['academic_access_suspended_reason'] as String?,
     );
   }
+}
+
+double? _toDouble(Object? v) {
+  if (v == null) return null;
+  if (v is num) return v.toDouble();
+  return double.tryParse(v.toString());
+}
+
+DateTime? _toDate(Object? v) {
+  if (v == null) return null;
+  if (v is DateTime) return v;
+  return DateTime.tryParse(v.toString());
 }
