@@ -26,26 +26,43 @@ class OfflineQueue {
     final path = p.join(dir.path, 'vista_guard_queue.db');
     _db = await openDatabase(
       path,
-      version: 1,
+      version: 3,
       onCreate: (db, _) async {
         await db.execute('''
           CREATE TABLE scan_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             qr_payload TEXT NOT NULL,
             authorized_by TEXT NOT NULL,
+            gate_label TEXT,
+            fetcher_type TEXT,
             queued_at INTEGER NOT NULL
           )
         ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE scan_queue ADD COLUMN gate_label TEXT');
+        }
+        if (oldVersion < 3) {
+          await db.execute('ALTER TABLE scan_queue ADD COLUMN fetcher_type TEXT');
+        }
       },
     );
     return _db!;
   }
 
-  Future<void> enqueue({required String qrPayload, required String authorizedBy}) async {
+  Future<void> enqueue({
+    required String qrPayload,
+    required String authorizedBy,
+    String? gateLabel,
+    String fetcherType = 'self',
+  }) async {
     final db = await _open();
     await db.insert('scan_queue', {
       'qr_payload': qrPayload,
       'authorized_by': authorizedBy,
+      'gate_label': gateLabel,
+      'fetcher_type': fetcherType,
       'queued_at': DateTime.now().millisecondsSinceEpoch,
     });
   }
@@ -82,7 +99,9 @@ class OfflineQueue {
       try {
         await api.verify(
           qrPayload: row['qr_payload'] as String,
-          authorizedBy: row['authorized_by'] as String,
+          authorizedById: row['authorized_by'] as String,
+          fetcherType: (row['fetcher_type'] as String?) ?? 'self',
+          gateLabel: row['gate_label'] as String?,
         );
         await db.delete('scan_queue', where: 'id=?', whereArgs: [id]);
       } catch (_) {

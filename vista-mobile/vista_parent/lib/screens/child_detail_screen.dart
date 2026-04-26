@@ -8,6 +8,7 @@ import '../providers.dart';
 import '../theme.dart';
 import '../widgets/locked_screen.dart';
 import '../widgets/risk_chip.dart';
+import 'authorized_persons_screen.dart';
 
 const _tabNames = ['overview', 'attendance', 'academics', 'behavior', 'qr', 'dismissal'];
 
@@ -63,6 +64,8 @@ class _ChildDetailScreenState extends ConsumerState<ChildDetailScreen>
           controller: _tab,
           isScrollable: true,
           indicatorColor: Colors.white,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
           tabs: [
             const Tab(text: 'Overview'),
             const Tab(text: 'Attendance'),
@@ -209,38 +212,176 @@ class _AttendanceTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final records = ref.watch(_attendanceFamily(studentId));
-    return records.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => _errorList('Unable to load attendance.\n$e'),
-      data: (list) => ListView.separated(
-        padding: const EdgeInsets.all(16),
-        itemCount: list.length,
-        separatorBuilder: (_, __) => const Divider(height: 1),
-        itemBuilder: (c, i) {
-          final r = list[i];
-          return ListTile(
-            leading: _attendanceIcon(r.status),
-            title: Text(DateFormat.yMMMEd().format(r.date)),
-            subtitle: Text(r.subjectName ?? ''),
-            trailing: Text(r.status,
-                style: const TextStyle(fontWeight: FontWeight.w600)),
+    return RefreshIndicator(
+      onRefresh: () async {
+        ref.invalidate(_attendanceFamily(studentId));
+        await ref.read(_attendanceFamily(studentId).future);
+      },
+      child: records.when(
+        loading: () => ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: const [
+            SizedBox(height: 200),
+            Center(child: CircularProgressIndicator()),
+          ],
+        ),
+        error: (e, _) => _errorList('Unable to load attendance.\n$e'),
+        data: (list) {
+          if (list.isEmpty) {
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: const [
+                Center(
+                  child: Text('No attendance records yet.',
+                      style: TextStyle(color: Colors.black54)),
+                ),
+              ],
+            );
+          }
+          final byMonth = <String, List<AttendanceRecord>>{};
+          for (final r in list) {
+            final key =
+                '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}';
+            byMonth.putIfAbsent(key, () => []).add(r);
+          }
+          final monthKeys = byMonth.keys.toList()
+            ..sort((a, b) => b.compareTo(a));
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            physics: const AlwaysScrollableScrollPhysics(),
+            itemCount: monthKeys.length,
+            itemBuilder: (c, i) {
+              final key = monthKeys[i];
+              final rows = byMonth[key]!
+                ..sort((a, b) => b.date.compareTo(a.date));
+              return _MonthAttendanceCard(
+                monthLabel: DateFormat.yMMMM().format(rows.first.date),
+                rows: rows,
+                initiallyExpanded: false,
+              );
+            },
           );
         },
       ),
     );
   }
+}
 
-  Widget _attendanceIcon(String status) {
-    switch (status) {
-      case 'Present':
-        return const Icon(Icons.check_circle, color: VistaColors.success);
-      case 'Late':
-        return const Icon(Icons.schedule, color: VistaColors.warn);
-      case 'Absent':
-        return const Icon(Icons.cancel, color: VistaColors.danger);
-      default:
-        return const Icon(Icons.help_outline, color: Colors.black45);
+Widget _attendanceIcon(String status) {
+  switch (status) {
+    case 'Present':
+      return const Icon(Icons.check_circle, color: VistaColors.success);
+    case 'Late':
+      return const Icon(Icons.schedule, color: VistaColors.warn);
+    case 'Absent':
+      return const Icon(Icons.cancel, color: VistaColors.danger);
+    default:
+      return const Icon(Icons.help_outline, color: Colors.black45);
+  }
+}
+
+class _MonthAttendanceCard extends StatelessWidget {
+  const _MonthAttendanceCard({
+    required this.monthLabel,
+    required this.rows,
+    required this.initiallyExpanded,
+  });
+
+  final String monthLabel;
+  final List<AttendanceRecord> rows;
+  final bool initiallyExpanded;
+
+  @override
+  Widget build(BuildContext context) {
+    int present = 0, late = 0, absent = 0, excused = 0;
+    for (final r in rows) {
+      switch (r.status) {
+        case 'Present':
+          present++;
+          break;
+        case 'Late':
+          late++;
+          break;
+        case 'Absent':
+          absent++;
+          break;
+        case 'Excused':
+          excused++;
+          break;
+      }
     }
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: initiallyExpanded,
+          tilePadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          childrenPadding: EdgeInsets.zero,
+          title: Text(
+            monthLabel,
+            style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: VistaColors.navy950),
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                if (present > 0)
+                  _AttendancePill(
+                      'P $present', VistaColors.success, const Color(0xFFE6F4EA)),
+                if (late > 0)
+                  _AttendancePill(
+                      'L $late', VistaColors.warn, const Color(0xFFFFF4E5)),
+                if (absent > 0)
+                  _AttendancePill(
+                      'A $absent', VistaColors.danger, const Color(0xFFFDECEA)),
+                if (excused > 0)
+                  _AttendancePill('E $excused', Colors.black54,
+                      const Color(0xFFEEF1F7)),
+              ],
+            ),
+          ),
+          children: [
+            const Divider(height: 1),
+            ...rows.map((r) => ListTile(
+                  leading: _attendanceIcon(r.status),
+                  title: Text(DateFormat.yMMMEd().format(r.date)),
+                  subtitle: Text(r.subjectName ?? ''),
+                  trailing: Text(r.status,
+                      style:
+                          const TextStyle(fontWeight: FontWeight.w600)),
+                )),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AttendancePill extends StatelessWidget {
+  const _AttendancePill(this.label, this.fg, this.bg);
+  final String label;
+  final Color fg;
+  final Color bg;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration:
+          BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
+      child: Text(label,
+          style: TextStyle(
+              color: fg, fontSize: 11, fontWeight: FontWeight.w700)),
+    );
   }
 }
 
@@ -277,32 +418,176 @@ class _GradeAcademics extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final grades = ref.watch(_gradesFamily(studentId));
-    return grades.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) {
-        if (e is AcademicAccessSuspended) {
-          return LockedScreen(reason: e.reason);
-        }
-        return _errorList('Unable to load grades.\n$e');
+    return RefreshIndicator(
+      onRefresh: () async {
+        ref.invalidate(_gradesFamily(studentId));
+        await ref.read(_gradesFamily(studentId).future);
       },
-      data: (list) => ListView.separated(
-        padding: const EdgeInsets.all(16),
-        itemCount: list.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
-        itemBuilder: (c, i) {
-          final g = list[i];
-          return Card(
-            child: ListTile(
-              title: Text(g.subjectName ?? ''),
-              subtitle: Text('Quarter ${g.quarter}'),
-              trailing: Text(
-                g.grade?.toStringAsFixed(1) ?? '—',
-                style: const TextStyle(
-                    fontSize: 18, fontWeight: FontWeight.w700),
-              ),
-            ),
+      child: grades.when(
+        loading: () => ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: const [
+            SizedBox(height: 200),
+            Center(child: CircularProgressIndicator()),
+          ],
+        ),
+        error: (e, _) {
+          if (e is AcademicAccessSuspended) {
+            return LockedScreen(reason: e.reason);
+          }
+          return _errorList('Unable to load grades.\n$e');
+        },
+        data: (list) {
+          if (list.isEmpty) {
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: const [
+                Center(
+                  child: Text('No grades yet.',
+                      style: TextStyle(color: Colors.black54)),
+                ),
+              ],
+            );
+          }
+          final byQuarter = <int, List<Grade>>{};
+          for (final g in list) {
+            byQuarter.putIfAbsent(g.quarter, () => []).add(g);
+          }
+          final quarters = byQuarter.keys.toList()..sort();
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            physics: const AlwaysScrollableScrollPhysics(),
+            itemCount: quarters.length,
+            itemBuilder: (c, i) {
+              final q = quarters[i];
+              final rows = byQuarter[q]!
+                ..sort((a, b) => a.subjectName.compareTo(b.subjectName));
+              final graded = rows.where((g) => g.grade != null).toList();
+              final avg = graded.isEmpty
+                  ? null
+                  : graded
+                          .map((g) => g.grade!)
+                          .reduce((a, b) => a + b) /
+                      graded.length;
+              return _QuarterGradesCard(
+                quarter: q,
+                average: avg,
+                rows: rows,
+              );
+            },
           );
         },
+      ),
+    );
+  }
+}
+
+class _QuarterGradesCard extends StatelessWidget {
+  const _QuarterGradesCard({
+    required this.quarter,
+    required this.average,
+    required this.rows,
+  });
+
+  final int quarter;
+  final double? average;
+  final List<Grade> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Quarter $quarter',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: VistaColors.navy950,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEEF1F7),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    average == null
+                        ? 'Avg —'
+                        : 'Avg ${average!.toStringAsFixed(1)}',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: VistaColors.navy950),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Divider(height: 1),
+            ...rows.map((g) {
+              final pass = (g.remarks ?? '').toLowerCase() == 'passed';
+              final fail = (g.remarks ?? '').toLowerCase() == 'failed';
+              final gradeColor = fail
+                  ? VistaColors.danger
+                  : (pass ? VistaColors.success : VistaColors.navy950);
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            g.subjectName,
+                            style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: VistaColors.navy950),
+                          ),
+                          if (g.remarks != null && g.remarks!.isNotEmpty) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              g.remarks!,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: fail
+                                    ? VistaColors.danger
+                                    : (pass
+                                        ? VistaColors.success
+                                        : Colors.black54),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    Text(
+                      g.grade?.toStringAsFixed(1) ?? '—',
+                      style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: gradeColor),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+        ),
       ),
     );
   }
@@ -315,8 +600,19 @@ class _EceAcademics extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final ece = ref.watch(_eceFamily(studentId));
-    return ece.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
+    return RefreshIndicator(
+      onRefresh: () async {
+        ref.invalidate(_eceFamily(studentId));
+        await ref.read(_eceFamily(studentId).future);
+      },
+      child: ece.when(
+      loading: () => ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 200),
+          Center(child: CircularProgressIndicator()),
+        ],
+      ),
       error: (e, _) {
         if (e is AcademicAccessSuspended) {
           return LockedScreen(reason: e.reason);
@@ -334,6 +630,7 @@ class _EceAcademics extends ConsumerWidget {
         }
         return ListView(
           padding: const EdgeInsets.all(16),
+          physics: const AlwaysScrollableScrollPhysics(),
           children: bySubject.entries.map((e) {
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
@@ -367,6 +664,7 @@ class _EceAcademics extends ConsumerWidget {
           }).toList(),
         );
       },
+      ),
     );
   }
 }
@@ -407,24 +705,130 @@ class _BehaviorTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final logs = ref.watch(_behaviorFamily(studentId));
-    return logs.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => _errorList('Unable to load behavior.\n$e'),
-      data: (list) {
-        if (list.isEmpty) {
-          return const Center(
-              child: Text('No behavior observations yet.',
-                  style: TextStyle(color: Colors.black54)));
-        }
-        return ListView.separated(
-          padding: const EdgeInsets.all(16),
-          itemCount: list.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (c, i) {
-            final b = list[i];
-            return Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
+    return RefreshIndicator(
+      onRefresh: () async {
+        ref.invalidate(_behaviorFamily(studentId));
+        await ref.read(_behaviorFamily(studentId).future);
+      },
+      child: logs.when(
+        loading: () => ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: const [
+            SizedBox(height: 200),
+            Center(child: CircularProgressIndicator()),
+          ],
+        ),
+        error: (e, _) => _errorList('Unable to load behavior.\n$e'),
+        data: (list) {
+          if (list.isEmpty) {
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: const [
+                Center(
+                  child: Text('No behavior observations yet.',
+                      style: TextStyle(color: Colors.black54)),
+                ),
+              ],
+            );
+          }
+          final byMonth = <String, List<BehaviorLog>>{};
+          for (final b in list) {
+            final key =
+                '${b.observedAt.year}-${b.observedAt.month.toString().padLeft(2, '0')}';
+            byMonth.putIfAbsent(key, () => []).add(b);
+          }
+          final monthKeys = byMonth.keys.toList()
+            ..sort((a, b) => b.compareTo(a));
+          return ListView.builder(
+            padding: const EdgeInsets.all(16),
+            physics: const AlwaysScrollableScrollPhysics(),
+            itemCount: monthKeys.length,
+            itemBuilder: (c, i) {
+              final key = monthKeys[i];
+              final rows = byMonth[key]!
+                ..sort((a, b) => b.observedAt.compareTo(a.observedAt));
+              return _MonthBehaviorCard(
+                monthLabel: DateFormat.yMMMM().format(rows.first.observedAt),
+                rows: rows,
+                initiallyExpanded: false,
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _MonthBehaviorCard extends StatelessWidget {
+  const _MonthBehaviorCard({
+    required this.monthLabel,
+    required this.rows,
+    required this.initiallyExpanded,
+  });
+
+  final String monthLabel;
+  final List<BehaviorLog> rows;
+  final bool initiallyExpanded;
+
+  @override
+  Widget build(BuildContext context) {
+    int positive = 0, neutral = 0, negative = 0;
+    for (final b in rows) {
+      switch (b.sentiment) {
+        case 'Positive':
+          positive++;
+          break;
+        case 'Negative':
+          negative++;
+          break;
+        default:
+          neutral++;
+      }
+    }
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: initiallyExpanded,
+          tilePadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          childrenPadding: EdgeInsets.zero,
+          title: Text(
+            monthLabel,
+            style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: VistaColors.navy950),
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                if (positive > 0)
+                  _AttendancePill('+ $positive', VistaColors.success,
+                      const Color(0xFFE6F4EA)),
+                if (neutral > 0)
+                  _AttendancePill('• $neutral', Colors.black54,
+                      const Color(0xFFEEF1F7)),
+                if (negative > 0)
+                  _AttendancePill('− $negative', VistaColors.danger,
+                      const Color(0xFFFDECEA)),
+              ],
+            ),
+          ),
+          children: [
+            const Divider(height: 1),
+            ...rows.asMap().entries.map((entry) {
+              final b = entry.value;
+              final isLast = entry.key == rows.length - 1;
+              return Padding(
+                padding: EdgeInsets.fromLTRB(16, 12, 16, isLast ? 12 : 0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -432,20 +836,40 @@ class _BehaviorTab extends ConsumerWidget {
                       children: [
                         _SentimentChip(b.sentiment),
                         const Spacer(),
-                        Text(DateFormat.yMMMd().format(b.observedAt),
+                        Text(DateFormat.MMMd().format(b.observedAt),
                             style: const TextStyle(
                                 color: Colors.black45, fontSize: 12)),
                       ],
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 6),
                     Text(b.observation),
+                    if ((b.category != null && b.category!.isNotEmpty) ||
+                        (b.teacherName != null &&
+                            b.teacherName!.isNotEmpty)) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        [
+                          if (b.category != null && b.category!.isNotEmpty)
+                            b.category!,
+                          if (b.teacherName != null &&
+                              b.teacherName!.isNotEmpty)
+                            'by ${b.teacherName!}',
+                        ].join(' · '),
+                        style: const TextStyle(
+                            color: Colors.black45, fontSize: 12),
+                      ),
+                    ],
+                    if (!isLast) ...[
+                      const SizedBox(height: 12),
+                      const Divider(height: 1),
+                    ],
                   ],
                 ),
-              ),
-            );
-          },
-        );
-      },
+              );
+            }),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -482,24 +906,110 @@ class _PickupQrTab extends ConsumerStatefulWidget {
   ConsumerState<_PickupQrTab> createState() => _PickupQrTabState();
 }
 
+/// Internal representation of the chip selection. `personId == null` →
+/// the parent themself; otherwise an authorized_pickup_persons row.
+class _FetcherChoice {
+  _FetcherChoice.self(this.parentName, this.parentPhotoUrl)
+      : person = null;
+  _FetcherChoice.auth(AuthorizedPickupPerson p)
+      : parentName = null,
+        parentPhotoUrl = null,
+        person = p;
+
+  final String? parentName;
+  final String? parentPhotoUrl;
+  final AuthorizedPickupPerson? person;
+
+  String get id => person?.id ?? 'self';
+  bool get isSelf => person == null;
+  String get displayName => person?.fullName ?? parentName ?? 'You';
+  String? get photoUrl => person?.photoUrl ?? parentPhotoUrl;
+  String? get relationship => person?.relationship;
+}
+
 class _PickupQrTabState extends ConsumerState<_PickupQrTab> {
   PickupQr? _qr;
   String? _error;
   bool _loading = false;
+  bool _loadingPersons = true;
+  List<AuthorizedPickupPerson> _persons = const [];
+  _FetcherChoice? _selected;
 
   @override
   void initState() {
     super.initState();
-    _regenerate();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    await _loadPersons();
+    if (!mounted) return;
+    _ensureDefaultSelection();
+    await _regenerate();
+  }
+
+  Future<void> _loadPersons() async {
+    setState(() => _loadingPersons = true);
+    try {
+      final list = await ref
+          .read(parentApiProvider)
+          .listAuthorizedPersons(widget.studentId);
+      if (!mounted) return;
+      setState(() => _persons = list);
+    } on VistaApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _loadingPersons = false);
+    }
+  }
+
+  void _ensureDefaultSelection() {
+    if (_selected != null) {
+      // Re-resolve the selected entry against the latest list (in case it was
+      // edited or deleted while the form was open).
+      if (!_selected!.isSelf) {
+        final match = _persons.firstWhere(
+          (p) => p.id == _selected!.id,
+          orElse: () => _persons.isNotEmpty
+              ? _persons.first
+              : AuthorizedPickupPerson(
+                  id: '',
+                  studentId: widget.studentId,
+                  surname: '',
+                  firstName: '',
+                  relationship: '',
+                  fullName: ''),
+        );
+        if (match.id.isEmpty) {
+          _selected = _selfChoice();
+        } else {
+          _selected = _FetcherChoice.auth(match);
+        }
+      }
+      return;
+    }
+    _selected = _selfChoice();
+  }
+
+  _FetcherChoice _selfChoice() {
+    final me = ref.read(sessionProvider).valueOrNull;
+    return _FetcherChoice.self(me?.fullName ?? 'You', me?.photoUrl);
   }
 
   Future<void> _regenerate() async {
+    final choice = _selected;
+    if (choice == null) return;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final qr = await ref.read(parentApiProvider).generateQr(widget.studentId);
+      final qr = await ref.read(parentApiProvider).generateQr(
+            widget.studentId,
+            fetcherType: choice.isSelf ? 'self' : 'auth',
+            fetcherId: choice.isSelf ? null : choice.id,
+          );
       if (!mounted) return;
       setState(() => _qr = qr);
     } on VistaApiException catch (e) {
@@ -510,67 +1020,224 @@ class _PickupQrTabState extends ConsumerState<_PickupQrTab> {
     }
   }
 
+  Future<void> _openManage() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AuthorizedPersonsScreen(studentId: widget.studentId),
+      ),
+    );
+    // List may have changed — reload and re-resolve selection.
+    await _loadPersons();
+    if (!mounted) return;
+    _ensureDefaultSelection();
+    await _regenerate();
+  }
+
+  void _select(_FetcherChoice c) {
+    if (_selected?.id == c.id) return;
+    setState(() => _selected = c);
+    _regenerate();
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (_loading && _qr == null) {
+    if (_loadingPersons && _qr == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_error != null) {
-      return Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+    final selfChoice = _selfChoice();
+    final choices = <_FetcherChoice>[
+      selfChoice,
+      ..._persons.map(_FetcherChoice.auth),
+    ];
+
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+      children: [
+        const Text(
+          "Who's fetching today?",
+          style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: VistaColors.navy950),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            Text(_error!, style: const TextStyle(color: VistaColors.danger)),
-            const SizedBox(height: 16),
-            FilledButton(onPressed: _regenerate, child: const Text('Retry')),
+            for (final c in choices)
+              _FetcherChip(
+                choice: c,
+                selected: _selected?.id == c.id,
+                onTap: () => _select(c),
+              ),
           ],
         ),
-      );
-    }
-    if (_qr == null) return const SizedBox.shrink();
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _openManage,
+            icon: const Icon(Icons.manage_accounts_outlined),
+            label: const Text('Manage authorized fetchers'),
+          ),
+        ),
+        const SizedBox(height: 16),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(_error!,
+                style: const TextStyle(color: VistaColors.danger)),
+          )
+        else if (_qr != null)
+          _QrCard(
+            qr: _qr!,
+            choice: _selected ?? selfChoice,
+            loading: _loading,
+            onRefresh: _regenerate,
+          )
+        else if (_loading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 60),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+      ],
+    );
+  }
+}
 
-    final remaining = _qr!.expiresAt.difference(DateTime.now());
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Text(
-            'Show this at the gate',
-            style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: VistaColors.navy950),
-          ),
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFFDDE2EC)),
+class _FetcherChip extends StatelessWidget {
+  const _FetcherChip({
+    required this.choice,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _FetcherChoice choice;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.fromLTRB(6, 6, 14, 6),
+        decoration: BoxDecoration(
+          color: selected ? VistaColors.brand : Colors.white,
+          border: Border.all(
+              color: selected ? VistaColors.brand : const Color(0xFFDDE2EC)),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: const Color(0xFFEEF1F7),
+              backgroundImage: choice.photoUrl != null
+                  ? NetworkImage(choice.photoUrl!)
+                  : null,
+              child: choice.photoUrl == null
+                  ? Text(
+                      _initials(choice.displayName),
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black54),
+                    )
+                  : null,
             ),
-            child: QrImageView(
-              data: _qr!.payload,
-              size: 240,
+            const SizedBox(width: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 140),
+              child: Text(
+                choice.isSelf ? 'You' : choice.displayName,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? Colors.white : VistaColors.navy950,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            remaining.isNegative
-                ? 'Expired — tap Refresh'
-                : 'Expires in ${remaining.inMinutes}m ${remaining.inSeconds % 60}s',
-            style: const TextStyle(color: Colors.black54),
-          ),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: _loading ? null : _regenerate,
-            icon: const Icon(Icons.refresh),
-            label: const Text('Refresh QR'),
-          ),
-        ],
+          ],
+        ),
       ),
+    );
+  }
+
+  static String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+')).where((s) => s.isNotEmpty);
+    if (parts.isEmpty) return '?';
+    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
+        .toUpperCase();
+  }
+}
+
+class _QrCard extends StatelessWidget {
+  const _QrCard({
+    required this.qr,
+    required this.choice,
+    required this.loading,
+    required this.onRefresh,
+  });
+
+  final PickupQr qr;
+  final _FetcherChoice choice;
+  final bool loading;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final remaining = qr.expiresAt.difference(DateTime.now());
+    final relSuffix =
+        choice.relationship != null ? ' (${choice.relationship})' : '';
+    return Column(
+      children: [
+        const Text(
+          'Show this at the gate',
+          style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: VistaColors.navy950),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFDDE2EC)),
+          ),
+          child: QrImageView(data: qr.payload, size: 240),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'Fetcher: ${choice.displayName}$relSuffix',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: VistaColors.navy950),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          remaining.isNegative
+              ? 'Expired — tap Refresh'
+              : 'Expires in ${remaining.inMinutes}m ${remaining.inSeconds % 60}s',
+          style: const TextStyle(color: Colors.black54),
+        ),
+        const SizedBox(height: 16),
+        FilledButton.icon(
+          onPressed: loading ? null : onRefresh,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Refresh QR'),
+        ),
+      ],
     );
   }
 }

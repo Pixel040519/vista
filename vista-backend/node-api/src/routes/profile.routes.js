@@ -6,6 +6,12 @@ const { query } = require('../config/database')
 const { authenticate } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
 const { normaliseName } = require('../utils/nameHelper')
+const { gradeScopeForRole } = require('../utils/roles')
+const {
+  uploadProfilePhoto,
+  photoUrlFromPath,
+  unlinkUploadedFile,
+} = require('../middleware/upload.middleware')
 
 router.use(authenticate)
 
@@ -34,12 +40,15 @@ router.put('/me', async (req, res, next) => {
       `UPDATE users
          SET surname=$1, first_name=$2, middle_name=$3, phone=$4, updated_at=NOW()
          WHERE id=$5
-         RETURNING id, email, full_name, surname, first_name, middle_name, role, phone, created_at`,
+         RETURNING id, email, full_name, surname, first_name, middle_name, role, phone, photo_path, created_at`,
       [surname, first_name, middle_name || null, phone, req.user.id]
     )
     if (!result.rows.length) throw new AppError('User not found.', 404)
 
     const user = result.rows[0]
+    user.photo_url = photoUrlFromPath(req, user.photo_path)
+    delete user.photo_path
+    user.grade_scope = gradeScopeForRole(user.role)
 
     if (user.role === 'teacher') {
       const asgn = await query(
@@ -55,6 +64,39 @@ router.put('/me', async (req, res, next) => {
     user.active_school_year = syRes.rows[0]?.label || null
 
     res.json({ message: 'Profile updated.', user })
+  } catch (err) { next(err) }
+})
+
+// POST /api/profile/me/photo — upload/replace own profile photo (multipart, field "photo")
+router.post('/me/photo', uploadProfilePhoto, async (req, res, next) => {
+  try {
+    if (!req.file) throw new AppError('A photo is required.', 400)
+
+    const newPath = `profile/${req.file.filename}`
+
+    const existing = await query('SELECT photo_path FROM users WHERE id=$1', [req.user.id])
+    if (!existing.rows.length) {
+      unlinkUploadedFile(newPath)
+      throw new AppError('User not found.', 404)
+    }
+
+    const result = await query(
+      `UPDATE users SET photo_path=$1, updated_at=NOW()
+       WHERE id=$2
+       RETURNING id, email, full_name, surname, first_name, middle_name, role, phone, photo_path, created_at`,
+      [newPath, req.user.id]
+    )
+
+    if (existing.rows[0].photo_path && existing.rows[0].photo_path !== newPath) {
+      unlinkUploadedFile(existing.rows[0].photo_path)
+    }
+
+    const user = result.rows[0]
+    user.photo_url = photoUrlFromPath(req, user.photo_path)
+    delete user.photo_path
+    user.grade_scope = gradeScopeForRole(user.role)
+
+    res.json({ message: 'Profile photo updated.', user })
   } catch (err) { next(err) }
 })
 

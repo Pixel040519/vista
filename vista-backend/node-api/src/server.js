@@ -4,6 +4,7 @@ require('dotenv').config({ path: envPath });
 
 
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
@@ -25,6 +26,7 @@ const scoreRoutes = require('./routes/score.routes');
 const eceRoutes = require('./routes/ece.routes');
 const profileRoutes = require('./routes/profile.routes');
 const deviceRoutes = require('./routes/device.routes');
+const pickupRoutes = require('./routes/pickup.routes');
 
 const { errorHandler } = require('./middleware/error.middleware');
 
@@ -54,6 +56,11 @@ app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// ─── Static uploads ────────────────────────────────────────────
+// Profile + authorized-pickup photos uploaded via multer land here. Served
+// publicly so the parent and guard mobile apps can render them with NetworkImage.
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+
 // ─── Health Check ──────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({
@@ -79,6 +86,7 @@ app.use('/api/scores', scoreRoutes);         // Score items & student scores
 app.use('/api/ece', eceRoutes);              // ECE competency catalog & records
 app.use('/api/profile', profileRoutes);      // Self-service profile (any role)
 app.use('/api/devices', deviceRoutes);       // FCM device-token registry
+app.use('/api/pickup-persons', pickupRoutes); // Parent: authorized non-account fetchers
 
 // ─── 404 Handler ──────────────────────────────────────────────
 app.use((req, res) => {
@@ -89,8 +97,10 @@ app.use((req, res) => {
 app.use(errorHandler);
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 VISTA Node API running on port ${PORT}`);
-  console.log(`📡 Health check: http://localhost:${PORT}/health\n`);
+  console.log(`\n🚀 VISTA Node API listening on 0.0.0.0:${PORT} (all interfaces)`);
+  console.log(`📡 Local:    http://localhost:${PORT}/health`);
+  console.log(`📡 LAN:      http://<your-host-ip>:${PORT}/health`);
+  console.log(`📡 Emulator: http://10.0.2.2:${PORT}/health\n`);
 });
 
 module.exports = app;

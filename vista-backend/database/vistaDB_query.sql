@@ -11,6 +11,7 @@ CREATE TABLE users (
     role VARCHAR(20) NOT NULL CHECK (role IN ('super_admin', 'admin_ece', 'admin_elem', 'teacher', 'parent')),
     full_name VARCHAR(255) NOT NULL,
     phone VARCHAR(20),
+    photo_path TEXT,                         -- Profile photo (relative path under /uploads)
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
@@ -30,6 +31,9 @@ CREATE TABLE students (
     profile_photo_url TEXT,
     qr_code TEXT,                            -- Dynamic QR for SecurePass
     qr_expires_at TIMESTAMP,
+    qr_generated_by UUID REFERENCES users(id),  -- User who generated the active QR
+    qr_fetcher_type VARCHAR(8),              -- 'self' | 'auth' | NULL (legacy/admin)
+    qr_fetcher_id UUID,                      -- users.id (self) or authorized_pickup_persons.id (auth)
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
@@ -46,6 +50,27 @@ CREATE TABLE parent_student (
     is_authorized_pickup BOOLEAN DEFAULT TRUE,
     UNIQUE(parent_id, student_id)
 );
+
+-- ============================================================
+-- AUTHORIZED PICKUP PERSONS (non-account fetchers)
+-- ============================================================
+-- Persons a parent authorizes to pick up a specific child without giving them
+-- a portal account (yaya, lola, driver, etc.). Used by the Pickup QR fetcher
+-- selector and rendered with a photo on the guard scan result.
+CREATE TABLE authorized_pickup_persons (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    surname VARCHAR(80) NOT NULL,
+    first_name VARCHAR(80) NOT NULL,
+    middle_name VARCHAR(80),
+    relationship VARCHAR(50) NOT NULL,
+    photo_path TEXT,                          -- Relative path under /uploads
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX idx_authorized_pickup_parent_student
+    ON authorized_pickup_persons(parent_id, student_id);
 
 -- ============================================================
 -- TEACHER-CLASS ASSIGNMENT
@@ -159,6 +184,9 @@ CREATE TABLE dismissal_logs (
     scanned_by UUID REFERENCES users(id),       -- Staff who scanned
     qr_token VARCHAR(255) NOT NULL,
     status VARCHAR(20) CHECK (status IN ('Success', 'Failed', 'Expired')),
+    gate_label VARCHAR(20),                     -- Entrance label set in guard app (e.g. "Gate 1")
+    fetcher_type VARCHAR(8),                    -- 'self' | 'auth' | NULL (legacy)
+    fetcher_authorized_id UUID REFERENCES authorized_pickup_persons(id) ON DELETE SET NULL,
     scanned_at TIMESTAMP DEFAULT NOW()
 );
 

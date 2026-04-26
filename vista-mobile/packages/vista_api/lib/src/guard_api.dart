@@ -10,19 +10,35 @@ class GuardApi {
 
   final ApiClient client;
 
-  /// Submits a scanned QR payload to the backend. [qrPayload] is the raw
-  /// string decoded by `mobile_scanner` — the server parses + validates it
-  /// (expiry, single-use, authorized guardians) and invalidates the QR on
-  /// success. [authorizedBy] is the name displayed to the guard of the
-  /// guardian they visually confirmed at the gate (required by v1).
+  /// Step 1: decode the QR and load the student's authorized-pickup guardians
+  /// for the picker. Does not consume the QR — the guard must still confirm by
+  /// calling [verify] with the chosen guardian's UUID.
+  Future<DismissalScanResult> scan({required String qrPayload}) async {
+    try {
+      final r = await client.raw.post('/api/dismissal/scan', data: {
+        'qrPayload': qrPayload,
+      });
+      return DismissalScanResult.fromJson(
+          (r.data as Map).cast<String, dynamic>());
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  /// Step 2: confirm the pickup with the UUID of the guardian the guard tapped
+  /// on the picker. Server invalidates the QR on success.
   Future<DismissalVerifyResult> verify({
     required String qrPayload,
-    required String authorizedBy,
+    required String authorizedById,
+    String fetcherType = 'self',
+    String? gateLabel,
   }) async {
     try {
       final r = await client.raw.post('/api/dismissal/verify', data: {
         'qrPayload': qrPayload,
-        'authorized_by': authorizedBy,
+        'authorized_by_id': authorizedById,
+        'fetcher_type': fetcherType,
+        if (gateLabel != null && gateLabel.isNotEmpty) 'gate_label': gateLabel,
       });
       return DismissalVerifyResult.fromJson(
           (r.data as Map).cast<String, dynamic>());

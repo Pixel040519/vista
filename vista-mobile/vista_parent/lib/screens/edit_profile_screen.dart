@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +7,7 @@ import 'package:vista_api/vista_api.dart';
 
 import '../providers.dart';
 import '../theme.dart';
+import '../widgets/photo_picker.dart';
 
 class EditProfileScreen extends ConsumerStatefulWidget {
   const EditProfileScreen({super.key});
@@ -22,10 +25,146 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _AvatarCard(user: user),
+          const SizedBox(height: 16),
           _PersonalInfoCard(user: user),
           const SizedBox(height: 16),
           const _ChangePasswordCard(),
         ],
+      ),
+    );
+  }
+}
+
+class _AvatarCard extends ConsumerStatefulWidget {
+  const _AvatarCard({required this.user});
+  final VistaUser? user;
+
+  @override
+  ConsumerState<_AvatarCard> createState() => _AvatarCardState();
+}
+
+class _AvatarCardState extends ConsumerState<_AvatarCard> {
+  bool _uploading = false;
+  String? _error;
+  File? _localPreview;
+
+  Future<void> _change() async {
+    final file = await pickPhoto(context);
+    if (file == null) return;
+    setState(() {
+      _localPreview = file;
+      _uploading = true;
+      _error = null;
+    });
+    try {
+      await ref.read(parentApiProvider).uploadProfilePhoto(file);
+      ref.invalidate(sessionProvider);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Profile photo updated.')),
+      );
+    } on VistaApiException catch (e) {
+      setState(() {
+        _error = e.message;
+        _localPreview = null;
+      });
+    } catch (_) {
+      setState(() {
+        _error = 'Could not upload photo. Check your connection.';
+        _localPreview = null;
+      });
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final url = widget.user?.photoUrl;
+    final ImageProvider? bg = _localPreview != null
+        ? FileImage(_localPreview!)
+        : (url != null ? NetworkImage(url) : null) as ImageProvider?;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Stack(
+              children: [
+                CircleAvatar(
+                  radius: 36,
+                  backgroundColor: const Color(0xFFEEF1F7),
+                  backgroundImage: bg,
+                  child: bg == null
+                      ? const Icon(Icons.person,
+                          size: 36, color: Colors.black45)
+                      : null,
+                ),
+                if (_uploading)
+                  Positioned.fill(
+                    child: Container(
+                      decoration: const BoxDecoration(
+                          shape: BoxShape.circle, color: Colors.black38),
+                      child: const Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        ),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  bottom: -2,
+                  right: -2,
+                  child: Material(
+                    color: VistaColors.brand,
+                    shape: const CircleBorder(),
+                    elevation: 2,
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: _uploading ? null : _change,
+                      child: const Padding(
+                        padding: EdgeInsets.all(6),
+                        child: Icon(Icons.photo_camera,
+                            size: 14, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Profile photo',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: VistaColors.navy950,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _error ??
+                        'Shown to the school guard at pickup so they can verify it’s you.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: _error != null
+                          ? VistaColors.danger
+                          : Colors.black54,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

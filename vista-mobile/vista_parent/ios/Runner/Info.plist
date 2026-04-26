@@ -26,6 +26,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Take a photo of an authorized fetcher so the school guard can verify them at pickup.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Choose a photo of an authorized fetcher so the school guard can verify them at pickup.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

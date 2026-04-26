@@ -8,6 +8,7 @@ const { authenticate } = require('../middleware/auth.middleware');
 const { AppError } = require('../middleware/error.middleware');
 const { normaliseName } = require('../utils/nameHelper');
 const { gradeScopeForRole } = require('../utils/roles');
+const { photoUrlFromPath } = require('../middleware/upload.middleware');
 
 const registerSchema = Joi.object({
   email:       Joi.string().email().required(),
@@ -70,7 +71,18 @@ router.post('/login', async (req, res, next) => {
     const user = result.rows[0];
     if (!await bcrypt.compare(value.password, user.password_hash)) throw new AppError('Invalid credentials.', 401);
 
-    const userData = { id: user.id, email: user.email, full_name: user.full_name, surname: user.surname, first_name: user.first_name, middle_name: user.middle_name, role: user.role, grade_scope: gradeScopeForRole(user.role) };
+    const userData = {
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      surname: user.surname,
+      first_name: user.first_name,
+      middle_name: user.middle_name,
+      role: user.role,
+      phone: user.phone,
+      photo_url: photoUrlFromPath(req, user.photo_path),
+      grade_scope: gradeScopeForRole(user.role),
+    };
 
     if (user.role === 'teacher') {
       const asgn = await query(
@@ -112,11 +124,13 @@ router.post('/refresh', async (req, res, next) => {
 router.get('/me', authenticate, async (req, res, next) => {
   try {
     const result = await query(
-      'SELECT id, email, full_name, surname, first_name, middle_name, role, phone, created_at FROM users WHERE id=$1',
+      'SELECT id, email, full_name, surname, first_name, middle_name, role, phone, photo_path, created_at FROM users WHERE id=$1',
       [req.user.id]
     );
     if (!result.rows.length) throw new AppError('User not found.', 404);
     const user = result.rows[0];
+    user.photo_url = photoUrlFromPath(req, user.photo_path);
+    delete user.photo_path;
     user.grade_scope = gradeScopeForRole(user.role);
 
     if (user.role === 'teacher') {

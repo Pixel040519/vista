@@ -578,16 +578,58 @@ router.post('/:id/generate-qr', async (req, res, next) => {
       throw new AppError('Not authorized to generate a pickup QR.', 403)
     }
 
-    const defaultExpiry = role === ROLES.PARENT ? 2 : 30
+    // Optional fetcher binding: parent picks WHO is fetching today before
+    // generating the QR. 'self' (default) → parent themself; 'auth' → an
+    // authorized_pickup_persons row owned by this parent for this student.
+    // Admins still default to 'self' with their own user id (used by the
+    // admin-side generated QR fallback in /api/dismissal/scan).
+    const rawFetcherType = (req.body?.fetcher_type || 'self').toString().trim()
+    if (!['self', 'auth'].includes(rawFetcherType)) {
+      throw new AppError("fetcher_type must be 'self' or 'auth'.", 400)
+    }
+    let fetcherType = rawFetcherType
+    let fetcherId = req.user.id
+
+    if (rawFetcherType === 'auth') {
+      if (role !== ROLES.PARENT) {
+        throw new AppError('Only parents may bind a QR to an authorized pickup person.', 403)
+      }
+      const candidate = (req.body?.fetcher_id || '').toString().trim()
+      if (!candidate) throw new AppError('fetcher_id is required when fetcher_type is "auth".', 400)
+      const owned = await query(
+        `SELECT 1 FROM authorized_pickup_persons
+          WHERE id=$1 AND parent_id=$2 AND student_id=$3
+          LIMIT 1`,
+        [candidate, req.user.id, req.params.id]
+      )
+      if (!owned.rowCount) {
+        throw new AppError('Authorized person not found for this student.', 404)
+      }
+      fetcherId = candidate
+    }
+
+    const defaultExpiry = role === ROLES.PARENT ? 20 : 30
     const expiresInMinutes = Number.parseInt(req.body?.expiresInMinutes, 10) || defaultExpiry
     const token     = uuidv4()
     const expiresAt = new Date(Date.now() + expiresInMinutes*60000)
-    const qrImage   = await QRCode.toDataURL(
-      JSON.stringify({ studentId: req.params.id, token, expiresAt, type: 'VISTA_SECUREPASS' }),
-      { errorCorrectionLevel: 'H', width: 300, margin: 2 }
+    const qrPayload = JSON.stringify({ studentId: req.params.id, token, expiresAt, type: 'VISTA_SECUREPASS' })
+    const qrImage   = await QRCode.toDataURL(qrPayload, { errorCorrectionLevel: 'H', width: 300, margin: 2 })
+    await query(
+      `UPDATE students
+         SET qr_code=$1, qr_expires_at=$2, qr_generated_by=$3,
+             qr_fetcher_type=$4, qr_fetcher_id=$5
+       WHERE id=$6`,
+      [token, expiresAt, req.user.id, fetcherType, fetcherId, req.params.id]
     )
-    await query('UPDATE students SET qr_code=$1, qr_expires_at=$2 WHERE id=$3', [token, expiresAt, req.params.id])
-    res.json({ message: 'QR code generated.', qrImage, token, expiresAt })
+    res.json({
+      message: 'QR code generated.',
+      qrImage,
+      qr_payload: qrPayload,
+      token,
+      expiresAt,
+      fetcher_type: fetcherType,
+      fetcher_id: fetcherId,
+    })
   } catch (err) { next(err) }
 })
 

@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 
 import 'api_client.dart';
 import 'models/attendance.dart';
+import 'models/authorized_pickup_person.dart';
 import 'models/behavior.dart';
 import 'models/dismissal.dart';
 import 'models/ece.dart';
@@ -131,12 +134,107 @@ class ParentApi {
     }
   }
 
-  /// Asks the backend for a short-lived pickup QR payload. Parents get a
-  /// 2-minute TTL so screenshots don't become a bypass.
-  Future<PickupQr> generateQr(String studentId) async {
+  /// Asks the backend for a short-lived pickup QR payload, optionally bound
+  /// to a specific fetcher. [fetcherType] is 'self' (parent themself) or
+  /// 'auth' (one of the parent's authorized_pickup_persons rows). When 'auth',
+  /// [fetcherId] must be the authorized person's UUID.
+  Future<PickupQr> generateQr(
+    String studentId, {
+    String fetcherType = 'self',
+    String? fetcherId,
+  }) async {
     try {
-      final r = await client.raw.post('/api/students/$studentId/generate-qr');
+      final r = await client.raw.post(
+        '/api/students/$studentId/generate-qr',
+        data: {
+          'fetcher_type': fetcherType,
+          if (fetcherId != null) 'fetcher_id': fetcherId,
+        },
+      );
       return PickupQr.fromJson((r.data as Map).cast<String, dynamic>());
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<List<AuthorizedPickupPerson>> listAuthorizedPersons(String studentId) async {
+    try {
+      final r = await client.raw.get('/api/pickup-persons',
+          queryParameters: {'student_id': studentId});
+      final list = (r.data as List? ?? const [])
+          .cast<Map>()
+          .map((m) => AuthorizedPickupPerson.fromJson(m.cast<String, dynamic>()))
+          .toList();
+      return list;
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<AuthorizedPickupPerson> addAuthorizedPerson({
+    required String studentId,
+    required String surname,
+    required String firstName,
+    String? middleName,
+    required String relationship,
+    required File photo,
+  }) async {
+    try {
+      final form = FormData.fromMap({
+        'student_id': studentId,
+        'surname': surname,
+        'first_name': firstName,
+        if (middleName != null && middleName.isNotEmpty) 'middle_name': middleName,
+        'relationship': relationship,
+        'photo': await MultipartFile.fromFile(photo.path),
+      });
+      final r = await client.raw.post('/api/pickup-persons', data: form);
+      return AuthorizedPickupPerson.fromJson(
+          (r.data as Map).cast<String, dynamic>());
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<AuthorizedPickupPerson> updateAuthorizedPerson({
+    required String id,
+    required String surname,
+    required String firstName,
+    String? middleName,
+    required String relationship,
+    File? photo,
+  }) async {
+    try {
+      final form = FormData.fromMap({
+        'surname': surname,
+        'first_name': firstName,
+        if (middleName != null && middleName.isNotEmpty) 'middle_name': middleName,
+        'relationship': relationship,
+        if (photo != null) 'photo': await MultipartFile.fromFile(photo.path),
+      });
+      final r = await client.raw.put('/api/pickup-persons/$id', data: form);
+      return AuthorizedPickupPerson.fromJson(
+          (r.data as Map).cast<String, dynamic>());
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<void> deleteAuthorizedPerson(String id) async {
+    try {
+      await client.raw.delete('/api/pickup-persons/$id');
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  Future<VistaUser> uploadProfilePhoto(File photo) async {
+    try {
+      final form = FormData.fromMap({
+        'photo': await MultipartFile.fromFile(photo.path),
+      });
+      final r = await client.raw.post('/api/profile/me/photo', data: form);
+      return VistaUser.fromJson((r.data['user'] as Map).cast<String, dynamic>());
     } on DioException catch (e) {
       ApiClient.rethrowAsVistaException(e);
     }

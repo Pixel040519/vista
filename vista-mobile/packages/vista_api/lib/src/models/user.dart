@@ -8,6 +8,7 @@ class VistaUser {
     this.firstName,
     this.middleName,
     this.phone,
+    this.photoUrl,
     this.gradeScope = const [],
   });
 
@@ -19,6 +20,7 @@ class VistaUser {
   final String? firstName;
   final String? middleName;
   final String? phone;
+  final String? photoUrl;
   final List<String> gradeScope;
 
   static const roleParent = 'parent';
@@ -36,6 +38,7 @@ class VistaUser {
         firstName: (json['first_name'] ?? json['firstName']) as String?,
         middleName: (json['middle_name'] ?? json['middleName']) as String?,
         phone: json['phone'] as String?,
+        photoUrl: (json['photo_url'] ?? json['photoUrl']) as String?,
         gradeScope: (json['grade_scope'] as List?)?.cast<String>() ?? const [],
       );
 }

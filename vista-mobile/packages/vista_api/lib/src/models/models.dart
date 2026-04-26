@@ -7,3 +7,4 @@ export 'dismissal.dart';
 export 'ece.dart';
 export 'notification.dart';
 export 'parent_summary.dart';
+export 'authorized_pickup_person.dart';

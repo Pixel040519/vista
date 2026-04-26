@@ -63,9 +63,10 @@ The frontend **never calls FastAPI directly** — all AI endpoints go through No
 PostgreSQL database `vista_db`. Schema: `vista-backend/database/vistaDB_query.sql`. Migrations: `vista-backend/database/migrations/`.
 
 Key tables:
-- `users` — admin/teacher/parent accounts. Name fields are `surname`/`first_name`/`middle_name` (no `full_name`, no `home_address` on users).
-- `students` — student profiles with LRN, grade_level, section, QR code for SecurePass.
+- `users` — admin/teacher/parent accounts. Name fields are `surname`/`first_name`/`middle_name` (no `full_name`, no `home_address` on users). `photo_path` (TEXT, relative path under `/uploads/profile/`) is the parent's avatar shown to the guard on the SecurePass scan result; uploaded via `POST /api/profile/me/photo`.
+- `students` — student profiles with LRN, grade_level, section, QR code for SecurePass. `qr_generated_by` (UUID, FK `users.id`) is stamped by `POST /api/students/:id/generate-qr` so the guard scan flow can identify the parent who pressed Generate and skip the guardian picker. `qr_fetcher_type` (`'self'` | `'auth'` | NULL) + `qr_fetcher_id` bind the active QR to a chosen fetcher: `'self'` → `users.id` of the parent themself, `'auth'` → `authorized_pickup_persons.id`, NULL → legacy/admin-generated path that falls back to the full authorized list. Cleared along with `qr_code`/`qr_expires_at` on a successful `/verify`.
 - `parent_student` — many-to-many guardian↔student link.
+- `authorized_pickup_persons` — non-account fetchers (yaya, lola, driver, relative) a parent has authorized to pick up a specific child. Unlike `parent_student` rows these have **no portal account** — they're scoped to `(parent_id, student_id)`, hold their own `surname`/`first_name`/`middle_name`/`relationship`/`photo_path`, and are managed exclusively by the owning parent through `/api/pickup-persons` from the vista_parent app. The Pickup QR tab lets the parent pick one of these as the fetcher before generating the QR; the chosen row's `id` lands in `students.qr_fetcher_id` and the `vista_guard` scan result renders the photo verbatim.
 - `teacher_assignments` / `class_assignments` — teacher↔class/subject mappings, scoped to a school year; unique per `(grade_level, section, subject, school_year)`.
 - `attendance` — per-student, per-subject, per-day record (Present/Absent/Late/Excused); unique on `(student_id, date, subject_id)` so each teacher records independently per subject.
 - `subjects` — curriculum subjects scoped to grade level + school year.
@@ -76,7 +77,7 @@ Key tables:
 - `behavior_logs` — teacher observations + VADER `vader_compound` score.
 - `risk_assessments` — AI risk tier (Stable/Moderate/High). Factor columns `attendance_factor`/`academic_factor`/`behavioral_factor`/`ece_competency_factor` are `DECIMAL(5,4)` (0–1 scale — normalize before insert, e.g. avg_grade 92 → 0.92). `ece_competency_factor` is populated only for ECE grade levels (Pre-Nursery–Kinder) from the student's latest-quarter rating average (E=1.0 / G=0.75 / F=0.5 / NA=0.25); NULL for Grades 1–6.
 - `academic_predictions` — grade forecasts with confidence scores.
-- `dismissal_logs` — SecurePass QR scan/authorization records.
+- `dismissal_logs` — SecurePass QR scan/authorization records. `gate_label VARCHAR(20)` records the entrance the guard set in the `vista_guard` Settings screen (e.g. "Gate 1"); nullable for admin/teacher-side scans that don't pass through the guard app. `fetcher_type` (`'self'` | `'auth'` | NULL legacy) + `fetcher_authorized_id` (FK `authorized_pickup_persons.id`, nullable, `ON DELETE SET NULL`) capture the actual fetcher: `authorized_by` always remains the responsible parent (FK `users.id`) so the existing JOIN and parent notifications keep working — the fetcher columns are an audit overlay, not a replacement.
 - `school_years` — SY management via `is_active` (one) + `is_upcoming` (many). No `is_current` column.
 - `sections` — class sections per grade level + school year.
 - `competency_domains` / `competency_skills` / `ece_competency_records` — ECE tracker. Records rated on E/G/F/NA scale (Excellent/Good/Fair/Needs Assistance); unique on `(student_id, skill_id, school_year_id, quarter)`.
