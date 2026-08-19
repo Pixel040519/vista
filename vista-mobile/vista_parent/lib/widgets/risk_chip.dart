@@ -30,8 +30,10 @@ class RiskChip extends StatelessWidget {
       case 'Stable':
         return (const Color(0xFFE6F4EA), VistaColors.success);
       case 'Moderate':
+      case 'Moderate Risk':
         return (const Color(0xFFFFF4E5), VistaColors.warn);
       case 'High':
+      case 'High Risk':
         return (const Color(0xFFFDECEA), VistaColors.danger);
       default:
         return (const Color(0xFFEEF1F7), Colors.black54);

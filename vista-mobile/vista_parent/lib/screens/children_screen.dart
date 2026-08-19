@@ -18,7 +18,50 @@ class ChildrenScreen extends ConsumerWidget {
         0;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My Children'),
+        titleSpacing: 12,
+        title: Row(
+          children: [
+            ClipOval(
+              child: SizedBox(
+                width: 36,
+                height: 36,
+                child: Semantics(
+                  label: 'NRYS school logo',
+                  child: Image.asset(
+                    'assets/images/nrys_logo.png',
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    'NRYS',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.1,
+                      height: 1.1,
+                    ),
+                  ),
+                  Text(
+                    'VISTA Parent',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      height: 1.2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             tooltip: 'Notifications',
@@ -66,8 +109,10 @@ class ChildrenScreen extends ConsumerWidget {
         child: children.when(
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => ListView(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
             children: [
+              const _SectionTitle(count: null),
+              const SizedBox(height: 16),
               Text('Unable to load children.\n$e',
                   style: const TextStyle(color: Colors.black54)),
             ],
@@ -75,8 +120,10 @@ class ChildrenScreen extends ConsumerWidget {
           data: (list) {
             if (list.isEmpty) {
               return ListView(
+                padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
                 children: const [
-                  SizedBox(height: 120),
+                  _SectionTitle(count: 0),
+                  SizedBox(height: 80),
                   Icon(Icons.family_restroom,
                       size: 72, color: Colors.black26),
                   SizedBox(height: 12),
@@ -91,14 +138,92 @@ class ChildrenScreen extends ConsumerWidget {
               );
             }
             return ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemBuilder: (c, i) => _ChildCard(student: list[i]),
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemCount: list.length,
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+              itemBuilder: (c, i) {
+                if (i == 0) return _SectionTitle(count: list.length);
+                return _ChildCard(student: list[i - 1]);
+              },
+              separatorBuilder: (_, i) =>
+                  SizedBox(height: i == 0 ? 16 : 12),
+              itemCount: list.length + 1,
             );
           },
         ),
       ),
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle({required this.count});
+  final int? count;
+
+  @override
+  Widget build(BuildContext context) {
+    final subtitle = count == null
+        ? null
+        : count == 1
+            ? '1 student linked to your account'
+            : '$count students linked to your account';
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Container(
+          width: 4,
+          height: 36,
+          decoration: BoxDecoration(
+            color: VistaColors.brand,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'My Children',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.3,
+                  height: 1.15,
+                  color: VistaColors.navy950,
+                ),
+              ),
+              if (subtitle != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: 0.1,
+                    color: Colors.black54,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (count != null && count! > 0)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: VistaColors.brand.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              '$count',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: VistaColors.brand,
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

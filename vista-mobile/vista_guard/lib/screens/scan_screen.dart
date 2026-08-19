@@ -9,7 +9,9 @@ import 'package:vista_api/vista_api.dart';
 import '../offline_queue.dart';
 import '../providers.dart';
 import '../theme.dart';
+import '../widgets/result_card.dart';
 import 'pin_lock.dart';
+import 'scan_result_screen.dart';
 
 class ScanScreen extends ConsumerStatefulWidget {
   const ScanScreen({super.key});
@@ -25,7 +27,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     formats: const [BarcodeFormat.qrCode],
   );
   bool _processing = false;
-  _ResultCard? _result;
+  ResultCard? _result;
   Timer? _resultTimer;
   Timer? _idleTimer;
   int _pendingOffline = 0;
@@ -74,55 +76,77 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     _resetIdleTimer();
     setState(() => _processing = true);
 
-    // Prompt for the authorized guardian's name (visually confirmed at the gate).
-    final authorizedBy = await _askGuardianName();
-    if (authorizedBy == null) {
+    final DismissalScanResult scan;
+    try {
+      scan = await ref.read(guardApiProvider).scan(qrPayload: raw);
+    } on VistaApiException catch (e) {
+      _showResult(ResultCard.failure(e.message));
+      return;
+    } catch (_) {
+      _showResult(ResultCard.failure(
+          'Network required to verify guardian. Check connection and retry.'));
+      return;
+    }
+
+    final guardian = scan.authorizedGuardians.length == 1
+        ? scan.authorizedGuardians.first
+        : await _pickGuardian(scan);
+    if (guardian == null) {
       setState(() => _processing = false);
       return;
     }
 
-    try {
-      final result = await ref
-          .read(guardApiProvider)
-          .verify(qrPayload: raw, authorizedBy: authorizedBy);
-      _showResult(_ResultCard.success(result));
-    } on VistaApiException catch (e) {
-      _showResult(_ResultCard.failure(e.message));
-    } catch (_) {
-      // Network failure — persist and flash "queued".
-      await OfflineQueue.instance.enqueue(
-        qrPayload: raw,
-        authorizedBy: authorizedBy,
-      );
-      await _refreshPending();
-      _showResult(_ResultCard.queued());
+    if (!mounted) return;
+    final card = await Navigator.of(context).push<ResultCard?>(
+      MaterialPageRoute(
+        builder: (_) => ScanResultScreen(
+          qrPayload: raw,
+          scan: scan,
+          guardian: guardian,
+        ),
+      ),
+    );
+    await _refreshPending();
+    if (!mounted) return;
+    if (card == null) {
+      setState(() => _processing = false);
+    } else {
+      _showResult(card);
     }
   }
 
-  Future<String?> _askGuardianName() async {
-    final c = TextEditingController();
-    return showDialog<String>(
+  Future<AuthorizedGuardian?> _pickGuardian(DismissalScanResult scan) async {
+    return showDialog<AuthorizedGuardian>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Releasing to'),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Guardian full name'),
+        title: Text('Releasing ${scan.studentName}'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: scan.authorizedGuardians.length,
+            separatorBuilder: (_, __) => const Divider(height: 1),
+            itemBuilder: (_, i) {
+              final g = scan.authorizedGuardians[i];
+              return ListTile(
+                title: Text(g.fullName,
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: g.relationship != null ? Text(g.relationship!) : null,
+                onTap: () => Navigator.of(ctx).pop(g),
+              );
+            },
+          ),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
               child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(c.text.trim()),
-              child: const Text('Confirm')),
         ],
       ),
     );
   }
 
-  void _showResult(_ResultCard card) {
+  void _showResult(ResultCard card) {
     setState(() => _result = card);
     _resultTimer?.cancel();
     _resultTimer = Timer(const Duration(seconds: 3), () {
@@ -145,6 +169,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       });
     }
     return Scaffold(
+      backgroundColor: VistaColors.scanBg,
       appBar: AppBar(
         title: const Text('Scan pickup QR'),
         actions: [
@@ -152,6 +177,11 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
             tooltip: 'Today’s log',
             icon: const Icon(Icons.list_alt),
             onPressed: () => context.push('/log'),
+          ),
+          IconButton(
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => context.push('/settings'),
           ),
           IconButton(
             tooltip: 'Lock',
@@ -168,12 +198,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
           fit: StackFit.expand,
           children: [
             MobileScanner(controller: _controller, onDetect: _onDetect),
-            if (_result != null)
-              Container(
-                color: Colors.black54,
-                alignment: Alignment.center,
-                child: _result!,
-              ),
+            const _ScanReticle(),
             if (_pendingOffline > 0)
               Positioned(
                 top: 16,
@@ -192,6 +217,31 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                   ),
                 ),
               ),
+            const Positioned(
+              left: 0,
+              right: 0,
+              bottom: 32,
+              child: Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 32),
+                  child: Text(
+                    'Point at the code on the parent’s phone',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (_result != null)
+              Container(
+                color: Colors.black54,
+                alignment: Alignment.center,
+                child: _result!,
+              ),
           ],
         ),
       ),
@@ -199,68 +249,70 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   }
 }
 
-class _ResultCard extends StatelessWidget {
-  const _ResultCard._({
-    required this.tone,
-    required this.title,
-    required this.subtitle,
-  });
-
-  factory _ResultCard.success(DismissalVerifyResult r) => _ResultCard._(
-        tone: _Tone.success,
-        title: r.student,
-        subtitle: 'Released to ${r.authorizedGuardian}',
-      );
-
-  factory _ResultCard.failure(String message) => _ResultCard._(
-        tone: _Tone.failure,
-        title: 'Not authorized',
-        subtitle: message,
-      );
-
-  factory _ResultCard.queued() => const _ResultCard._(
-        tone: _Tone.queued,
-        title: 'Queued offline',
-        subtitle: 'Will sync when the network returns. Do NOT release the student.',
-      );
-
-  final _Tone tone;
-  final String title;
-  final String subtitle;
+/// 260×260 framing reticle with four 36-px white corner brackets.
+class _ScanReticle extends StatelessWidget {
+  const _ScanReticle();
 
   @override
   Widget build(BuildContext context) {
-    final (bg, icon, iconColor) = switch (tone) {
-      _Tone.success => (Colors.white, Icons.check_circle, VistaColors.success),
-      _Tone.failure => (Colors.white, Icons.cancel, VistaColors.danger),
-      _Tone.queued => (Colors.white, Icons.cloud_off, VistaColors.warn),
-    };
-    return Container(
-      margin: const EdgeInsets.all(32),
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 72, color: iconColor),
-          const SizedBox(height: 12),
-          Text(title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                  color: VistaColors.navy950)),
-          const SizedBox(height: 8),
-          Text(subtitle,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.black54, fontSize: 16)),
-        ],
+    return const Center(
+      child: SizedBox(
+        width: 260,
+        height: 260,
+        child: Stack(
+          children: [
+            Positioned(
+              top: 0,
+              left: 0,
+              child: _Corner(top: true, left: true),
+            ),
+            Positioned(
+              top: 0,
+              right: 0,
+              child: _Corner(top: true, left: false),
+            ),
+            Positioned(
+              bottom: 0,
+              left: 0,
+              child: _Corner(top: false, left: true),
+            ),
+            Positioned(
+              bottom: 0,
+              right: 0,
+              child: _Corner(top: false, left: false),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-enum _Tone { success, failure, queued }
+class _Corner extends StatelessWidget {
+  const _Corner({required this.top, required this.left});
+  final bool top;
+  final bool left;
+
+  @override
+  Widget build(BuildContext context) {
+    const side = BorderSide(color: Colors.white, width: 4);
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        border: Border(
+          top: top ? side : BorderSide.none,
+          bottom: top ? BorderSide.none : side,
+          left: left ? side : BorderSide.none,
+          right: left ? BorderSide.none : side,
+        ),
+        borderRadius: BorderRadius.only(
+          topLeft: top && left ? const Radius.circular(16) : Radius.zero,
+          topRight: top && !left ? const Radius.circular(16) : Radius.zero,
+          bottomLeft: !top && left ? const Radius.circular(16) : Radius.zero,
+          bottomRight: !top && !left ? const Radius.circular(16) : Radius.zero,
+        ),
+      ),
+    );
+  }
+}
