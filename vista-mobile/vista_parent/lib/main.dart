@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'env.dart';
 import 'fcm.dart';
 import 'providers.dart';
 import 'router.dart';
@@ -8,6 +10,7 @@ import 'theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  debugPrint('[VISTA] Parent app API base: $vistaApiBase');
   runApp(const ProviderScope(child: VistaParentApp()));
 }
 

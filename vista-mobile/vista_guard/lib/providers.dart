@@ -27,3 +27,8 @@ final todayLogProvider = FutureProvider<List<DismissalLog>>((ref) {
 /// Tracks whether the scanner should require a PIN re-entry. Flipped to
 /// `true` after 2 minutes of idleness on the scan screen.
 final lockedProvider = StateProvider<bool>((_) => false);
+
+/// Per-session flag: has the guard explicitly picked their gate for this
+/// shift? Defaults to false on every app launch and after sign-out so the
+/// camera never opens with a stale/inherited gate label.
+final gateConfirmedProvider = StateProvider<bool>((_) => false);
