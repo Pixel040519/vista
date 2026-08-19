@@ -26,7 +26,7 @@ CREATE TABLE students (
     full_name VARCHAR(255) NOT NULL,
     date_of_birth DATE NOT NULL,
     gender VARCHAR(10) CHECK (gender IN ('Male', 'Female', 'Other')),
-    grade_level VARCHAR(20) NOT NULL,        -- Nursery, Kinder, Grade 1-6
+    grade_level VARCHAR(20) NOT NULL,        -- Kinder, Grade 1-6
     section VARCHAR(50),
     profile_photo_url TEXT,
     qr_code TEXT,                            -- Dynamic QR for SecurePass
@@ -356,11 +356,6 @@ ALTER TABLE subjects ADD CONSTRAINT subjects_grade_name_unique UNIQUE (grade_lev
 
 -- ── Seed default subjects ─────────────────────────────────────
 INSERT INTO subjects (name, grade_level) VALUES
-  -- Nursery
-  ('Reading Readiness',  'Nursery'),
-  ('Number Concepts',    'Nursery'),
-  ('Arts & Crafts',      'Nursery'),
-  ('Music & Movement',   'Nursery'),
   -- Kinder
   ('Reading Readiness',  'Kinder'),
   ('Number Concepts',    'Kinder'),
@@ -422,7 +417,6 @@ ON CONFLICT (grade_level, name) DO NOTHING;
 
 -- ── Seed default sections ─────────────────────────────────────
 INSERT INTO sections (grade_level, name) VALUES
-  ('Nursery', 'Sunflower'), ('Nursery', 'Daisy'),
   ('Kinder',  'Sampaguita'),('Kinder',  'Rosal'),
   ('Grade 1', 'Makabayan'), ('Grade 1', 'Masagana'),
   ('Grade 2', 'Mabuti'),    ('Grade 2', 'Magiting'),
@@ -432,32 +426,6 @@ INSERT INTO sections (grade_level, name) VALUES
   ('Grade 6', 'Maharlika'), ('Grade 6', 'Mabuhay')
 ON CONFLICT (grade_level, name) DO NOTHING;
 
-
--- ============================================================
--- VISTA Migration: Add Pre-Nursery and Pre-Kinder
--- Run once: psql vista_db < database/migration_pre_levels.sql
--- ============================================================
- 
--- Seed default subjects for Pre-Nursery and Pre-Kinder
-INSERT INTO subjects (name, grade_level) VALUES
-  ('Play & Learn',         'Pre-Nursery'),
-  ('Sensory Activities',   'Pre-Nursery'),
-  ('Arts & Crafts',        'Pre-Nursery'),
-  ('Music & Movement',     'Pre-Nursery'),
-  ('Reading Readiness',    'Pre-Kinder'),
-  ('Number Concepts',      'Pre-Kinder'),
-  ('Arts & Crafts',        'Pre-Kinder'),
-  ('Music & Movement',     'Pre-Kinder'),
-  ('Science Exploration',  'Pre-Kinder')
-ON CONFLICT (grade_level, name) DO NOTHING;
- 
--- Seed default sections for Pre-Nursery and Pre-Kinder
-INSERT INTO sections (grade_level, name) VALUES
-  ('Pre-Nursery', 'Butterfly'),
-  ('Pre-Nursery', 'Dragonfly'),
-  ('Pre-Kinder',  'Tulip'),
-  ('Pre-Kinder',  'Iris')
-ON CONFLICT (grade_level, name) DO NOTHING;
 
 
 -- ============================================================

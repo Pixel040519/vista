@@ -7,7 +7,7 @@ import { Modal } from './UI'
 import { studentApi, curriculumApi } from '../api/client'
 
 const GRADE_LEVELS = [
-  'Pre-Nursery','Nursery','Pre-Kinder','Kinder',
+  'Kinder',
   'Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6',
 ]
 const GENDERS = ['Male','Female','Other']

@@ -5,6 +5,8 @@ const { query, withTransaction } = require('../config/database')
 const { authenticate, authorizeAnyAdmin, authorizeSuperAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
 const { gradeScopeForRole, canManageGrade, isScopedAdmin, isSuperAdmin } = require('../utils/roles')
+const { RATING_SCALES, resolveAssessment } = require('../utils/grading')
+const { loadAssessmentRows } = require('../utils/assessmentConfig')
 
 // Look up a row's grade_level from one of the curriculum tables and enforce scope.
 const assertCurriculumRowInScope = async (req, table, id) => {
@@ -17,15 +19,14 @@ const assertCurriculumRowInScope = async (req, table, id) => {
   return r.rows[0].grade_level
 }
 
-const GRADE_LEVELS = ['Pre-Nursery','Pre-Kinder','Nursery','Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
+const GRADE_LEVELS = ['Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
 
 const GRADE_ORDER = `CASE grade_level
-  WHEN 'Pre-Nursery' THEN 1 WHEN 'Pre-Kinder' THEN 2
-  WHEN 'Nursery' THEN 3     WHEN 'Kinder' THEN 4
-  WHEN 'Grade 1' THEN 5     WHEN 'Grade 2' THEN 6
-  WHEN 'Grade 3' THEN 7     WHEN 'Grade 4' THEN 8
-  WHEN 'Grade 5' THEN 9     WHEN 'Grade 6' THEN 10
-  ELSE 11 END`
+  WHEN 'Kinder'  THEN 1
+  WHEN 'Grade 1' THEN 2     WHEN 'Grade 2' THEN 3
+  WHEN 'Grade 3' THEN 4     WHEN 'Grade 4' THEN 5
+  WHEN 'Grade 5' THEN 6     WHEN 'Grade 6' THEN 7
+  ELSE 8 END`
 
 router.use(authenticate)
 
@@ -60,13 +61,139 @@ const resolveSYId = async (sy_id) => {
 }
 
 // ════════════════════════════════════════════════════════════
+// ASSESSMENT CONFIGURATION (per school year x grade level)
+// ════════════════════════════════════════════════════════════
+//
+// DO 015, s. 2026 moves KS1 off numeric grading one grade level per year, but
+// the schedule lives here as DATA, not code: NRYS is private (DO 015 only
+// "encourages" adoption for private schools), so the school sets its own pace.
+
+// GET /api/curriculum/assessment-config?sy_id=
+// Returns every grade level with its resolved mode, flagging which ones are
+// explicitly configured vs falling back to the default.
+router.get('/assessment-config', async (req, res, next) => {
+  try {
+    const syId = await resolveSYId(req.query.sy_id)
+    const rows = await loadAssessmentRows(syId)
+    const scope = gradeScopeForRole(req.user.role)
+
+    const config = GRADE_LEVELS
+      .filter(gl => scope.includes(gl))
+      .map(gl => {
+        const a = resolveAssessment(gl, rows.get(gl) || null)
+        return {
+          grade_level: gl,
+          assessment_mode: a.mode,
+          rating_scale: a.scaleId,
+          rating_scale_label: a.scale ? a.scale.label : null,
+          levels: a.scale ? a.scale.levels : null,
+          configured: a.configured,
+        }
+      })
+
+    res.json({ sy_id: syId, config, scales: Object.values(RATING_SCALES).map(s => ({
+      id: s.id, label: s.label, short: s.short, source: s.source, levels: s.levels,
+    })) })
+  } catch (err) { next(err) }
+})
+
+// PUT /api/curriculum/assessment-config
+// { sy_id?, entries: [{ grade_level, assessment_mode, rating_scale? }] }
+router.put('/assessment-config', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const { error, value } = Joi.object({
+      sy_id: Joi.string().uuid().optional(),
+      entries: Joi.array().items(Joi.object({
+        grade_level:     Joi.string().valid(...GRADE_LEVELS).required(),
+        assessment_mode: Joi.string().valid('numeric', 'descriptive').required(),
+        rating_scale:    Joi.string().valid(...Object.keys(RATING_SCALES)).allow(null).optional(),
+      })).min(1).required(),
+    }).validate(req.body)
+    if (error) throw new AppError(error.details[0].message, 422)
+
+    const syId = await resolveSYId(value.sy_id)
+
+    for (const e of value.entries) {
+      enforceGradeScope(req, e.grade_level)
+      if (e.assessment_mode === 'descriptive' && !e.rating_scale) {
+        throw new AppError(`${e.grade_level}: a rating scale is required for descriptive grading.`, 422)
+      }
+    }
+
+    // Changing a scale would orphan ratings recorded on the old one — 'E' is
+    // Excellent under EGFNA but Emerging under ABCDE, so reinterpreting them
+    // silently would turn top marks into failing ones. Block instead.
+    for (const e of value.entries) {
+      const scale = e.assessment_mode === 'descriptive' ? e.rating_scale : null
+      const conflict = await query(
+        `SELECT r.rating_scale, COUNT(*)::int AS n
+           FROM ece_competency_records r
+           JOIN students s ON s.id = r.student_id
+          WHERE r.school_year_id = $1
+            AND s.grade_level = $2
+            AND ($3::text IS NULL OR r.rating_scale <> $3)
+          GROUP BY r.rating_scale`,
+        [syId, e.grade_level, scale]
+      )
+      if (conflict.rows.length) {
+        const detail = conflict.rows.map(c => `${c.n} on ${c.rating_scale}`).join(', ')
+        throw new AppError(
+          `${e.grade_level} already has competency ratings recorded for this school year (${detail}). ` +
+          `Delete or re-rate them before changing the scale — the same letter can mean different things on different scales.`,
+          409
+        )
+      }
+    }
+
+    const saved = await withTransaction(async (client) => {
+      const out = []
+      for (const e of value.entries) {
+        const r = await client.query(
+          `INSERT INTO grade_level_assessment (school_year_id, grade_level, assessment_mode, rating_scale)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (school_year_id, grade_level)
+           DO UPDATE SET assessment_mode = EXCLUDED.assessment_mode,
+                         rating_scale    = EXCLUDED.rating_scale,
+                         updated_at      = NOW()
+           RETURNING grade_level, assessment_mode, rating_scale`,
+          [syId, e.grade_level, e.assessment_mode,
+           e.assessment_mode === 'descriptive' ? e.rating_scale : null]
+        )
+        out.push(r.rows[0])
+      }
+      return out
+    })
+
+    res.json({ message: `Assessment configuration saved for ${saved.length} grade level(s).`, config: saved })
+  } catch (err) { next(err) }
+})
+
+// DELETE /api/curriculum/assessment-config/:grade_level?sy_id=
+// Reverts one grade level to the built-in default.
+router.delete('/assessment-config/:grade_level', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const gradeLevel = req.params.grade_level
+    if (!GRADE_LEVELS.includes(gradeLevel)) throw new AppError('Unknown grade level.', 422)
+    enforceGradeScope(req, gradeLevel)
+    const syId = await resolveSYId(req.query.sy_id)
+    await query(
+      'DELETE FROM grade_level_assessment WHERE school_year_id=$1 AND grade_level=$2',
+      [syId, gradeLevel]
+    )
+    res.json({ message: `${gradeLevel} reverted to the default assessment mode.` })
+  } catch (err) { next(err) }
+})
+
+
+// ════════════════════════════════════════════════════════════
 // SCHOOL YEARS
 // ════════════════════════════════════════════════════════════
 
 router.get('/school-years', async (req, res, next) => {
   try {
     const result = await query(
-      `SELECT id, label, is_active, is_upcoming, start_date, end_date, created_at
+      `SELECT id, label, is_active, is_upcoming, start_date, end_date,
+              period_model, grading_policy, created_at
        FROM school_years ORDER BY label DESC`
     )
     res.json({ school_years: result.rows })
@@ -82,6 +209,9 @@ router.post('/school-years', authorizeSuperAdmin, async (req, res, next) => {
       is_upcoming: Joi.boolean().default(false),
       start_date:  Joi.date().optional().allow(null),
       end_date:    Joi.date().optional().allow(null),
+      // DepEd DO 009 / DO 015, s. 2026 — the grading model is per school year.
+      period_model:   Joi.string().valid('4Q', '3T').default('4Q'),
+      grading_policy: Joi.string().valid('DO8_2015', 'DO15_2026', 'ZERO_BASED').default('DO8_2015'),
       copy_from_id: Joi.string().uuid().optional().allow(null), // copy subjects+sections from this SY
     }).validate(req.body)
     if (error) throw new AppError(error.details[0].message, 422)
@@ -102,9 +232,11 @@ router.post('/school-years', authorizeSuperAdmin, async (req, res, next) => {
     const sy = await withTransaction(async (client) => {
       if (value.is_active) await client.query(`UPDATE school_years SET is_active=FALSE, updated_at=NOW()`)
       const syRes = await client.query(
-        `INSERT INTO school_years (label, is_active, is_upcoming, start_date, end_date)
-         VALUES ($1,$2,$3,$4,$5) RETURNING id, label, is_active, is_upcoming, start_date, end_date, created_at`,
-        [value.label, value.is_active, value.is_upcoming, value.start_date || null, value.end_date || null]
+        `INSERT INTO school_years (label, is_active, is_upcoming, start_date, end_date, period_model, grading_policy)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         RETURNING id, label, is_active, is_upcoming, start_date, end_date, period_model, grading_policy, created_at`,
+        [value.label, value.is_active, value.is_upcoming, value.start_date || null, value.end_date || null,
+         value.period_model, value.grading_policy]
       )
       const newSY = syRes.rows[0]
 
@@ -192,6 +324,8 @@ router.put('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
       is_upcoming: Joi.boolean().optional(),
       start_date:  Joi.date().optional().allow(null),
       end_date:    Joi.date().optional().allow(null),
+      period_model:   Joi.string().valid('4Q', '3T').optional(),
+      grading_policy: Joi.string().valid('DO8_2015', 'DO15_2026', 'ZERO_BASED').optional(),
     }).validate(req.body)
     if (error) throw new AppError(error.details[0].message, 422)
 
@@ -225,6 +359,8 @@ router.put('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
     if (value.is_upcoming !== undefined){ params.push(value.is_upcoming);  sets.push(`is_upcoming=$${params.length}`) }
     if (value.start_date !== undefined) { params.push(value.start_date);  sets.push(`start_date=$${params.length}`) }
     if (value.end_date   !== undefined) { params.push(value.end_date);    sets.push(`end_date=$${params.length}`) }
+    if (value.period_model   !== undefined) { params.push(value.period_model);   sets.push(`period_model=$${params.length}`) }
+    if (value.grading_policy !== undefined) { params.push(value.grading_policy); sets.push(`grading_policy=$${params.length}`) }
     if (!sets.length) throw new AppError('Nothing to update.', 400)
     sets.push('updated_at=NOW()')
     params.push(req.params.id)
@@ -238,7 +374,8 @@ router.put('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
       const r = await client.query(
         `UPDATE school_years SET ${sets.join(',')}
          WHERE id=$${params.length}
-         RETURNING id, label, is_active, is_upcoming, start_date, end_date, created_at`,
+         RETURNING id, label, is_active, is_upcoming, start_date, end_date,
+                   period_model, grading_policy, created_at`,
         params
       )
       if (!r.rows.length) throw new AppError('School year not found.', 404)

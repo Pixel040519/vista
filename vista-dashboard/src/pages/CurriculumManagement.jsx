@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Plus, Pencil, Trash2, BookOpen, LayoutGrid,
   ChevronDown, ChevronRight, X, Check, CalendarDays,
-  ChevronDown as ChevDown, Copy, SlidersHorizontal
+  ChevronDown as ChevDown, Copy, SlidersHorizontal, ClipboardList
 } from 'lucide-react'
 import { curriculumApi } from '../api/client'
 import { LoadingSpinner, Modal } from '../components/UI'
 import GradingConfigModal from '../components/GradingConfigModal'
 import toast from 'react-hot-toast'
+import { PERIOD_MODEL_OPTIONS, GRADING_POLICY_OPTIONS } from '../utils/grading'
 import clsx from 'clsx'
 import { useAuth } from '../context/AuthContext'
 
@@ -30,15 +31,12 @@ const validateSY = (label, start_date, end_date) => {
 }
 
 const GRADE_LEVELS = [
-  'Pre-Nursery','Nursery','Pre-Kinder','Kinder',
+  'Kinder',
   'Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6'
 ]
-const ECE_GRADES = new Set(['Pre-Nursery','Nursery','Pre-Kinder','Kinder'])
+const ECE_GRADES = new Set(['Kinder'])
 
 const GRADE_COLORS = {
-  'Pre-Nursery': { bg:'bg-rose-50',    border:'border-rose-200',    badge:'bg-rose-100 text-rose-700',      dot:'bg-rose-400'    },
-  'Pre-Kinder':  { bg:'bg-fuchsia-50', border:'border-fuchsia-200', badge:'bg-fuchsia-100 text-fuchsia-700', dot:'bg-fuchsia-400' },
-  'Nursery':     { bg:'bg-pink-50',    border:'border-pink-200',    badge:'bg-pink-100 text-pink-700',      dot:'bg-pink-400'    },
   'Kinder':      { bg:'bg-purple-50',  border:'border-purple-200',  badge:'bg-purple-100 text-purple-700',  dot:'bg-purple-400'  },
   'Grade 1':     { bg:'bg-blue-50',    border:'border-blue-200',    badge:'bg-blue-100 text-blue-700',      dot:'bg-blue-400'    },
   'Grade 2':     { bg:'bg-sky-50',     border:'border-sky-200',     badge:'bg-sky-100 text-sky-700',        dot:'bg-sky-400'     },
@@ -291,7 +289,10 @@ function SYSelector({ schoolYears, selectedSY, onSelect, onManage, canManage = t
 
 // ── Create School Year Modal ──────────────────────────────────
 function CreateSYModal({ schoolYears, onClose, onCreate }) {
-  const [form, setForm] = useState({ label:'', start_date:'', end_date:'', copy_from_id:'' })
+  const [form, setForm] = useState({
+    label:'', start_date:'', end_date:'', copy_from_id:'',
+    period_model:'4Q', grading_policy:'DO8_2015',
+  })
   const [copyEnabled, setCopyEnabled] = useState(false)
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
@@ -306,6 +307,8 @@ function CreateSYModal({ schoolYears, onClose, onCreate }) {
         label:       form.label.trim(),
         start_date:  form.start_date || null,
         end_date:    form.end_date   || null,
+        period_model:   form.period_model,
+        grading_policy: form.grading_policy,
         copy_from_id: copyEnabled && form.copy_from_id ? form.copy_from_id : null,
       })
       onClose()
@@ -331,6 +334,33 @@ function CreateSYModal({ schoolYears, onClose, onCreate }) {
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1.5">End Date</label>
           <input type="date" className="input" value={form.end_date} onChange={e => set('end_date', e.target.value)}/>
+        </div>
+      </div>
+
+
+      {/* Grading model — DepEd DO 009 / DO 015, s. 2026 */}
+      <div className="p-4 rounded-xl border-2 border-slate-200 bg-slate-50 space-y-3">
+        <div>
+          <p className="text-sm font-medium text-slate-800">Grading model</p>
+          <p className="text-xs text-slate-500">
+            DepEd moved to three terms and a new transmutation table from SY 2026-2027,
+            then drops transmutation entirely from SY 2027-2028. Each school year keeps
+            its own setting so past years stay reproducible.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Grading periods</label>
+            <select className="input" value={form.period_model} onChange={e => set('period_model', e.target.value)}>
+              {PERIOD_MODEL_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Final grade</label>
+            <select className="input" value={form.grading_policy} onChange={e => set('grading_policy', e.target.value)}>
+              {GRADING_POLICY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
         </div>
       </div>
 
@@ -389,6 +419,8 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
     start_date: sy.start_date ? sy.start_date.split('T')[0] : '',
     end_date:   sy.end_date   ? sy.end_date.split('T')[0]   : '',
     status:     getStatus(sy),
+    period_model:   sy.period_model   || '4Q',
+    grading_policy: sy.grading_policy || 'DO8_2015',
   })
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
@@ -405,6 +437,8 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
         end_date:    form.end_date   || null,
         is_active:   form.status === 'active',
         is_upcoming: form.status === 'upcoming',
+        period_model:   form.period_model,
+        grading_policy: form.grading_policy,
       })
       onClose()
     }
@@ -438,6 +472,33 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
         </select>
       </div>
 
+      {/* Grading model — DepEd DO 009 / DO 015, s. 2026 */}
+      <div className="p-4 rounded-xl border-2 border-slate-200 bg-slate-50 space-y-3">
+        <div>
+          <p className="text-sm font-medium text-slate-800">Grading model</p>
+          <p className="text-xs text-slate-500">
+            DepEd moved to three terms and a new transmutation table from SY 2026-2027,
+            then drops transmutation entirely from SY 2027-2028. Each school year keeps
+            its own setting so past years stay reproducible.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Grading periods</label>
+            <select className="input" value={form.period_model} onChange={e => set('period_model', e.target.value)}>
+              {PERIOD_MODEL_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Final grade</label>
+            <select className="input" value={form.grading_policy} onChange={e => set('grading_policy', e.target.value)}>
+              {GRADING_POLICY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+
       <div className="flex flex-wrap gap-2 pt-1 border-t border-slate-100">
         {!sy.is_active && (
           <button type="button" onClick={() => { onDelete(sy); onClose() }}
@@ -457,6 +518,93 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
 }
 
 // ── Main Page ─────────────────────────────────────────────────
+// ── Assessment mode per grade level ───────────────────────────
+// DO 015, s. 2026 moves KS1 off numeric grading one grade level per year. The
+// schedule is configuration rather than code: NRYS is private (DO 015 only
+// "encourages" adoption), so the school sets its own pace.
+function AssessmentCard({ entry, scales, onSave, onReset }) {
+  const [mode, setMode]   = useState(entry.assessment_mode)
+  const [scale, setScale] = useState(entry.rating_scale || 'EGFNA')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setMode(entry.assessment_mode)
+    setScale(entry.rating_scale || 'EGFNA')
+  }, [entry.assessment_mode, entry.rating_scale, entry.grade_level])
+
+  const dirty = mode !== entry.assessment_mode ||
+    (mode === 'descriptive' && scale !== (entry.rating_scale || 'EGFNA'))
+
+  const activeScale = scales.find(s => s.id === scale)
+
+  const submit = async () => {
+    setSaving(true)
+    try { await onSave(entry.grade_level, mode, mode === 'descriptive' ? scale : null) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <div className="card p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-slate-800">{entry.grade_level}</h3>
+        {entry.configured
+          ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-600 font-medium">configured</span>
+          : <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-400 font-medium">default</span>}
+      </div>
+
+      <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
+        {[['numeric', 'Numeric'], ['descriptive', 'Descriptive']].map(([v, label]) => (
+          <button key={v} type="button" onClick={() => setMode(v)}
+            className={clsx('flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
+              mode === v ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'descriptive' ? (
+        <div className="space-y-2">
+          <label className="block text-xs font-medium text-slate-600">Rating scale</label>
+          <select className="input" value={scale} onChange={e => setScale(e.target.value)}>
+            {scales.map(s => <option key={s.id} value={s.id}>{s.short}</option>)}
+          </select>
+          {activeScale && (
+            <>
+              <p className="text-[11px] text-slate-400">{activeScale.source}</p>
+              <div className="flex flex-wrap gap-1">
+                {activeScale.levels.map(lv => (
+                  <span key={lv.code}
+                    title={lv.description || lv.label}
+                    className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 font-medium">
+                    {lv.code} · {lv.label}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <p className="text-[11px] text-slate-400">
+          Weighted scores in Score Entry, converted by this school year's transmutation table.
+        </p>
+      )}
+
+      <div className="flex items-center gap-2 pt-1">
+        <button type="button" onClick={submit} disabled={!dirty || saving}
+          className={clsx('btn-primary text-xs px-3 py-1.5', (!dirty || saving) && 'opacity-50 cursor-not-allowed')}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        {entry.configured && (
+          <button type="button" onClick={() => onReset(entry.grade_level)}
+            className="text-xs text-slate-400 hover:text-slate-600">
+            Reset to default
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function CurriculumManagement() {
   const { isSuperAdmin, gradeScope } = useAuth()
   const visibleGrades = isSuperAdmin || !gradeScope?.length
@@ -471,6 +619,7 @@ export default function CurriculumManagement() {
   const [showCreate, setShowCreate]     = useState(false)
   const [editSY, setEditSY]             = useState(null)
   const [gradingSubject, setGradingSubject] = useState(null)
+  const [assessment, setAssessment] = useState({ config: [], scales: [] })
 
   // ── Load school years ──────────────────────────────────────
   const fetchSchoolYears = useCallback(async () => {
@@ -487,6 +636,46 @@ export default function CurriculumManagement() {
   }, []) // eslint-disable-line
 
   useEffect(() => { fetchSchoolYears() }, [fetchSchoolYears])
+
+  // ── Assessment configuration for the selected SY ──────────
+  const loadAssessment = useCallback(async (syId) => {
+    if (!syId) { setAssessment({ config: [], scales: [] }); return }
+    try {
+      const res = await curriculumApi.getAssessmentConfig({ sy_id: syId })
+      setAssessment({ config: res.data.config || [], scales: res.data.scales || [] })
+    } catch { setAssessment({ config: [], scales: [] }) }
+  }, [])
+
+  useEffect(() => { loadAssessment(selectedSY?.id) }, [selectedSY?.id, loadAssessment])
+
+  const handleSaveAssessment = async (grade_level, assessment_mode, rating_scale) => {
+    try {
+      await curriculumApi.saveAssessmentConfig({
+        sy_id: selectedSY.id,
+        entries: [{ grade_level, assessment_mode, rating_scale }],
+      })
+      toast.success(`${grade_level} set to ${assessment_mode} assessment.`)
+      await loadAssessment(selectedSY.id)
+    } catch (e) {
+      toast.error(e?.response?.data?.error || 'Failed to save.')
+    }
+  }
+
+  const handleResetAssessment = async (grade_level) => {
+    try {
+      await curriculumApi.resetAssessmentConfig(grade_level, { sy_id: selectedSY.id })
+      toast.success(`${grade_level} reverted to the default.`)
+      await loadAssessment(selectedSY.id)
+    } catch (e) {
+      toast.error(e?.response?.data?.error || 'Failed to reset.')
+    }
+  }
+
+  // A descriptive grade level has no weighted components, so the grading-weights
+  // modal does not apply to it. This used to be keyed on a hardcoded ECE list.
+  const descriptiveGrades = new Set(
+    assessment.config.filter(c => c.assessment_mode === 'descriptive').map(c => c.grade_level)
+  )
 
   // ── Load subjects + sections when SY or tab changes ────────
   const fetchContent = useCallback(async () => {
@@ -600,7 +789,7 @@ export default function CurriculumManagement() {
       <div>
         <h1 className="page-title">Curriculum Management</h1>
         <p className="page-subtitle">
-          Manage subjects and sections for Pre-Nursery through Grade 6
+          Manage subjects and sections for Kinder through Grade 6
         </p>
       </div>
 
@@ -658,6 +847,18 @@ export default function CurriculumManagement() {
           </span>
         </button>
 
+        {/* Assessment tab */}
+        <button onClick={() => setTab('assessment')}
+          className={clsx(
+            'flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all',
+            tab === 'assessment'
+              ? 'bg-brand-500 text-white shadow-md shadow-brand-200'
+              : 'bg-white text-slate-600 border border-slate-200 hover:border-brand-300 hover:text-brand-600'
+          )}>
+          <ClipboardList size={15}/>
+          Assessment
+        </button>
+
       </div>
 
       {/* Hint */}
@@ -686,8 +887,32 @@ export default function CurriculumManagement() {
                 <GradeCard key={grade} grade={grade}
                   items={subjects[grade] || []} type="subject" syId={selectedSY.id}
                   onAdd={handleAddSubject} onSave={handleUpdateSubject} onDelete={handleDeleteSubject}
-                  onGradingConfig={ECE_GRADES.has(grade) ? undefined : setGradingSubject}/>
+                  onGradingConfig={descriptiveGrades.has(grade) ? undefined : setGradingSubject}/>
               ))}
+            </div>
+          )}
+
+          {/* ── Assessment ───────────────────────────────── */}
+          {tab === 'assessment' && (
+            <div className="space-y-4">
+              <div className="card p-4">
+                <p className="text-sm text-slate-600">
+                  How each grade level is assessed in <span className="font-semibold">{selectedSY.label}</span>.
+                  <span className="text-slate-400"> Numeric levels use Score Entry and the transmutation table;
+                  descriptive levels are rated against competencies on the scale you pick.</span>
+                </p>
+                <p className="text-xs text-slate-400 mt-2">
+                  DepEd DO 015, s. 2026 moves Grade 1 to descriptive grading in SY 2026-2027,
+                  Grade 2 in 2027-2028 and Grade 3 in 2028-2029, with Kindergarten on CO / DV / BG throughout.
+                  Private schools are encouraged rather than required to adopt, so the schedule is yours to set.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {assessment.config.map(entry => (
+                  <AssessmentCard key={entry.grade_level} entry={entry} scales={assessment.scales}
+                    onSave={handleSaveAssessment} onReset={handleResetAssessment}/>
+                ))}
+              </div>
             </div>
           )}
 

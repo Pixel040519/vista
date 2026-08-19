@@ -5,16 +5,43 @@ const { query, withTransaction } = require('../config/database')
 const { authenticate, authorize } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
 const { ANY_ADMIN, isAnyAdmin, canManageGrade } = require('../utils/roles')
+const { resolveGradingPolicy } = require('../utils/grading')
 
 router.use(authenticate)
 
-// ── Helper: DepEd transmutation table (DO 8, s. 2015) ────────
-// Converts initial grade (weighted average) to transmuted grade (60–100 scale)
-const transmuteGrade = (initial) => {
-  if (initial >= 100) return 100
-  if (initial >= 60)  return Math.min(99, 75 + Math.floor((initial - 60) / 1.6))
-  if (initial > 0)    return Math.min(74, 60 + Math.floor(initial / 4))
-  return 60
+// ── Helper: resolve the grading policy governing a school year ──
+// Period count and transmutation table are per-SY (DepEd DO 009 / DO 015, s. 2026),
+// so every grade computation resolves them instead of assuming 4 quarters + DO 8.
+const loadSchoolYear = async (syId) => {
+  const res = await query(
+    'SELECT id, label, period_model, grading_policy FROM school_years WHERE id=$1',
+    [syId]
+  )
+  return res.rows[0] || null
+}
+
+// A subject belongs to exactly one school year, so it anchors the policy for
+// every score item and grade computed under it.
+const policyForSubject = async (subjectId, gradeLevel) => {
+  const res = await query(
+    `SELECT sy.id, sy.label, sy.period_model, sy.grading_policy
+       FROM subjects s
+       JOIN school_years sy ON sy.id = s.school_year_id
+      WHERE s.id = $1`,
+    [subjectId]
+  )
+  return resolveGradingPolicy(res.rows[0] || null, gradeLevel)
+}
+
+// The period bound is per-SY, so it cannot live in a DB CHECK or a fixed Joi rule.
+const assertPeriodInRange = (period, policy) => {
+  if (!policy.periods.includes(Number(period))) {
+    const noun = policy.periodNoun.toLowerCase()
+    throw new AppError(
+      `${policy.periodNoun} ${period} is not valid for this school year — it runs ${policy.periodCount} ${noun}s.`,
+      422
+    )
+  }
 }
 
 // ── Helper: verify teacher is assigned to the given subject's class ──
@@ -169,6 +196,9 @@ router.post('/items', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next)
 
     // Verify teacher is assigned to this class/subject
     await verifyTeacherAssignment(req, value.subject_id, value.grade_level, value.section)
+
+    const itemPolicy = await policyForSubject(value.subject_id, value.grade_level)
+    assertPeriodInRange(value.quarter, itemPolicy)
 
     // Verify component exists and belongs to the subject
     const compCheck = await query(
@@ -374,9 +404,11 @@ router.post('/', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
     const studentIds = [...new Set(value.scores.map(s => s.student_id))]
     const sy_id = await resolveSYId(value.sy_id)
 
-    // Get school year label for grades table
-    const syRes = await query('SELECT label FROM school_years WHERE id=$1', [sy_id])
-    const schoolYear = syRes.rows[0]?.label
+    // Get school year label + grading policy for the grades table
+    const syRow = await loadSchoolYear(sy_id)
+    const schoolYear = syRow?.label
+    const policy = resolveGradingPolicy(syRow, value.grade_level)
+    assertPeriodInRange(value.quarter, policy)
 
     // Compute grades for each student
     const categories = await getStructureTree(value.subject_id)
@@ -418,8 +450,8 @@ router.post('/', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
       }
 
       const roundedInitial = Math.round(initialGrade * 100) / 100
-      const transmutedGrade = transmuteGrade(roundedInitial)
-      const remarks = transmutedGrade >= 75 ? 'Passed' : 'Failed'
+      const transmutedGrade = policy.transmute(roundedInitial)
+      const remarks = policy.remarksFor(transmutedGrade)
 
       if (schoolYear) {
         await query(
@@ -447,6 +479,9 @@ router.get('/breakdown', authorize(...ANY_ADMIN, 'teacher'), async (req, res, ne
 
     // Verify teacher is assigned to this class/subject
     await verifyTeacherAssignment(req, subject_id, grade_level, section)
+
+    const policy = await policyForSubject(subject_id, grade_level)
+    assertPeriodInRange(quarter, policy)
 
     const categories = await getStructureTree(subject_id)
 
@@ -503,19 +538,23 @@ router.get('/breakdown', authorize(...ANY_ADMIN, 'teacher'), async (req, res, ne
           const hpsTotal = compItems.reduce((sum, item) => sum + parseFloat(item.highest_possible_score), 0)
           const ps = hpsTotal > 0 ? (total / hpsTotal) * 100 : 0
           const ws = ps * (parseFloat(comp.weight) / 100)
-          return { id: comp.id, name: comp.name, weight: comp.weight, total, hps_total: hpsTotal, ps: Math.round(ps * 100) / 100, ws: Math.round(ws * 100) / 100 }
+          // wsRaw is kept unrounded; ws is the rounded value shown in the UI.
+          return { id: comp.id, name: comp.name, weight: comp.weight, total, hps_total: hpsTotal, ps: Math.round(ps * 100) / 100, ws: Math.round(ws * 100) / 100, wsRaw: ws }
         })
-        const catWs = compBreakdown.reduce((sum, c) => sum + c.ws, 0)
-        return { id: cat.id, name: cat.name, weight: cat.weight, components: compBreakdown, ws: Math.round(catWs * 100) / 100 }
+        const catWsRaw = compBreakdown.reduce((sum, c) => sum + c.wsRaw, 0)
+        return { id: cat.id, name: cat.name, weight: cat.weight, components: compBreakdown.map(({ wsRaw, ...c }) => c), ws: Math.round(catWsRaw * 100) / 100, wsRaw: catWsRaw }
       })
-      const initialGrade = Math.round(catBreakdown.reduce((sum, c) => sum + c.ws, 0) * 100) / 100
-      const transmuted = transmuteGrade(initialGrade)
+      // Sum the UNROUNDED weighted scores. Summing the rounded ones could differ
+      // by a hundredth, which is enough to cross a transmutation band edge and
+      // make this endpoint disagree with the grade POST /api/scores persisted.
+      const initialGrade = Math.round(catBreakdown.reduce((sum, c) => sum + c.wsRaw, 0) * 100) / 100
+      const transmuted = policy.transmute(initialGrade)
       return {
         student,
-        categories: catBreakdown,
+        categories: catBreakdown.map(({ wsRaw, ...c }) => c),
         initial_grade: initialGrade,
         final_grade:   transmuted,
-        remarks:       transmuted >= 75 ? 'Passed' : 'Failed',
+        remarks:       policy.remarksFor(transmuted),
       }
     })
 

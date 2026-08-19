@@ -1,18 +1,14 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { eceApi, curriculumApi } from '../api/client'
+import { resolveGradingPolicy, resolveAssessment } from '../utils/grading'
+import { ratingOptions } from '../utils/ratingUi'
 import { LoadingSpinner } from '../components/UI'
 import { Baby, Save, Info, Plus, Pencil, Trash2, X, Check, ChevronDown, ChevronRight, GripVertical } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
-const QUARTERS = [1, 2, 3, 4]
-const RATINGS = [
-  { value: 'E',  label: 'Excellent',       color: 'bg-emerald-500 text-white border-emerald-600' },
-  { value: 'G',  label: 'Good',            color: 'bg-brand-500 text-white border-brand-600' },
-  { value: 'F',  label: 'Fair',            color: 'bg-amber-500 text-white border-amber-600' },
-  { value: 'NA', label: 'Needs Assistance', color: 'bg-red-500 text-white border-red-600' },
-]
+// Which grade levels are tracked here, and on which rating scale, comes from
+// the school year's assessment configuration — see utils/assessmentConfig.js.
 
 // ── Inline skill add/edit form ────────────────────────────────
 function SkillForm({ initial, onSave, onCancel, saving }) {
@@ -83,6 +79,27 @@ export default function EceCompetency() {
       .catch(() => setAdminSections([]))
   }, [isReadOnly])
 
+  // Which grade levels are tracked here is per (school year, grade level)
+  // configuration, so this must resolve before the class list is built.
+  const [assessmentConfig, setAssessmentConfig] = useState([])
+  useEffect(() => {
+    curriculumApi.getAssessmentConfig()
+      .then(res => setAssessmentConfig(res.data.config || []))
+      .catch(() => setAssessmentConfig([]))
+  }, [])
+
+  const assessmentByGrade = useMemo(() => {
+    const m = new Map()
+    for (const c of assessmentConfig) m.set(c.grade_level, c)
+    return m
+  }, [assessmentConfig])
+
+  const isDescriptive = useCallback(
+    (gradeLevel) =>
+      resolveAssessment(gradeLevel, assessmentByGrade.get(gradeLevel) || null).isDescriptive,
+    [assessmentByGrade]
+  )
+
   const eceClasses = useMemo(() => {
     const seen = new Set()
     const out = []
@@ -90,18 +107,48 @@ export default function EceCompetency() {
       ? adminSections.map(s => ({ grade_level: s.grade_level, section: s.name }))
       : (activeAssignments || [])
     for (const a of source) {
-      if (!ECE_GRADES.includes(a.grade_level)) continue
+      if (!isDescriptive(a.grade_level)) continue
       const key = `${a.grade_level}||${a.section}`
       if (seen.has(key)) continue
       seen.add(key)
       out.push({ grade_level: a.grade_level, section: a.section, key })
     }
     return out
-  }, [isReadOnly, activeAssignments, adminSections])
+  }, [isReadOnly, activeAssignments, adminSections, isDescriptive])
 
   const [selectedClass, setSelectedClass] = useState('')
   const [quarter, setQuarter] = useState(1)
+  const [schoolYears, setSchoolYears] = useState([])
   const [ratingFilter, setRatingFilter] = useState(null) // null | 'E' | 'G' | 'F' | 'NA'
+
+  // Period count is a property of the school year (DepEd DO 009, s. 2026).
+  useEffect(() => {
+    curriculumApi.getSchoolYears()
+      .then(res => setSchoolYears(res.data.school_years || res.data || []))
+      .catch(() => setSchoolYears([]))
+  }, [])
+
+  // The rating buttons and legend follow the selected class's configured scale,
+  // so a Kindergarten class on CO/DV/BG and a Grade 1 class on A-E can coexist.
+  const selectedGradeLevel = selectedClass ? selectedClass.split('||')[0] : ''
+  const selectedScaleId = useMemo(
+    () => resolveAssessment(selectedGradeLevel, assessmentByGrade.get(selectedGradeLevel) || null).scaleId,
+    [selectedGradeLevel, assessmentByGrade]
+  )
+  const RATINGS = useMemo(() => ratingOptions(selectedScaleId), [selectedScaleId])
+
+  // A filter pill from one scale means nothing on another (E is Excellent on
+  // E/G/F/NA but Emerging on A-E), so drop it when the class scale changes.
+  useEffect(() => { setRatingFilter(null) }, [selectedScaleId])
+
+  const grading = useMemo(
+    () => resolveGradingPolicy(schoolYears.find(sy => sy.is_active) || null),
+    [schoolYears]
+  )
+
+  useEffect(() => {
+    if (!grading.periods.includes(quarter)) setQuarter(grading.periods[0])
+  }, [grading.periodModel])
   const [subjects, setSubjects] = useState([])  // subjects for the selected grade level (used as domains)
   const [skills, setSkills] = useState([])
   const [students, setStudents] = useState([])
@@ -353,8 +400,8 @@ export default function EceCompetency() {
         </h2>
         <p className="text-sm text-slate-500 mt-1">
           {isReadOnly
-            ? 'No Pre-Nursery, Nursery, Pre-Kinder, or Kinder sections exist in the active school year.'
-            : 'Competency tracking is available for Pre-Nursery, Nursery, Pre-Kinder, and Kinder teachers.'}
+            ? 'No Kinder sections exist in the active school year.'
+            : 'Competency tracking is available for Kinder teachers.'}
         </p>
       </div>
     )
@@ -404,9 +451,9 @@ export default function EceCompetency() {
           </select>
         </div>
         <div className="w-32">
-          <label className="block text-xs font-medium text-slate-600 mb-1">Quarter</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">{grading.periodNoun}</label>
           <select className="input" value={quarter} onChange={e => setQuarter(Number(e.target.value))}>
-            {QUARTERS.map(q => <option key={q} value={q}>Q{q}</option>)}
+            {grading.periods.map(q => <option key={q} value={q}>{grading.abbr(q)}</option>)}
           </select>
         </div>
         {isReadOnly && (
@@ -449,7 +496,8 @@ export default function EceCompetency() {
         <Info size={14} className="text-slate-400" />
         <span className="text-slate-500 font-medium">Scale:</span>
         {RATINGS.map(r => (
-          <span key={r.value} className={`px-2 py-1 rounded-full border ${r.color} font-semibold`}>
+          <span key={r.value} title={r.description || r.filipino || r.label}
+            className={`px-2 py-1 rounded-full border ${r.color} font-semibold`}>
             {r.value} = {r.label}
           </span>
         ))}
@@ -466,7 +514,7 @@ export default function EceCompetency() {
         ) : !filterHasMatches ? (
           <div className="card p-8 text-center">
             <p className="text-sm text-slate-500">
-              No students with a <span className="font-semibold">{ratingFilter}</span> rating in Q{quarter} for this class.
+              No students with a <span className="font-semibold">{ratingFilter}</span> rating in {grading.abbr(quarter)} for this class.
             </p>
             <button
               type="button"

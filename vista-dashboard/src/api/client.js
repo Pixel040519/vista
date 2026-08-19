@@ -219,4 +219,10 @@ export const curriculumApi = {
   saveGrading:        (subjectId, data) => api.put(`/curriculum/subjects/${subjectId}/grading`, data),
   clearGrading:       (subjectId) => api.delete(`/curriculum/subjects/${subjectId}/grading`),
   checkGradingScores: (subjectId) => api.get(`/curriculum/subjects/${subjectId}/grading/scores-check`),
+  // Assessment mode per (school year, grade level) — numeric vs descriptive
+  // and which rating scale a descriptive level uses.
+  getAssessmentConfig:  (params) => api.get('/curriculum/assessment-config', { params }),
+  saveAssessmentConfig: (data)   => api.put('/curriculum/assessment-config', data),
+  resetAssessmentConfig: (gradeLevel, params) =>
+    api.delete(`/curriculum/assessment-config/${encodeURIComponent(gradeLevel)}`, { params }),
 }

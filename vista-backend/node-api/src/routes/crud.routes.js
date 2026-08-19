@@ -7,6 +7,7 @@ const { query } = require('../config/database');
 const { authenticate, authorize, authorizeAnyAdmin } = require('../middleware/auth.middleware');
 const { AppError } = require('../middleware/error.middleware');
 const { ROLES, ANY_ADMIN, isAnyAdmin, isScopedAdmin, gradeScopeForRole } = require('../utils/roles');
+const { resolveGradingPolicy } = require('../utils/grading');
 const {
   enforceParentLinked,
   getParentLinkedStudentIds,
@@ -24,11 +25,10 @@ function composeFullName(row) {
   return parts.join(' ').trim();
 }
 
-// Grade routes serve elementary only — ECE grade levels (Pre-Nursery–Kinder)
-// use the ECE Competency tracker instead of the grades table. Reject admin_ece
-// to match the pattern where ECE routes reject admin_elem. Parents of linked
-// Grade 1–6 students are allowed (mobile app); parents of ECE students will
-// simply get no rows (ECE kids don't have `grades` entries).
+// Grade routes serve elementary only — Kinder is assessed descriptively and
+// uses the ECE Competency tracker instead of the grades table, so admin_ece is
+// rejected here. Parents of linked Grade 1–6 students are allowed (mobile app);
+// parents of Kinder pupils simply get no rows (they have no `grades` entries).
 const GRADE_ROLES = [ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM, ROLES.TEACHER, ROLES.PARENT];
 
 attendanceRouter.use(authenticate);
@@ -230,34 +230,96 @@ gradeRouter.get('/', enforceParentLinked, async (req, res, next) => {
       params
     );
 
-    // Group by quarter for easy consumption
+    // Group by grading period. The prefix comes from the school year's own
+    // period model (Q1-Q4 for archived years, T1-T3 from SY 2026-2027 on).
+    const syRow = await query(
+      `SELECT id, label, period_model, grading_policy FROM school_years
+        WHERE label = COALESCE($1, (SELECT label FROM school_years WHERE is_active=TRUE LIMIT 1))
+        LIMIT 1`,
+      [school_year || null]
+    );
+    const policy = resolveGradingPolicy(syRow.rows[0] || null);
+
     const byQuarter = result.rows.reduce((acc, row) => {
-      const q = `Q${row.quarter}`;
+      const q = policy.abbr(row.quarter);
       if (!acc[q]) acc[q] = [];
       acc[q].push(row);
       return acc;
     }, {});
 
-    res.json({ grades: result.rows, byQuarter });
+    res.json({
+      grades: result.rows,
+      byQuarter,
+      period_model: policy.periodModel,
+      period_noun: policy.periodNoun,
+      periods: policy.periods,
+    });
   } catch (err) {
     next(err);
   }
 });
 
 // POST /api/grades — Submit grades (batch)
-gradeRouter.post('/', async (req, res, next) => {
+//
+// `grade` and `remarks` are always derived server-side from the submitted
+// initial grade (`score`) using the school year's grading policy. A client may
+// not supply a final grade directly — doing so would bypass the DepEd
+// transmutation table entirely, which is what this endpoint previously allowed.
+gradeRouter.post('/', authorize(ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM, ROLES.TEACHER), async (req, res, next) => {
   try {
-    const { records } = req.body; // [{ student_id, subject_id, quarter, school_year, score, grade }]
+    const { records } = req.body; // [{ student_id, subject_id, quarter, school_year, score }]
+    if (!Array.isArray(records) || !records.length) {
+      throw new AppError('records must be a non-empty array.', 422);
+    }
+
+    // Resolve each distinct school year once.
+    const policyCache = new Map();
+    const policyFor = async (label) => {
+      const key = label || '__active__';
+      if (policyCache.has(key)) return policyCache.get(key);
+      const syRes = await query(
+        `SELECT id, label, period_model, grading_policy FROM school_years
+          WHERE label = COALESCE($1, (SELECT label FROM school_years WHERE is_active=TRUE LIMIT 1))
+          LIMIT 1`,
+        [label || null]
+      );
+      if (!syRes.rows.length) throw new AppError(`Unknown school year "${label}".`, 422);
+      const resolved = { row: syRes.rows[0], policy: resolveGradingPolicy(syRes.rows[0]) };
+      policyCache.set(key, resolved);
+      return resolved;
+    };
 
     const inserted = [];
     for (const r of records) {
+      if (!r.student_id || !r.subject_id) {
+        throw new AppError('student_id and subject_id are required on every record.', 422);
+      }
+      const initial = Number(r.score);
+      if (!Number.isFinite(initial) || initial < 0 || initial > 100) {
+        throw new AppError('score must be a number between 0 and 100.', 422);
+      }
+
+      const { row: syRow, policy } = await policyFor(r.school_year);
+      const period = Number(r.quarter);
+      if (!policy.periods.includes(period)) {
+        throw new AppError(
+          `${policy.periodNoun} ${r.quarter} is not valid for SY ${syRow.label} — it runs ${policy.periodCount} ${policy.periodNoun.toLowerCase()}s.`,
+          422
+        );
+      }
+
+      const rounded = Math.round(initial * 100) / 100;
+      const finalGrade = policy.transmute(rounded);
+      const remarks = policy.remarksFor(finalGrade);
+
       const result = await query(
-        `INSERT INTO grades (student_id, subject_id, quarter, school_year, score, grade, recorded_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO grades (student_id, subject_id, quarter, school_year, score, grade, remarks, recorded_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (student_id, subject_id, quarter, school_year)
-         DO UPDATE SET score = EXCLUDED.score, grade = EXCLUDED.grade, updated_at = NOW()
+         DO UPDATE SET score = EXCLUDED.score, grade = EXCLUDED.grade,
+                       remarks = EXCLUDED.remarks, updated_at = NOW()
          RETURNING *`,
-        [r.student_id, r.subject_id, r.quarter, r.school_year, r.score, r.grade, req.user.id]
+        [r.student_id, r.subject_id, period, syRow.label, rounded, finalGrade, remarks, req.user.id]
       );
       inserted.push(result.rows[0]);
     }

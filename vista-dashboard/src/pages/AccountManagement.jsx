@@ -13,7 +13,7 @@ import { ROLES, ROLE_LABELS } from '../utils/roles'
 
 // ── School Data ───────────────────────────────────────────────
 const GRADE_LEVELS = [
-  'Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder',
+  'Kinder',
   'Grade 1', 'Grade 2', 'Grade 3',
   'Grade 4', 'Grade 5', 'Grade 6',
 ]
@@ -615,7 +615,7 @@ function AdminForm({ initial, onSubmit, onClose, mode }) {
               onChange={e => setField('role', e.target.value)}
               disabled={mode === 'edit' && initial?.role === ROLES.SUPER_ADMIN}
               required>
-              <option value={ROLES.ADMIN_ECE}>{ROLE_LABELS[ROLES.ADMIN_ECE]} (Pre-Nursery – Kinder)</option>
+              <option value={ROLES.ADMIN_ECE}>{ROLE_LABELS[ROLES.ADMIN_ECE]} (Kinder)</option>
               <option value={ROLES.ADMIN_ELEM}>{ROLE_LABELS[ROLES.ADMIN_ELEM]} (Grade 1 – Grade 6)</option>
               {mode === 'edit' && initial?.role === ROLES.SUPER_ADMIN && (
                 <option value={ROLES.SUPER_ADMIN}>{ROLE_LABELS[ROLES.SUPER_ADMIN]}</option>

@@ -154,7 +154,7 @@ export default function AdminDashboard() {
                 <div>
                   <h3 className="text-sm font-semibold text-slate-800">Risk Distribution</h3>
                   <p className="text-xs text-slate-400">
-                    {role === 'admin_ece' ? 'Pre-Nursery – Kinder'
+                    {role === 'admin_ece' ? 'Kinder'
                       : role === 'admin_elem' ? 'Grade 1 – Grade 6'
                       : 'All students'}
                   </p>

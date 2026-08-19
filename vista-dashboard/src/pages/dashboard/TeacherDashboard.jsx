@@ -10,7 +10,7 @@ import { StatCard, LoadingSpinner } from '../../components/UI'
 import { useAuth } from '../../context/AuthContext'
 import EceCompetencyCard from './EceCompetencyCard'
 
-const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
+const ECE_GRADES = ['Kinder']
 
 const SENTIMENT_DOT = {
   Positive: 'bg-emerald-500',

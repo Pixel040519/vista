@@ -251,6 +251,7 @@ export function Attendance() {
 // GRADES PAGE
 // ============================================================
 import { gradesApi, scoreApi } from '../api/client'
+import { resolveGradingPolicy, finalGradeFrom } from '../utils/grading'
 import { BookOpen, Filter } from 'lucide-react'
 import { Fragment } from 'react'
 import clsx from 'clsx'
@@ -356,6 +357,10 @@ export function Grades() {
   // ── Resolve SY label ──────────────────────────────────────
   const selectedSY = schoolYears.find(sy => sy.id === syId)
   const syLabel = selectedSY?.label || ''
+
+  // Period count and grading policy come from the school year itself, so an
+  // archived four-quarter year and a current three-term one both render right.
+  const grading = resolveGradingPolicy(selectedSY || null, gradeLevel)
   const syStatusChip = selectedSY
     ? (selectedSY.is_active
         ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">active</span>
@@ -374,6 +379,11 @@ export function Grades() {
       .catch(() => setData(null))
       .finally(() => setLoading(false))
   }, [subjectId, gradeLevel, section, syLabel])
+
+  // Reset the selected period when the school year's period model changes.
+  useEffect(() => {
+    if (!grading.periods.includes(classQuarter)) setClassQuarter(grading.periods[0])
+  }, [grading.periodModel])
 
   // ── Fetch breakdown for Class Record tab ───────────────────
   useEffect(() => {
@@ -527,10 +537,9 @@ export function Grades() {
                       <tr>
                         <th className="whitespace-nowrap w-10 text-center">#</th>
                         <th className="whitespace-nowrap">Name of Students</th>
-                        <th className="whitespace-nowrap text-center">1st</th>
-                        <th className="whitespace-nowrap text-center">2nd</th>
-                        <th className="whitespace-nowrap text-center">3rd</th>
-                        <th className="whitespace-nowrap text-center">4th</th>
+                        {grading.ordinals.map(o => (
+                          <th key={o} className="whitespace-nowrap text-center">{o}</th>
+                        ))}
                         <th className="whitespace-nowrap text-center">AVE</th>
                         <th className="whitespace-nowrap text-center">Remarks</th>
                       </tr>
@@ -539,16 +548,15 @@ export function Grades() {
                       {genderGroups.map(group => (
                         <Fragment key={group.label}>
                           <tr>
-                            <td colSpan={8} className="bg-slate-50 px-5 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-widest border-y border-slate-200">
+                            <td colSpan={grading.periodCount + 4} className="bg-slate-50 px-5 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-widest border-y border-slate-200">
                               {group.label}
                             </td>
                           </tr>
                           {group.students.map((student, idx) => {
                             const sg = data.grades[student.id] || {}
-                            const quarters = [1,2,3,4].map(q => sg[q]?.grade != null ? Number(sg[q].grade) : null)
-                            const available = quarters.filter(g => g !== null)
-                            const avg = available.length ? available.reduce((a,b) => a+b, 0) / available.length : null
-                            const passed = avg !== null && avg >= 75
+                            const quarters = grading.periods.map(q => sg[q]?.grade != null ? Number(sg[q].grade) : null)
+                            const avg = finalGradeFrom(quarters)
+                            const passed = avg !== null && avg >= grading.passingGrade
                             return (
                               <tr key={student.id} className="hover:bg-slate-50/60">
                                 <td className="text-xs text-slate-400 text-center">{idx + 1}</td>
@@ -559,7 +567,7 @@ export function Grades() {
                                   </td>
                                 ))}
                                 <td className="text-left font-mono text-sm font-bold" style={{ color: avg !== null && avg < 75 ? '#ef4444' : avg !== null ? '#0d9488' : '#cbd5e1' }}>
-                                  {avg !== null ? avg.toFixed(2) : '—'}
+                                  {avg !== null ? avg : '—'}
                                 </td>
                                 <td className="text-left">
                                   {avg !== null ? (
@@ -584,8 +592,8 @@ export function Grades() {
             <>
               {/* Quarter selector */}
               <div className="px-5 pt-4 pb-3 border-b border-slate-200 flex items-center gap-2">
-                <span className="text-xs font-medium text-slate-500 mr-1">Quarter:</span>
-                {[1, 2, 3, 4].map(q => (
+                <span className="text-xs font-medium text-slate-500 mr-1">{grading.periodNoun}:</span>
+                {grading.periods.map(q => (
                   <button key={q} onClick={() => setClassQuarter(q)}
                     className={clsx('px-3 py-1 rounded-full text-xs font-medium transition-colors',
                       classQuarter === q

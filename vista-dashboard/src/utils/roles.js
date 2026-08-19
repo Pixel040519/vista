@@ -1,4 +1,4 @@
-export const ECE_GRADES  = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
+export const ECE_GRADES  = ['Kinder']
 export const ELEM_GRADES = ['Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6']
 export const ALL_GRADES  = [...ECE_GRADES, ...ELEM_GRADES]
 

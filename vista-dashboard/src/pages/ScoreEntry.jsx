@@ -9,16 +9,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
-
-const QUARTERS = [1, 2, 3, 4]
-
-// DepEd transmutation table (DO 8, s. 2015)
-const transmuteGrade = (initial) => {
-  if (initial >= 100) return 100
-  if (initial >= 60)  return Math.min(99, 75 + Math.floor((initial - 60) / 1.6))
-  if (initial > 0)    return Math.min(74, 60 + Math.floor(initial / 4))
-  return 60
-}
+import { resolveGradingPolicy, DO15_2026_BANDS, DO15_2026_DESCRIPTORS } from '../utils/grading'
 
 // ── Score reducer ──────────────────────────────────────────
 // State: { [score_item_id]: { [student_id]: number|null } }
@@ -68,6 +59,15 @@ export default function ScoreEntry() {
 
   // Derive gradeLevel and section from selectedClass
   const [gradeLevel, section] = selectedClass ? selectedClass.split('|||') : ['', '']
+
+  // ── Grading policy for the selected school year ───────────
+  // Period count and transmutation table are per-SY (DepEd DO 009 / DO 015,
+  // s. 2026), so both are resolved here rather than hardcoded.
+  const selectedSY = schoolYears.find(sy => sy.id === syId) || null
+  const grading = useMemo(
+    () => resolveGradingPolicy(selectedSY, gradeLevel),
+    [selectedSY, gradeLevel]
+  )
 
   // Derive unique class (grade_level + section) options from teacher assignments
   const activeSYLabel = schoolYears.find(sy => sy.id === syId)?.label || ''
@@ -119,6 +119,12 @@ export default function ScoreEntry() {
       if (active) setSyId(active.id)
     }).catch(() => {})
   }, [])
+
+  // A period persisted from a four-quarter year is not valid in a three-term
+  // one — clear it rather than silently querying a period that cannot exist.
+  useEffect(() => {
+    if (quarter && !grading.periods.includes(Number(quarter))) setQuarter('')
+  }, [grading.periodModel])
 
   // ── Auto-select first class if none selected ──────────────
   useEffect(() => {
@@ -373,7 +379,7 @@ export default function ScoreEntry() {
   // ── Subject name lookup ───────────────────────────────────
   const subjectName = subjects.find(s => s.id === subjectId)?.name || ''
   const syLabel = activeSYLabel
-  const quarterLabels = { 1: 'FIRST GRADING', 2: 'SECOND GRADING', 3: 'THIRD GRADING', 4: 'FOURTH GRADING' }
+  const periodSheetLabel = grading.sheetLabels[Number(quarter) - 1] || ''
 
   // ── Excel export ──────────────────────────────────────────
   const exportToExcel = async () => {
@@ -413,7 +419,7 @@ export default function ScoreEntry() {
     const headerTexts = [
       'NORTHERN RIZAL YORKLIN SCHOOL',
       `SCHOOL YEAR: ${syLabel}`,
-      quarterLabels[quarter] || '',
+      periodSheetLabel,
       `SUBJECT: ${subjectName.toUpperCase()}`,
     ]
     for (let r = 0; r < headerTexts.length; r++) {
@@ -519,6 +525,33 @@ export default function ScoreEntry() {
 
     // ── Student rows (gender-grouped) ─────────────────────
     const ec = (c) => XLSX.utils.encode_col(c) // column index to letter
+
+    // ── Grading-policy driven formulas ──────────────────────
+    // DO 8's table is a closed form and stays a nested IF so exports of
+    // archived school years are unchanged. DO 015's is a 41-band lookup, which
+    // no nested IF can express, so it reads from a hidden _TRANSMUTE sheet.
+    const LOOKUP_SHEET = '_TRANSMUTE'
+    const needsLookupSheet = grading.policy === 'DO15_2026'
+
+    const finalGradeFormula = (inCell) => {
+      if (grading.policy === 'ZERO_BASED') return `ROUND(${inCell},0)`
+      if (grading.policy === 'DO15_2026') {
+        const last = DO15_2026_BANDS.length + 1 // header row offset
+        return `LOOKUP(${inCell},${LOOKUP_SHEET}!$A$2:$A$${last},${LOOKUP_SHEET}!$B$2:$B$${last})`
+      }
+      return `IF(${inCell}>=100,100,IF(${inCell}>=60,MIN(99,75+INT((${inCell}-60)/1.6)),IF(${inCell}>0,MIN(74,60+INT(${inCell}/4)),60)))`
+    }
+
+    const remarksFormula = (fCell) => {
+      if (!grading.descriptorFor) return `IF(${fCell}>=${grading.passingGrade},"Passed","Failed")`
+      // Nested IF over the five DO 015 Table 11 descriptor bands.
+      const bands = DO15_2026_DESCRIPTORS
+      let expr = `"${bands[bands.length - 1].label}"`
+      for (let i = bands.length - 2; i >= 0; i--) {
+        expr = `IF(${fCell}>=${bands[i].min},"${bands[i].label}",${expr})`
+      }
+      return expr
+    }
     const hpsRowNum = headerStartRow + 3 + 1   // 1-indexed Excel row for HPS
 
     const buildStudentRow = (student, num) => {
@@ -563,18 +596,18 @@ export default function ScoreEntry() {
 
       // Compute initial values for styling
       const initGrade = computeStudentGrade(student.id)
-      const transmuted = transmuteGrade(initGrade)
-      const passed = transmuted >= 75
+      const transmuted = grading.transmute(initGrade)
+      const passed = transmuted >= grading.passingGrade
 
       // IN = SUM of all WS cells
       const inRef = ec(inCol)
       const fRef = ec(fCol)
       row[inCol] = { v: '', s: centerBold, f: wsCols.length ? `ROUND(${wsCols.join('+')},2)` : '0' }
-      // F = DepEd transmutation formula
+      // F = final grade, per this school year's grading policy
       const passedS = { ...centerBold, font: { bold: true, sz: 9 }, fill: { fgColor: { rgb: passed ? '92D050' : 'FF0000' } } }
-      row[fCol] = { v: '', s: passedS, f: `IF(${inRef}${rowNum}>=100,100,IF(${inRef}${rowNum}>=60,MIN(99,75+INT((${inRef}${rowNum}-60)/1.6)),IF(${inRef}${rowNum}>0,MIN(74,60+INT(${inRef}${rowNum}/4)),60)))` }
+      row[fCol] = { v: '', s: passedS, f: finalGradeFormula(`${inRef}${rowNum}`) }
       // Remark
-      row[remCol] = { v: '', s: { ...centerBold, fill: { fgColor: { rgb: passed ? '92D050' : 'FF0000' } }, font: { bold: true, sz: 9, color: { rgb: passed ? '006100' : 'FFFFFF' } } }, f: `IF(${fRef}${rowNum}>=75,"Passed","Failed")` }
+      row[remCol] = { v: '', s: { ...centerBold, fill: { fgColor: { rgb: passed ? '92D050' : 'FF0000' } }, font: { bold: true, sz: 9, color: { rgb: passed ? '006100' : 'FFFFFF' } } }, f: remarksFormula(`${fRef}${rowNum}`) }
       return row
     }
 
@@ -657,6 +690,23 @@ export default function ScoreEntry() {
 
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Scores')
+
+    if (needsLookupSheet) {
+      // LOOKUP needs its lookup vector in ascending order, so the bands are
+      // reversed here (they are stored highest-first for top-down scanning).
+      const lookupRows = [
+        ['INITIAL_GRADE_MIN', 'TRANSMUTED'],
+        ...[...DO15_2026_BANDS].reverse().map(b => [b.min, b.grade]),
+      ]
+      const lookupWs = XLSX.utils.aoa_to_sheet(lookupRows)
+      XLSX.utils.book_append_sheet(wb, lookupWs, LOOKUP_SHEET)
+      // Hidden so the class record still reads as a single-sheet document.
+      const sheetMeta = wb.Workbook?.Sheets || []
+      wb.Workbook = wb.Workbook || {}
+      wb.Workbook.Sheets = sheetMeta
+      sheetMeta[wb.SheetNames.indexOf(LOOKUP_SHEET)] = { Hidden: 1 }
+    }
+
     XLSX.writeFile(wb, `${subjectName}_${gradeLevel}_${section}.xlsx`)
     toast.success('Excel file exported.')
   }
@@ -717,10 +767,12 @@ export default function ScoreEntry() {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Quarter</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1">{grading.periodNoun}</label>
             <select className="input" value={quarter} onChange={e => setQuarter(e.target.value)}>
-              <option value="">Quarter</option>
-              {QUARTERS.map(q => <option key={q} value={q}>Quarter {q}</option>)}
+              <option value="">{grading.periodNoun}</option>
+              {grading.periods.map(q => (
+                <option key={q} value={q}>{grading.label(q)}</option>
+              ))}
             </select>
           </div>
         </div>
@@ -917,8 +969,8 @@ export default function ScoreEntry() {
                         </tr>
                         {group.map((student, idx) => {
                           const initialGrade = computeStudentGrade(student.id)
-                          const transmuted = transmuteGrade(initialGrade)
-                          const passed = transmuted >= 75
+                          const transmuted = grading.transmute(initialGrade)
+                          const passed = transmuted >= grading.passingGrade
                           return (
                             <tr key={student.id} className="hover:bg-slate-50/50 transition-colors">
                               <td className="whitespace-nowrap sticky left-0 z-10 bg-white px-5 py-2.5">
@@ -969,7 +1021,7 @@ export default function ScoreEntry() {
           <div className="space-y-3">
             <p className="text-xs text-slate-500">
               Define the individual assessments (e.g. Quiz 1, Quiz 2) and their highest possible scores for{' '}
-              <strong>{subjectName}</strong> — Quarter {quarter}.
+              <strong>{subjectName}</strong> — {grading.label(quarter)}.
             </p>
 
             {editItems.map((item, idx) => (

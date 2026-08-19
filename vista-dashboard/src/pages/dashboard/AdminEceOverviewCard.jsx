@@ -3,16 +3,9 @@ import { Link } from 'react-router-dom'
 import { Sparkles, ChevronRight } from 'lucide-react'
 import { eceApi } from '../../api/client'
 
-const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
+const ECE_GRADES = ['Kinder']
 
-const RATING_COLORS = {
-  E:  'bg-emerald-500',
-  G:  'bg-brand-500',
-  F:  'bg-amber-500',
-  NA: 'bg-red-400',
-}
-
-const RATING_LABELS = { E: 'Excellent', G: 'Good', F: 'Fair', NA: 'Needs Asst.' }
+import { RATING_BAR_CLASSES } from '../../utils/ratingUi'
 
 export default function AdminEceOverviewCard() {
   const [data, setData] = useState(null)
@@ -39,8 +32,8 @@ export default function AdminEceOverviewCard() {
     grade_level: gl, class_count: 0, student_count: 0,
     rated_cells: 0, total_cells: 0, completion_pct: 0,
   }))
-  const dist = data?.rating_distribution || { E: 0, G: 0, F: 0, NA: 0 }
-  const ratingTotal = dist.E + dist.G + dist.F + dist.NA
+  const distributions = data?.distributions || []
+  const ratingTotal = distributions.reduce((a, d) => a + d.total, 0)
   const quarter = data?.quarter || 1
   const hasAnyRecords = byGradeLevel.some(g => g.rated_cells > 0)
 
@@ -112,27 +105,34 @@ export default function AdminEceOverviewCard() {
             })}
           </div>
 
-          {/* School-wide rating distribution */}
           {ratingTotal > 0 && (
             <div className="pt-3 border-t border-slate-100">
               <p className="text-[11px] text-slate-400 mb-2 font-medium">School-wide rating distribution</p>
-              <div className="flex h-2 rounded-full overflow-hidden bg-slate-100 mb-2">
-                {['E', 'G', 'F', 'NA'].map(r => dist[r] > 0 && (
-                  <div
-                    key={r}
-                    className={RATING_COLORS[r]}
-                    style={{ width: `${(dist[r] / ratingTotal) * 100}%` }}
-                  />
-                ))}
-              </div>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
-                {['E', 'G', 'F', 'NA'].map(r => (
-                  <span key={r} className="inline-flex items-center gap-1.5">
-                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${RATING_COLORS[r]}`} />
-                    {RATING_LABELS[r]} <span className="font-semibold text-slate-700">{dist[r]}</span>
-                  </span>
-                ))}
-              </div>
+              {/* Rating distribution — one bar per scale in play, since a school year
+                  can mix scales (Kindergarten on CO/DV/BG, Grade 1 on A-E). */}
+              {distributions.filter(d => d.total > 0).map(d => (
+                <div key={d.scale_id} className={distributions.length > 1 ? 'mt-3 first:mt-0' : ''}>
+                  {(distributions.length > 1 || false) && (
+                    <p className="text-[11px] text-slate-400 mb-2 font-medium">
+                      {d.short}
+                    </p>
+                  )}
+                  <div className="flex h-2 rounded-full overflow-hidden bg-slate-100 mb-2">
+                    {d.levels.map(lv => (d.counts[lv.code] || 0) > 0 && (
+                      <div key={lv.code} className={RATING_BAR_CLASSES[lv.color] || 'bg-slate-400'}
+                        style={{ width: `${((d.counts[lv.code] || 0) / d.total) * 100}%` }} />
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                    {d.levels.map(lv => (
+                      <span key={lv.code} className="inline-flex items-center gap-1.5" title={lv.label}>
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${RATING_BAR_CLASSES[lv.color] || 'bg-slate-400'}`} />
+                        {lv.code} <span className="font-semibold text-slate-700">{d.counts[lv.code] || 0}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </>

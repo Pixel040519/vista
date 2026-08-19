@@ -97,7 +97,7 @@ export default function AttendanceDetailModal({ open, onClose, filter = 'present
     }
 
     // Sort and convert to array structure
-    const gradeOrder = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder',
+    const gradeOrder = ['Kinder',
       'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6']
     const grouped = [...gradeMap.entries()]
       .sort((a, b) => gradeOrder.indexOf(a[0]) - gradeOrder.indexOf(b[0]))

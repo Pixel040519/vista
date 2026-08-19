@@ -14,7 +14,7 @@ import clsx from 'clsx'
 import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
 
 // ── School constants ──────────────────────────────────────────
-const GRADE_LEVELS = ['Pre-Nursery','Nursery','Pre-Kinder','Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
+const GRADE_LEVELS = ['Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
 
 // Sections loaded dynamically from API per grade level
 

@@ -44,6 +44,9 @@ const authorizeAdminOrTeacher = authorize(...ANY_ADMIN, ROLES.TEACHER);
 function enforceGradeScope(req, gradeLevel) {
   if (!canManageGrade(req.user?.role, gradeLevel)) {
     const err = new Error(`Access denied. Grade '${gradeLevel}' is outside your scope.`);
+    // errorHandler reads `statusCode`; setting only `status` made every
+    // out-of-scope rejection surface as a 500 instead of a 403.
+    err.statusCode = 403;
     err.status = 403;
     throw err;
   }

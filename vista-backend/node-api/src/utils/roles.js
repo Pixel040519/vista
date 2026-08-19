@@ -2,13 +2,13 @@
 //
 // Roles:
 //   super_admin    — school-wide access (was 'admin' pre-split).
-//   admin_ece      — scoped to Pre-Nursery..Kinder.
+//   admin_ece      — scoped to Kinder.
 //   admin_elem     — scoped to Grade 1..Grade 6.
 //   teacher        — scoped via teacher_assignments.
 //   parent         — scoped via parent_student.
 //   security_guard — school-wide, read-only, gate use (vista_guard mobile app).
 
-const ECE_GRADES  = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder'];
+const ECE_GRADES  = ['Kinder'];
 const ELEM_GRADES = ['Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6'];
 const ALL_GRADES  = [...ECE_GRADES, ...ELEM_GRADES];
 

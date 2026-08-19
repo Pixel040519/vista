@@ -5,6 +5,8 @@ const { authenticate, authorize, authorizeAnyAdmin } = require('../middleware/au
 const { AppError } = require('../middleware/error.middleware');
 const { query } = require('../config/database');
 const { ROLES, ANY_ADMIN, gradeScopeForRole, isScopedAdmin } = require('../utils/roles');
+const { ratingScale, bandDistribution, resolveAssessment } = require('../utils/grading');
+const { loadAssessmentRows } = require('../utils/assessmentConfig');
 
 router.use(authenticate);
 
@@ -31,17 +33,10 @@ const bandBehavior = (sentiment, count) =>
   : 'urgent';
 // ECE band: uses the rating distribution for the latest quarter's records.
 // Distinct from bandAcademic because ECE learners have no numeric grades.
-const bandCompetency = (dist, totalSkills) => {
-  const rated = (dist.E||0)+(dist.G||0)+(dist.F||0)+(dist.NA||0);
-  if (totalSkills === 0 || rated === 0) return 'insufficient';
-  const completion = rated / totalSkills;
-  if (completion < 0.3) return 'insufficient';
-  const naPct = (dist.NA||0) / rated;
-  const fPct  = (dist.F||0)  / rated;
-  if (naPct > 0.3) return 'urgent';
-  if ((dist.NA||0) > 0 || fPct > 0.4) return 'watch';
-  return 'ok';
-};
+// Delegates to utils/grading's scale-aware banding. The rules are unchanged —
+// what was hardcoded as "NA" is simply the scale's worst level and "F" its
+// second worst, so E/G/F/NA results are identical to the previous version.
+const bandCompetency = (dist, totalSkills, scaleId) => bandDistribution(dist, totalSkills, scaleId);
 const overallBand = (bands) => {
   const active = bands.filter(b => b !== 'insufficient');
   if (active.length === 0) return 'insufficient';
@@ -440,7 +435,7 @@ router.get('/class-health', authorize('teacher'), async (req, res, next) => {
 });
 
 // ─── GET /api/ai/ece-class-health ─────────────────────────────
-// ECE-equivalent of /class-health for Pre-Nursery → Kinder learners.
+// Competency-based equivalent of /class-health for descriptively-assessed learners.
 // Because ECE has no numeric grades, the academic tile is replaced by a
 // Competency tile banded on the rating mix (E/G/F/NA) for the student's
 // latest quarter with records. Attendance + Behavior tiles reuse the same
@@ -458,17 +453,25 @@ router.get('/ece-class-health', authorize(...ANY_ADMIN, 'teacher'), async (req, 
     const sy = syRes.rows[0];
     if (!sy) throw new AppError('No active school year set.', 400);
 
-    // 2. Student + ECE check
-    const ECE = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder'];
+    // 2. Student + descriptive-assessment check
     const stRes = await query(
       `SELECT id, grade_level, section FROM students WHERE id = $1 AND is_active = TRUE`,
       [student_id]
     );
     if (!stRes.rows.length) throw new AppError('Student not found.', 404);
     const st = stRes.rows[0];
-    if (!ECE.includes(st.grade_level)) {
-      throw new AppError('This endpoint is only for ECE learners.', 400);
+    // Which learners have competency records is configuration now (DO 015 moves
+    // Grade 1 onto descriptive grading), so resolve it rather than assuming ECE.
+    const assessmentRows = await loadAssessmentRows(sy.id);
+    const stAssessment = resolveAssessment(st.grade_level, assessmentRows.get(st.grade_level) || null);
+    if (!stAssessment.isDescriptive) {
+      throw new AppError(
+        `${st.grade_level} is assessed numerically this school year — use /class-health instead.`,
+        400
+      );
     }
+    const stScaleId = stAssessment.scaleId;
+    const emptyDist = () => ratingScale(stScaleId).emptyDistribution();
 
     // 3. Teacher scope (role=teacher → restrict to subjects they teach for this class)
     let teacherSubjectNames = null;
@@ -528,34 +531,33 @@ router.get('/ece-class-health', authorize(...ANY_ADMIN, 'teacher'), async (req, 
         [student_id, sy.id, latestQ]
       );
       for (const row of ratingRes.rows) {
-        const d = perSubjectDist.get(row.subject_id) || { E: 0, G: 0, F: 0, NA: 0 };
-        d[row.rating] = row.n;
+        const d = perSubjectDist.get(row.subject_id) || emptyDist();
+        if (Object.prototype.hasOwnProperty.call(d, row.rating)) d[row.rating] = row.n;
         perSubjectDist.set(row.subject_id, d);
       }
     }
 
     // Build per-subject entries + aggregate totals.
     const BAND_SORT = { urgent: 0, watch: 1, insufficient: 2, ok: 3 };
-    const overallDist = { E: 0, G: 0, F: 0, NA: 0 };
+    const overallDist = emptyDist();
     const per_subject = subjectTotals.map(s => {
-      const dist = perSubjectDist.get(s.subject_id) || { E: 0, G: 0, F: 0, NA: 0 };
-      const rated = dist.E + dist.G + dist.F + dist.NA;
-      overallDist.E += dist.E; overallDist.G += dist.G;
-      overallDist.F += dist.F; overallDist.NA += dist.NA;
+      const dist = perSubjectDist.get(s.subject_id) || emptyDist();
+      const rated = Object.values(dist).reduce((a, b) => a + b, 0);
+      for (const code of Object.keys(overallDist)) overallDist[code] += dist[code] || 0;
       return {
         subject_id:   s.subject_id,
         subject_name: s.subject_name,
         rated,
         total_skills: s.total_skills,
         distribution: dist,
-        band:         bandCompetency(dist, s.total_skills),
+        band:         bandCompetency(dist, s.total_skills, stScaleId),
       };
     }).sort((a, b) =>
       (BAND_SORT[a.band] - BAND_SORT[b.band]) ||
       a.subject_name.localeCompare(b.subject_name)
     );
 
-    const overallRated      = overallDist.E + overallDist.G + overallDist.F + overallDist.NA;
+    const overallRated      = Object.values(overallDist).reduce((a, b) => a + b, 0);
     const overallCompletion = totalSkills > 0 ? overallRated / totalSkills : 0;
     const competency = {
       quarter:      latestQ,
@@ -563,7 +565,9 @@ router.get('/ece-class-health', authorize(...ANY_ADMIN, 'teacher'), async (req, 
       total_skills: totalSkills,
       completion:   Math.round(overallCompletion * 10000) / 10000,
       distribution: overallDist,
-      band:         bandCompetency(overallDist, totalSkills),
+      band:         bandCompetency(overallDist, totalSkills, stScaleId),
+      rating_scale: stScaleId,
+      scale:        ratingScale(stScaleId),
       per_subject,
     };
 
@@ -800,7 +804,12 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
     }
 
     // Seed a per-student accumulator so groups can drop their results in.
-    const ECE_GRADE_LEVELS = new Set(['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']);
+    // Which learners are assessed descriptively is per (school year, grade
+    // level) configuration — DO 015 moves Grade 1 onto descriptive grading
+    // while it remains an elementary class.
+    const bulkAssessmentRows = await loadAssessmentRows(syId);
+    const assessmentFor = (gl) => resolveAssessment(gl, bulkAssessmentRows.get(gl) || null);
+    const isDescriptiveGrade = (gl) => assessmentFor(gl).isDescriptive;
     const byId = new Map();
     for (const s of students) {
       const full_name = [s.surname, ','].join('') + ' ' + s.first_name +
@@ -810,7 +819,11 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
         full_name,
         grade_level: s.grade_level,
         section:     s.section,
-        is_ece:      ECE_GRADE_LEVELS.has(s.grade_level),
+        // `is_ece` is retained as the wire name existing clients read; it now
+        // means "assessed descriptively", which is what it always implied.
+        is_ece:      isDescriptiveGrade(s.grade_level),
+        is_descriptive: isDescriptiveGrade(s.grade_level),
+        rating_scale:   assessmentFor(s.grade_level).scaleId,
         _acad: { sum: 0, count: 0 },
         _att:  { present: 0, total: 0 },
         _beh:  { sum: 0, count: 0 },
@@ -897,7 +910,7 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
     // 5. ECE competency — loaded once for all ECE students in scope, since
     // ECE learners have no numeric grades and the academic tile would always
     // say "insufficient" for them. The competency tile replaces it.
-    const eceStudents = students.filter(s => ECE_GRADE_LEVELS.has(s.grade_level));
+    const eceStudents = students.filter(s => isDescriptiveGrade(s.grade_level));
     if (eceStudents.length) {
       const eceIds    = eceStudents.map(s => s.id);
       const eceGrades = [...new Set(eceStudents.map(s => s.grade_level))];
@@ -916,7 +929,7 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
 
       // latest-quarter rating distribution per student, in active SY
       const distRes = await query(
-        `SELECT r.student_id, r.rating, COUNT(*)::int AS n
+        `SELECT r.student_id, r.rating, r.rating_scale, COUNT(*)::int AS n
            FROM ece_competency_records r
            JOIN (
              SELECT student_id, MAX(quarter) AS q
@@ -925,22 +938,30 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
               GROUP BY student_id
            ) latest ON latest.student_id = r.student_id AND latest.q = r.quarter
           WHERE r.student_id = ANY($1::uuid[]) AND r.school_year_id = $2
-          GROUP BY r.student_id, r.rating`,
+          GROUP BY r.student_id, r.rating, r.rating_scale`,
         [eceIds, syId]
       );
       const distByStudent = new Map();
+      const scaleByStudent = new Map(
+        eceStudents.map(s => [s.id, assessmentFor(s.grade_level).scaleId])
+      );
       for (const row of distRes.rows) {
-        const d = distByStudent.get(row.student_id) || { E: 0, G: 0, F: 0, NA: 0 };
-        d[row.rating] = row.n;
+        // Rows carry the scale they were rated on, which can differ from the
+        // current configuration for historical records.
+        const scaleId = row.rating_scale || scaleByStudent.get(row.student_id);
+        const d = distByStudent.get(row.student_id) || ratingScale(scaleId).emptyDistribution();
+        if (Object.prototype.hasOwnProperty.call(d, row.rating)) d[row.rating] = row.n;
         distByStudent.set(row.student_id, d);
       }
 
       for (const s of eceStudents) {
         const bucket = byId.get(s.id);
         if (!bucket) continue;
+        const sScaleId = assessmentFor(s.grade_level).scaleId;
         bucket._comp = {
-          dist:         distByStudent.get(s.id) || { E: 0, G: 0, F: 0, NA: 0 },
+          dist:         distByStudent.get(s.id) || ratingScale(sScaleId).emptyDistribution(),
           total_skills: totalSkillsByGrade.get(s.grade_level) || 0,
+          scale_id:     sScaleId,
         };
       }
     }
@@ -970,9 +991,9 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
       let compB = 'insufficient';
       let competencyMetric = null;
       if (bucket.is_ece && bucket._comp) {
-        compB = bandCompetency(bucket._comp.dist, bucket._comp.total_skills);
+        compB = bandCompetency(bucket._comp.dist, bucket._comp.total_skills, bucket._comp.scale_id);
         const d = bucket._comp.dist;
-        const rated = d.E + d.G + d.F + d.NA;
+        const rated = Object.values(d).reduce((a, b) => a + b, 0);
         competencyMetric = {
           rated,
           total_skills: bucket._comp.total_skills,
@@ -981,6 +1002,7 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
             : 0,
           distribution: d,
           band:         compB,
+          rating_scale: bucket._comp.scale_id,
         };
       } else if (!bucket.is_ece) {
         acadB = bandAcademic(avg_grade);
@@ -1140,13 +1162,20 @@ router.get('/parent-summary/:student_id', enforceParentLinked, async (req, res, 
     );
     if (!studentRes.rows.length) throw new AppError('Student not found.', 404);
     const student = studentRes.rows[0];
-    const isEce = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder'].includes(student.grade_level);
 
     const activeSY = await query(
       `SELECT id, label FROM school_years WHERE is_active = TRUE LIMIT 1`
     );
     const syId = activeSY.rows[0]?.id || null;
     const syLabel = activeSY.rows[0]?.label || null;
+
+    // Assessment mode is configuration, not a fixed grade list (DO 015 moves
+    // Grade 1 onto descriptive grading from SY 2026-2027).
+    const parentAssessment = resolveAssessment(
+      student.grade_level,
+      (await loadAssessmentRows(syId)).get(student.grade_level) || null
+    );
+    const isEce = parentAssessment.isDescriptive;
 
     // Risk tier + factor breakdown — newest assessment (FastAPI /classify/risk/all
     // could also work, but we prefer the stored value for a cheap single-student
@@ -1215,15 +1244,20 @@ router.get('/parent-summary/:student_id', enforceParentLinked, async (req, res, 
       const q = qRes.rows[0]?.q || null;
       if (q) {
         const distRes = await query(
-          `SELECT rating, COUNT(*)::int AS cnt
+          `SELECT rating, rating_scale, COUNT(*)::int AS cnt
              FROM ece_competency_records
             WHERE student_id=$1 AND school_year_id=$2 AND quarter=$3
-            GROUP BY rating`,
+            GROUP BY rating, rating_scale`,
           [studentId, syId, q]
         );
-        const dist = { E: 0, G: 0, F: 0, NA: 0 };
-        for (const r of distRes.rows) if (r.rating in dist) dist[r.rating] = r.cnt;
-        const rated = dist.E + dist.G + dist.F + dist.NA;
+        // Prefer the scale the records were actually rated on over the current
+        // configuration, so a re-configured grade level cannot reinterpret them.
+        const recordScaleId = distRes.rows[0]?.rating_scale || parentAssessment.scaleId;
+        const dist = ratingScale(recordScaleId).emptyDistribution();
+        for (const r of distRes.rows) {
+          if (Object.prototype.hasOwnProperty.call(dist, r.rating)) dist[r.rating] = r.cnt;
+        }
+        const rated = Object.values(dist).reduce((a, b) => a + b, 0);
 
         const totalRes = await query(
           `SELECT COUNT(*)::int AS n
@@ -1235,6 +1269,8 @@ router.get('/parent-summary/:student_id', enforceParentLinked, async (req, res, 
         academic = {
           quarter: q,
           rated,
+          rating_scale: recordScaleId,
+          scale: ratingScale(recordScaleId),
           total_skills: totalRes.rows[0]?.n || 0,
           distribution: dist,
         };

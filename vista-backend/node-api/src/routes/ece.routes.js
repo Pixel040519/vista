@@ -2,21 +2,44 @@ const express = require('express')
 const router  = express.Router()
 const Joi     = require('joi')
 const { query } = require('../config/database')
-const { authenticate, authorize } = require('../middleware/auth.middleware')
+const { authenticate, authorize, enforceGradeScope } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
-const { ROLES, isAnyAdmin } = require('../utils/roles')
+const { ROLES, ANY_ADMIN, isAnyAdmin, gradeScopeForRole } = require('../utils/roles')
+const { resolveGradingPolicy, resolveAssessment, ratingScale, isValidRating } = require('../utils/grading')
+const { loadAssessmentRows } = require('../utils/assessmentConfig')
 const { enforceParentLinked, rejectIfAcademicSuspended } = require('../middleware/parentScope')
 
 router.use(authenticate)
 
-const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
+const ALL_GRADE_LEVELS = [
+  'Kinder',
+  'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6',
+]
 
-// Roles that can touch ECE features. admin_elem is out of scope for ECE and
-// is therefore not in this list — the route will 403 for that role.
-const eceAllowed = authorize(ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE, ROLES.TEACHER)
+// Which grade levels are assessed descriptively is now configuration, not a
+// constant — DO 015, s. 2026 moves Grade 1 onto descriptive grading while it
+// stays an elementary (admin_elem) responsibility. See utils/assessmentConfig.js.
+const descriptiveLevelsFor = async (syId, scope) => {
+  const rows = await loadAssessmentRows(syId)
+  return (scope && scope.length ? scope : ALL_GRADE_LEVELS)
+    .filter(gl => resolveAssessment(gl, rows.get(gl) || null).isDescriptive)
+}
+
+// The rating scale a grade level uses in a school year.
+const scaleFor = async (syId, gradeLevel) => {
+  const rows = await loadAssessmentRows(syId)
+  return resolveAssessment(gradeLevel, rows.get(gradeLevel) || null)
+}
+
+// Competency features are open to every admin tier plus teachers. Which grade
+// levels each may actually touch is enforced per-request by grade scope, so
+// admin_ece keeps Kinder and admin_elem gets Grade 1 once it is
+// configured as descriptive. (Previously admin_elem was blocked outright, which
+// would have locked the elementary admin out of their own descriptive levels.)
+const eceAllowed = authorize(...ANY_ADMIN, ROLES.TEACHER)
 
 const getActiveSYId = async () => {
-  const res = await query('SELECT id, label FROM school_years WHERE is_active=TRUE LIMIT 1')
+  const res = await query('SELECT id, label, period_model, grading_policy FROM school_years WHERE is_active=TRUE LIMIT 1')
   if (!res.rows.length) throw new AppError('No active school year set.', 400)
   return res.rows[0]
 }
@@ -24,7 +47,7 @@ const getActiveSYId = async () => {
 // Resolve SY: use provided sy_id if valid, else active
 const resolveSY = async (syId) => {
   if (syId) {
-    const r = await query('SELECT id, label FROM school_years WHERE id=$1', [syId])
+    const r = await query('SELECT id, label, period_model, grading_policy FROM school_years WHERE id=$1', [syId])
     if (r.rows.length) return r.rows[0]
   }
   return await getActiveSYId()
@@ -33,10 +56,14 @@ const resolveSY = async (syId) => {
 // Verify teacher is assigned to this (grade_level, section) for an ECE grade in the active SY
 const verifyEceAssignment = async (req, gradeLevel, section) => {
   if (isAnyAdmin(req.user.role)) return
-  if (!ECE_GRADES.includes(gradeLevel)) {
-    throw new AppError('ECE features are only available for Pre-Nursery to Kinder.', 403)
-  }
   const sy = await getActiveSYId()
+  const assessment = await scaleFor(sy.id, gradeLevel)
+  if (!assessment.isDescriptive) {
+    throw new AppError(
+      `${gradeLevel} is not assessed descriptively this school year — competency tracking does not apply to it.`,
+      403
+    )
+  }
   const res = await query(
     `SELECT 1 FROM teacher_assignments
      WHERE teacher_id=$1 AND grade_level=$2 AND section=$3 AND school_year=$4
@@ -49,7 +76,7 @@ const verifyEceAssignment = async (req, gradeLevel, section) => {
 }
 
 // ─── Summary: dashboard widget ──────────────────────────────
-// GET /summary?quarter=<1-4>  (quarter auto-detected if omitted)
+// GET /summary?quarter=<1..N, per the school year period model>  (quarter auto-detected if omitted)
 // Teacher: scoped to their ECE assignments. Admin: school-wide.
 // Returns per-class completion stats + rating distribution + by_grade_level rollup.
 router.get('/summary', eceAllowed, async (req, res, next) => {
@@ -57,33 +84,40 @@ router.get('/summary', eceAllowed, async (req, res, next) => {
     const sy = await getActiveSYId()
     const isAdmin = isAnyAdmin(req.user.role)
 
-    // Resolve the set of ECE (grade_level, section) pairs to aggregate over.
-    // Teacher: their own assignments. Admin: every ECE class in the school.
-    const asgn = isAdmin
+    // Which grade levels are descriptive this year, narrowed to what the
+    // caller may see (admin_ece: Kinder, admin_elem: Grade 1-6).
+    const scope = gradeScopeForRole(req.user.role)
+    const DESCRIPTIVE = await descriptiveLevelsFor(sy.id, scope)
+    const assessmentRows = await loadAssessmentRows(sy.id)
+    const scaleIdFor = (gl) => resolveAssessment(gl, assessmentRows.get(gl) || null).scaleId
+
+    // Resolve the set of (grade_level, section) pairs to aggregate over.
+    // Teacher: their own assignments. Admin: every descriptive class in the school.
+    const asgn = DESCRIPTIVE.length === 0 ? { rows: [] } : isAdmin
       ? await query(
           `SELECT DISTINCT grade_level, section
            FROM teacher_assignments
            WHERE school_year=$1 AND grade_level = ANY($2)
            ORDER BY grade_level, section`,
-          [sy.label, ECE_GRADES]
+          [sy.label, DESCRIPTIVE]
         )
       : await query(
           `SELECT DISTINCT grade_level, section
            FROM teacher_assignments
            WHERE teacher_id=$1 AND school_year=$2
              AND grade_level = ANY($3)`,
-          [req.user.id, sy.label, ECE_GRADES]
+          [req.user.id, sy.label, DESCRIPTIVE]
         )
     if (!asgn.rows.length) {
       return res.json({
         quarter: 1,
         classes: [],
-        by_grade_level: ECE_GRADES.map(gl => ({
-          grade_level: gl, class_count: 0, student_count: 0,
+        by_grade_level: DESCRIPTIVE.map(gl => ({
+          grade_level: gl, rating_scale: scaleIdFor(gl), class_count: 0, student_count: 0,
           rated_cells: 0, total_cells: 0, completion_pct: 0,
         })),
         totals: { students: 0, rated_cells: 0, total_cells: 0, completion_pct: 0 },
-        rating_distribution: { E: 0, G: 0, F: 0, NA: 0 },
+        distributions: [],
       })
     }
 
@@ -103,7 +137,13 @@ router.get('/summary', eceAllowed, async (req, res, next) => {
 
     const classes = []
     let totalStudents = 0, totalRated = 0, totalCells = 0
-    const dist = { E: 0, G: 0, F: 0, NA: 0 }
+    // Keyed by scale id — grade levels in the same year can use different scales.
+    const distByScale = new Map()
+    const bumpScale = (scaleId, code, n) => {
+      if (!distByScale.has(scaleId)) distByScale.set(scaleId, ratingScale(scaleId).emptyDistribution())
+      const d = distByScale.get(scaleId)
+      if (Object.prototype.hasOwnProperty.call(d, code)) d[code] += n
+    }
 
     for (const a of asgn.rows) {
       // Count students
@@ -125,25 +165,32 @@ router.get('/summary', eceAllowed, async (req, res, next) => {
 
       // Count records + distribution for this class
       const recRes = await query(
-        `SELECT r.rating, COUNT(*)::int AS cnt
+        `SELECT r.rating, r.rating_scale, COUNT(*)::int AS cnt
          FROM ece_competency_records r
          JOIN students s ON s.id = r.student_id
          WHERE s.grade_level=$1 AND s.section=$2
            AND r.school_year_id=$3 AND r.quarter=$4
-         GROUP BY r.rating`,
+         GROUP BY r.rating, r.rating_scale`,
         [a.grade_level, a.section, sy.id, quarter]
       )
 
+      const classScaleId = scaleIdFor(a.grade_level)
+      const classDist = ratingScale(classScaleId).emptyDistribution()
       let ratedCells = 0
       for (const row of recRes.rows) {
         ratedCells += row.cnt
-        if (dist.hasOwnProperty(row.rating)) dist[row.rating] += row.cnt
+        // Attribute each row to the scale it was actually rated on, which may
+        // differ from the current configuration for historical records.
+        bumpScale(row.rating_scale || classScaleId, row.rating, row.cnt)
+        if (Object.prototype.hasOwnProperty.call(classDist, row.rating)) classDist[row.rating] += row.cnt
       }
 
       const cells = studentCount * skillCount
       classes.push({
         grade_level: a.grade_level,
         section: a.section,
+        rating_scale: classScaleId,
+        distribution: classDist,
         student_count: studentCount,
         total_skills: skillCount,
         rated_cells: ratedCells,
@@ -157,13 +204,14 @@ router.get('/summary', eceAllowed, async (req, res, next) => {
     }
 
     // Roll up per-class stats into a per-grade-level summary (for admin card).
-    const byGradeLevel = ECE_GRADES.map(gl => {
+    const byGradeLevel = DESCRIPTIVE.map(gl => {
       const entries = classes.filter(c => c.grade_level === gl)
       const rated = entries.reduce((a, c) => a + c.rated_cells, 0)
       const total = entries.reduce((a, c) => a + c.total_cells, 0)
       const stu   = entries.reduce((a, c) => a + c.student_count, 0)
       return {
         grade_level: gl,
+        rating_scale: scaleIdFor(gl),
         class_count: entries.length,
         student_count: stu,
         rated_cells: rated,
@@ -182,7 +230,19 @@ router.get('/summary', eceAllowed, async (req, res, next) => {
         total_cells: totalCells,
         completion_pct: totalCells > 0 ? Math.round((totalRated / totalCells) * 1000) / 10 : 0,
       },
-      rating_distribution: dist,
+      // One entry per rating scale in play, each self-describing so the UI can
+      // render a legend without knowing the scales up front.
+      distributions: [...distByScale.entries()].map(([id, counts]) => {
+        const s = ratingScale(id)
+        return {
+          scale_id: id,
+          label: s.label,
+          short: s.short,
+          levels: s.levels,
+          counts,
+          total: Object.values(counts).reduce((a, b) => a + b, 0),
+        }
+      }),
     })
   } catch (e) { next(e) }
 })
@@ -279,11 +339,16 @@ router.get('/records', async (req, res, next) => {
     if (!grade_level || !section || !quarter) {
       throw new AppError('grade_level, section, and quarter are required.', 400)
     }
-    if (!ECE_GRADES.includes(grade_level)) {
-      throw new AppError('Only ECE grade levels are supported.', 400)
-    }
     await verifyEceAssignment(req, grade_level, section)
     const sy = await resolveSY(sy_id)
+
+    const assessment = await scaleFor(sy.id, grade_level)
+    if (!assessment.isDescriptive) {
+      throw new AppError(
+        `${grade_level} is assessed numerically in SY ${sy.label} — use Score Entry, not competency ratings.`,
+        400
+      )
+    }
 
     const students = await query(
       `SELECT id, full_name, gender FROM students
@@ -293,7 +358,7 @@ router.get('/records', async (req, res, next) => {
     )
 
     const records = await query(
-      `SELECT r.student_id, r.skill_id, r.rating, r.notes
+      `SELECT r.student_id, r.skill_id, r.rating, r.rating_scale, r.notes
        FROM ece_competency_records r
        JOIN students s ON s.id = r.student_id
        WHERE s.grade_level=$1 AND s.section=$2
@@ -305,6 +370,10 @@ router.get('/records', async (req, res, next) => {
       school_year: sy,
       students: students.rows,
       records: records.rows,
+      // The scale the UI must render buttons for. Sent explicitly so the client
+      // never has to guess which letters are legal for this class.
+      rating_scale: assessment.scaleId,
+      scale: assessment.scale,
     })
   } catch (e) { next(e) }
 })
@@ -335,9 +404,6 @@ router.get('/student-records', enforceParentLinked, async (req, res, next) => {
     )
     if (!studentRes.rows.length) throw new AppError('Student not found.', 404)
     const student = studentRes.rows[0]
-    if (!ECE_GRADES.includes(student.grade_level)) {
-      throw new AppError('Student is not in an ECE grade level.', 400)
-    }
 
     // Teachers can only view their own assigned classes
     if (req.user.role === ROLES.TEACHER) {
@@ -345,6 +411,13 @@ router.get('/student-records', enforceParentLinked, async (req, res, next) => {
     }
 
     const sy = await resolveSY(sy_id)
+    const studentAssessment = await scaleFor(sy.id, student.grade_level)
+    if (!studentAssessment.isDescriptive) {
+      throw new AppError(
+        `${student.grade_level} is not assessed descriptively in SY ${sy.label}.`,
+        400
+      )
+    }
 
     const skills = await query(
       `SELECT cs.id, cs.subject_id, cs.name, cs.description, cs.display_order,
@@ -357,7 +430,7 @@ router.get('/student-records', enforceParentLinked, async (req, res, next) => {
     )
 
     const records = await query(
-      `SELECT skill_id, rating, notes
+      `SELECT skill_id, rating, rating_scale, notes
          FROM ece_competency_records
         WHERE student_id=$1 AND school_year_id=$2 AND quarter=$3`,
       [studentId, sy.id, quarter]
@@ -368,6 +441,8 @@ router.get('/student-records', enforceParentLinked, async (req, res, next) => {
       student,
       skills: skills.rows,
       records: records.rows,
+      rating_scale: studentAssessment.scaleId,
+      scale: studentAssessment.scale,
     })
   } catch (e) { next(e) }
 })
@@ -377,14 +452,16 @@ router.get('/student-records', enforceParentLinked, async (req, res, next) => {
 router.post('/records', async (req, res, next) => {
   try {
     const schema = Joi.object({
-      grade_level: Joi.string().valid(...ECE_GRADES).required(),
+      grade_level: Joi.string().valid(...ALL_GRADE_LEVELS).required(),
       section: Joi.string().required(),
       quarter: Joi.number().integer().min(1).max(4).required(),
       sy_id: Joi.string().uuid().optional(),
       entries: Joi.array().items(Joi.object({
         student_id: Joi.string().uuid().required(),
         skill_id: Joi.string().uuid().required(),
-        rating: Joi.string().valid('E','G','F','NA').required(),
+        // Valid codes depend on the grade level's configured scale, so they are
+        // checked below rather than with a fixed Joi list.
+        rating: Joi.string().max(2).required(),
         notes: Joi.string().allow('').optional(),
       })).required(),
     })
@@ -394,18 +471,48 @@ router.post('/records', async (req, res, next) => {
     await verifyEceAssignment(req, value.grade_level, value.section)
     const sy = await resolveSY(value.sy_id)
 
+    // Which scale applies, and therefore which rating codes are legal.
+    const assessment = await scaleFor(sy.id, value.grade_level)
+    if (!assessment.isDescriptive) {
+      throw new AppError(
+        `${value.grade_level} is assessed numerically in SY ${sy.label} — competency ratings cannot be recorded for it.`,
+        400
+      )
+    }
+    const scaleId = assessment.scaleId
+    for (const e of value.entries) {
+      if (!isValidRating(scaleId, e.rating)) {
+        throw new AppError(
+          `"${e.rating}" is not a valid rating for ${value.grade_level} — ` +
+          `SY ${sy.label} uses ${assessment.scale.short}.`,
+          422
+        )
+      }
+    }
+
+    // The number of grading periods is a property of the school year, so it
+    // cannot be expressed as a fixed Joi rule or a DB CHECK.
+    const policy = resolveGradingPolicy(sy, value.grade_level)
+    if (!policy.periods.includes(Number(value.quarter))) {
+      throw new AppError(
+        `${policy.periodNoun} ${value.quarter} is not valid for SY ${sy.label} — it runs ${policy.periodCount} ${policy.periodNoun.toLowerCase()}s.`,
+        422
+      )
+    }
+
     // Upsert each entry
     for (const e of value.entries) {
       await query(
         `INSERT INTO ece_competency_records
-           (student_id, skill_id, school_year_id, quarter, rating, notes, recorded_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+           (student_id, skill_id, school_year_id, quarter, rating, rating_scale, notes, recorded_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (student_id, skill_id, school_year_id, quarter)
          DO UPDATE SET rating = EXCLUDED.rating,
+                       rating_scale = EXCLUDED.rating_scale,
                        notes = EXCLUDED.notes,
                        recorded_by = EXCLUDED.recorded_by,
                        updated_at = NOW()`,
-        [e.student_id, e.skill_id, sy.id, value.quarter, e.rating, e.notes || null, req.user.id]
+        [e.student_id, e.skill_id, sy.id, value.quarter, e.rating, scaleId, e.notes || null, req.user.id]
       )
     }
 

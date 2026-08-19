@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, BookOpen, ClipboardCheck, Heart, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi, eceApi, curriculumApi } from '../api/client'
+import { resolveGradingPolicy } from '../utils/grading'
 import { RiskBadge, SentimentBadge, LoadingSpinner, GradeChip } from '../components/UI'
 import { format } from 'date-fns'
 import { formatName, nameInitial } from '../utils/nameHelper'
@@ -21,7 +22,7 @@ const calcAge = (dob) => {
 
 const TABS = ['Overview', 'Grades', 'Attendance', 'Behavior', 'AI Insights']
 
-const ECE_GRADES = ['Pre-Nursery', 'Nursery', 'Pre-Kinder', 'Kinder']
+const ECE_GRADES = ['Kinder']
 const ECE_RATINGS = [
   { value: 'E',  label: 'Excellent',        color: 'bg-emerald-500 text-white border-emerald-600' },
   { value: 'G',  label: 'Good',             color: 'bg-brand-500 text-white border-brand-600' },
@@ -52,7 +53,7 @@ export default function StudentDetail() {
   const [expandedBehMonths, setExpandedBehMonths] = useState(() => new Set())
   const [behaviorFilter, setBehaviorFilter] = useState('All')
 
-  // ECE competency (Pre-Nursery → Kinder) — replaces the numeric grades view
+  // ECE competency (Kinder) — replaces the numeric grades view
   // for ECE learners and feeds the AI Insights tab so ECE teachers see
   // competency-aware signals instead of grade-based ones.
   const [eceSkills, setEceSkills]       = useState([])
@@ -60,12 +61,33 @@ export default function StudentDetail() {
   const [eceRecords, setEceRecords]     = useState([])   // records for selected quarter + this student
   const [eceSchoolYear, setEceSchoolYear] = useState(null)
   const [eceQuarter, setEceQuarter]     = useState(1)
+  const [schoolYears, setSchoolYears]   = useState([])
   const [eceLoading, setEceLoading]     = useState(false)
   const [eceAccessError, setEceAccessError] = useState(null)
   const [expandedEceSY, setExpandedEceSY] = useState(true)
   const [expandedEceSubjects, setExpandedEceSubjects] = useState(() => new Set())
   const [expandedEceInsightsOk, setExpandedEceInsightsOk] = useState(false)
   const [expandedEceInsightsInsufficient, setExpandedEceInsightsInsufficient] = useState(false)
+
+  // The Academics tab renders one table per school year and each year can use a
+  // different grading model, so resolve the policy per year rather than globally.
+  useEffect(() => {
+    curriculumApi.getSchoolYears()
+      .then(res => setSchoolYears(res.data.school_years || res.data || []))
+      .catch(() => setSchoolYears([]))
+  }, [])
+
+  const gradingForSY = (label) =>
+    resolveGradingPolicy(schoolYears.find(sy => sy.label === label) || null, student?.grade_level)
+
+  const activeGrading = resolveGradingPolicy(
+    schoolYears.find(sy => sy.is_active) || null,
+    student?.grade_level
+  )
+
+  useEffect(() => {
+    if (!activeGrading.periods.includes(eceQuarter)) setEceQuarter(activeGrading.periods[0])
+  }, [activeGrading.periodModel])
 
   const isECE = !!student && ECE_GRADES.includes(student.grade_level)
 
@@ -537,7 +559,7 @@ export default function StudentDetail() {
                     {expandedEceSY ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
                     <span className="text-sm font-semibold text-slate-800">{syLabel}</span>
                     <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
-                      Q{eceQuarter} · {ratedCount} / {totalSkills} rated
+                      {activeGrading.abbr(eceQuarter)} · {ratedCount} / {totalSkills} rated
                     </span>
                   </button>
                   {expandedEceSY && (
@@ -545,7 +567,7 @@ export default function StudentDetail() {
                       <div className="flex items-center justify-between flex-wrap gap-2">
                         <h3 className="text-sm font-semibold text-slate-800">Competency Ratings</h3>
                         <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
-                          {[1, 2, 3, 4].map(q => (
+                          {activeGrading.periods.map(q => (
                             <button
                               key={q}
                               onClick={() => setEceQuarter(q)}
@@ -553,7 +575,7 @@ export default function StudentDetail() {
                                 eceQuarter === q ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
                               }`}
                             >
-                              Q{q}
+                              {activeGrading.abbr(q)}
                             </button>
                           ))}
                         </div>
@@ -659,17 +681,18 @@ export default function StudentDetail() {
                         <thead>
                           <tr>
                             <th>Subject</th>
-                            <th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th>
+                            {gradingForSY(sy).periods.map(q => (
+                              <th key={q}>{gradingForSY(sy).abbr(q)}</th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody>
                           {subjects.map(([subject, quarters]) => (
                             <tr key={subject}>
                               <td className="font-medium">{subject}</td>
-                              <td><GradeChip grade={quarters[1]} /></td>
-                              <td><GradeChip grade={quarters[2]} /></td>
-                              <td><GradeChip grade={quarters[3]} /></td>
-                              <td><GradeChip grade={quarters[4]} /></td>
+                              {gradingForSY(sy).periods.map(q => (
+                                <td key={q}><GradeChip grade={quarters[q]} /></td>
+                              ))}
                             </tr>
                           ))}
                         </tbody>

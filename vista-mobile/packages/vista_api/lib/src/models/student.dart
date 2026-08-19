@@ -22,9 +22,6 @@ class Student {
   final List<Guardian> guardians;
 
   bool get isEce => const {
-        'Pre-Nursery',
-        'Nursery',
-        'Pre-Kinder',
         'Kinder',
       }.contains(gradeLevel);
 

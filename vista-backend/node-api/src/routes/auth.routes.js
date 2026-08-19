@@ -94,8 +94,12 @@ router.post('/login', async (req, res, next) => {
       userData.assignments = asgn.rows;
     }
 
-    const syRes = await query('SELECT label FROM school_years WHERE is_active=TRUE LIMIT 1');
+    const syRes = await query(
+      'SELECT label, period_model, grading_policy FROM school_years WHERE is_active=TRUE LIMIT 1'
+    );
     userData.active_school_year = syRes.rows[0]?.label || null;
+    userData.period_model   = syRes.rows[0]?.period_model   || '4Q';
+    userData.grading_policy = syRes.rows[0]?.grading_policy || 'DO8_2015';
 
     res.json({
       message: 'Login successful.',
@@ -143,8 +147,12 @@ router.get('/me', authenticate, async (req, res, next) => {
       user.assignments = asgn.rows;
     }
 
-    const syRes = await query('SELECT label FROM school_years WHERE is_active=TRUE LIMIT 1');
+    const syRes = await query(
+      'SELECT label, period_model, grading_policy FROM school_years WHERE is_active=TRUE LIMIT 1'
+    );
     user.active_school_year = syRes.rows[0]?.label || null;
+    user.period_model   = syRes.rows[0]?.period_model   || '4Q';
+    user.grading_policy = syRes.rows[0]?.grading_policy || 'DO8_2015';
 
     res.json({ user });
   } catch (err) { next(err); }

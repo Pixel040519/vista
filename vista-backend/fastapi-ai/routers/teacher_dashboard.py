@@ -7,7 +7,7 @@ from services.db import get_db
 
 router = APIRouter()
 
-ECE_GRADES = {"Pre-Nursery", "Nursery", "Pre-Kinder", "Kinder"}
+ECE_GRADES = {"Kinder"}
 
 
 # ─── GET /teacher-dashboard/summary ───────────────────────────

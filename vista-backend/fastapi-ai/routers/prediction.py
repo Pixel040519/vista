@@ -123,7 +123,15 @@ async def predict_performance(
     if not student:
         raise HTTPException(status_code=404, detail="Student not found.")
 
-    # 2. Fetch grade history
+    # 2. How many grading periods this school year has. DepEd moved from four
+    #    quarters to three terms (DO 009, s. 2026), so this cannot be hardcoded.
+    period_result = await db.execute(
+        text("SELECT period_model FROM school_years WHERE is_active = TRUE LIMIT 1")
+    )
+    period_row = period_result.fetchone()
+    periods_per_year = 3 if (period_row and period_row.period_model == "3T") else 4
+
+    # 3. Fetch grade history
     subject_filter = "AND g.subject_id = CAST(:subject_id AS uuid)" if request.subject_id else ""
     grade_query = f"""
         SELECT g.subject_id, s.name as subject_name,
@@ -147,7 +155,7 @@ async def predict_performance(
             detail="No grade data found for this student."
         )
 
-    # 3. Group by subject and run predictions
+    # 4. Group by subject and run predictions
     df = pd.DataFrame(grade_rows, columns=["subject_id", "subject_name", "quarter", "school_year", "grade"])
     subject_predictions = []
     overall_alert = None
@@ -162,11 +170,11 @@ async def predict_performance(
         latest_grade = grade_history[-1]
         recommendation = get_recommendation(trend, latest_grade)
 
-        # Build quarter predictions starting from next quarter
+        # Build period predictions starting from the next grading period.
         next_q_start = quarter_history[-1] + 1
         quarter_preds = []
         for i, pred_grade in enumerate(predictions_raw[:2]):
-            q = ((next_q_start - 1 + i) % 4) + 1
+            q = ((next_q_start - 1 + i) % periods_per_year) + 1
             quarter_preds.append(QuarterPrediction(
                 quarter=q,
                 predicted_grade=round(pred_grade, 2),

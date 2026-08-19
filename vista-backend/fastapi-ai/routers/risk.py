@@ -23,8 +23,39 @@ RISK_COLORS = {
     "High Risk": "#ef4444"       # red
 }
 
-ECE_GRADE_LEVELS = {"Pre-Nursery", "Nursery", "Pre-Kinder", "Kinder"}
-RATING_WEIGHTS = {"E": 1.0, "G": 0.75, "F": 0.5, "NA": 0.25}
+# Descriptive-assessment rating scales. Mirrors RATING_SCALES in
+# vista-backend/node-api/src/utils/grading.js — weights are (levels - index) /
+# levels, so EGFNA reproduces the original 1.0 / 0.75 / 0.5 / 0.25 exactly.
+#
+# The scale MUST be read from ece_competency_records.rating_scale, never assumed:
+# "E" is Excellent (best) under EGFNA but Emerging (worst) under ABCDE, so a
+# scale-blind lookup would score a failing learner as perfect.
+RATING_SCALE_WEIGHTS = {
+    "EGFNA":  {"E": 1.0, "G": 0.75, "F": 0.5, "NA": 0.25},
+    "CODVBG": {"CO": 1.0, "DV": 2 / 3, "BG": 1 / 3},
+    "ABCDE":  {"A": 1.0, "B": 0.8, "C": 0.6, "D": 0.4, "E": 0.2},
+}
+DEFAULT_RATING_SCALE = "EGFNA"
+
+
+def rating_weight(scale: str | None, rating: str | None) -> float:
+    """0-1 weight for one rating on its own scale."""
+    table = RATING_SCALE_WEIGHTS.get(scale or DEFAULT_RATING_SCALE, {})
+    return table.get(rating, 0.0)
+
+
+def _rating_case_sql(column_prefix: str) -> str:
+    """
+    Build a SQL CASE that maps (rating_scale, rating) -> weight.
+    Generated rather than hand-written so it cannot drift from the table above.
+    """
+    branches = [
+        f"WHEN {column_prefix}.rating_scale = '{scale}' "
+        f"AND {column_prefix}.rating = '{code}' THEN {weight}"
+        for scale, table in RATING_SCALE_WEIGHTS.items()
+        for code, weight in table.items()
+    ]
+    return "CASE " + " ".join(branches) + " END"
 
 
 # ─── Pydantic Models ───────────────────────────────────────────
@@ -60,11 +91,10 @@ async def extract_features(student_id: str, grade_level: Optional[str], db: Asyn
     1. Attendance rate (last 30 days)
     2. Average grade (latest quarter) — non-ECE students
     3. Behavioral sentiment average (this month)
-    4. ECE competency average (latest quarter in active SY) — ECE students only
+    4. Competency average (latest quarter in active SY) — descriptive learners only
     """
     now = datetime.utcnow()
     thirty_days_ago = (now - timedelta(days=30)).date()
-    is_ece = grade_level in ECE_GRADE_LEVELS
 
     # ── Attendance Rate ──
     att_result = await db.execute(text("""
@@ -101,28 +131,31 @@ async def extract_features(student_id: str, grade_level: Optional[str], db: Asyn
     # No logs → no signal (None); otherwise the raw sentiment average.
     behavioral_score = float(beh_row.avg_sentiment) if beh_row.avg_sentiment is not None else None
 
-    # ── ECE Competency (ECE grade levels only) ──
+    # ── Competency ──
+    # Which grade levels are assessed descriptively is configuration owned by the
+    # Node API; this service stays config-agnostic and simply follows the data —
+    # only descriptive learners have competency records, so a numeric learner
+    # returns no rows and the factor stays None.
     competency_score = None
-    if is_ece:
-        comp_result = await db.execute(text("""
-            SELECT rating
-            FROM ece_competency_records
-            WHERE student_id = :sid
-              AND school_year_id = (
-                  SELECT id FROM school_years WHERE is_active = TRUE LIMIT 1
-              )
-              AND quarter = (
-                  SELECT MAX(quarter)
-                  FROM ece_competency_records
-                  WHERE student_id = :sid
-                    AND school_year_id = (
-                        SELECT id FROM school_years WHERE is_active = TRUE LIMIT 1
-                    )
-              )
-        """), {"sid": student_id})
-        ratings = [RATING_WEIGHTS.get(r.rating, 0.0) for r in comp_result.fetchall()]
-        if ratings:
-            competency_score = sum(ratings) / len(ratings)
+    comp_result = await db.execute(text("""
+        SELECT rating, rating_scale
+        FROM ece_competency_records
+        WHERE student_id = :sid
+          AND school_year_id = (
+              SELECT id FROM school_years WHERE is_active = TRUE LIMIT 1
+          )
+          AND quarter = (
+              SELECT MAX(quarter)
+              FROM ece_competency_records
+              WHERE student_id = :sid
+                AND school_year_id = (
+                    SELECT id FROM school_years WHERE is_active = TRUE LIMIT 1
+                )
+          )
+    """), {"sid": student_id})
+    ratings = [rating_weight(r.rating_scale, r.rating) for r in comp_result.fetchall()]
+    if ratings:
+        competency_score = sum(ratings) / len(ratings)
 
     return {
         "attendance_rate": round(attendance_rate, 4) if attendance_rate is not None else None,
@@ -402,10 +435,12 @@ async def get_all_risk_levels(db: AsyncSession = Depends(get_db)):
     """))).fetchall()
     beh_map = {str(r.student_id): float(r.avg_sentiment) for r in beh_rows if r.avg_sentiment is not None}
 
-    # 5. ECE competency — latest quarter in active SY, per student. ECE
-    # students only; the CASE maps ratings to the same weights as the
-    # single-student classifier (E=1.0, G=0.75, F=0.5, NA=0.25).
-    comp_rows = (await db.execute(text("""
+    # 5. Competency — latest quarter in active SY, per student. The CASE is
+    # generated from RATING_SCALE_WEIGHTS and keys on (rating_scale, rating) so
+    # mixed scales in one school year are each weighted on their own terms.
+    # No bind parameters here, so an f-string is safe: the interpolated CASE is
+    # generated from a module-level constant, never from request input.
+    comp_rows = (await db.execute(text(f"""
         WITH active_sy AS (
             SELECT id FROM school_years WHERE is_active = TRUE LIMIT 1
         ),
@@ -416,12 +451,7 @@ async def get_all_risk_levels(db: AsyncSession = Depends(get_db)):
              GROUP BY student_id
         )
         SELECT ecr.student_id,
-               AVG(CASE ecr.rating
-                        WHEN 'E'  THEN 1.0
-                        WHEN 'G'  THEN 0.75
-                        WHEN 'F'  THEN 0.5
-                        WHEN 'NA' THEN 0.25
-                   END) AS avg_rating
+               AVG({_rating_case_sql('ecr')}) AS avg_rating
           FROM ece_competency_records ecr
           JOIN latest l ON l.student_id = ecr.student_id AND l.q = ecr.quarter
          WHERE ecr.school_year_id = (SELECT id FROM active_sy)
@@ -437,8 +467,8 @@ async def get_all_risk_levels(db: AsyncSession = Depends(get_db)):
         attendance_rate = (present / total) if total > 0 else None
         avg_grade = acad_map.get(sid)
         behavioral_score = beh_map.get(sid)
-        is_ece = s.grade_level in ECE_GRADE_LEVELS
-        competency_score = comp_map.get(sid) if is_ece else None
+        # comp_map only contains learners who actually have competency records.
+        competency_score = comp_map.get(sid)
 
         risk_level, risk_score, _factors = rule_based_risk(
             attendance_rate, avg_grade, behavioral_score, competency_score
