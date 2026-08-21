@@ -110,6 +110,13 @@ Both are columns on `school_years`, and every computation resolves them through
 Defaults are `4Q`/`DO8_2015`, so archived years keep reproducing the exact grades
 that were issued to parents — **no historical data is re-transmuted**.
 
+Both settings are **frozen once a school year is archived** (neither `is_active` nor
+`is_upcoming`): `PUT /api/curriculum/school-years/:id` rejects a real change with 409
+and the Edit School Year modal disables the two selects. The model is therefore chosen
+when the year is created — the Create School Year modal sets the status too, so a year
+only lands archived when that is what was asked for. Resubmitting the current values is
+still a no-op, so ordinary edits (label, dates, status) keep working.
+
 The `quarter` columns on `grades`, `score_items` and `ece_competency_records` keep
 their name and their `CHECK (quarter BETWEEN 1 AND 4)` constraints: three terms use
 periods 1-3, a strict subset, so the constraints already admit the new model. The

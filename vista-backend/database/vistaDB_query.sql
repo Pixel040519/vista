@@ -105,8 +105,7 @@ CREATE TABLE attendance (
 CREATE TABLE subjects (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(100) NOT NULL,
-    grade_level VARCHAR(20) NOT NULL,
-    description TEXT
+    grade_level VARCHAR(20) NOT NULL
 );
 
 -- ============================================================

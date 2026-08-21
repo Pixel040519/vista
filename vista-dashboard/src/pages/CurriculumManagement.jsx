@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Plus, Pencil, Trash2, BookOpen, LayoutGrid,
   ChevronDown, ChevronRight, X, Check, CalendarDays,
-  ChevronDown as ChevDown, Copy, SlidersHorizontal, ClipboardList
+  ChevronDown as ChevDown, Copy, SlidersHorizontal, ClipboardList, Lock
 } from 'lucide-react'
 import { curriculumApi } from '../api/client'
 import { LoadingSpinner, Modal } from '../components/UI'
@@ -50,7 +50,6 @@ const GRADE_COLORS = {
 function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
   const [editing, setEditing]   = useState(false)
   const [name, setName]         = useState(item.name)
-  const [desc, setDesc]         = useState(item.description || '')
   const [saving, setSaving]     = useState(false)
   const [deleting, setDeleting] = useState(false)
 
@@ -58,8 +57,7 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
     if (!name.trim()) return
     setSaving(true)
     try {
-      const payload = type === 'subject' ? { name:name.trim(), description:desc.trim() } : { name:name.trim() }
-      await onSave(item.id, payload)
+      await onSave(item.id, { name:name.trim() })
       setEditing(false)
       toast.success(`${type === 'subject' ? 'Subject' : 'Section'} updated.`)
     } catch (err) {
@@ -81,7 +79,7 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
 
   const handleKey = e => {
     if (e.key === 'Enter') handleSave()
-    if (e.key === 'Escape') { setEditing(false); setName(item.name); setDesc(item.description||'') }
+    if (e.key === 'Escape') { setEditing(false); setName(item.name) }
   }
 
   if (editing) {
@@ -90,12 +88,8 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
         <input autoFocus
           className="text-sm font-medium text-slate-800 bg-transparent outline-none border-b border-slate-200 pb-1"
           value={name} onChange={e => setName(e.target.value)} onKeyDown={handleKey} placeholder="Name"/>
-        {type === 'subject' && (
-          <input className="text-xs text-slate-500 bg-transparent outline-none"
-            value={desc} onChange={e => setDesc(e.target.value)} onKeyDown={handleKey} placeholder="Description (optional)"/>
-        )}
         <div className="flex gap-1 justify-end mt-0.5">
-          <button onClick={() => { setEditing(false); setName(item.name); setDesc(item.description||'') }}
+          <button onClick={() => { setEditing(false); setName(item.name) }}
             className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100"><X size={13}/></button>
           <button onClick={handleSave} disabled={saving || !name.trim()}
             className="p-1 rounded text-brand-600 hover:text-brand-700 hover:bg-brand-50 disabled:opacity-40"><Check size={13}/></button>
@@ -113,9 +107,6 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
             <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-brand-400" title="Grading structure configured" />
           )}
         </div>
-        {type === 'subject' && item.description && (
-          <p className="text-xs text-slate-400 truncate mt-0.5">{item.description}</p>
-        )}
       </div>
       <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-2">
         {type === 'subject' && onGradingConfig && (
@@ -141,7 +132,6 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
 // ── Add Item inline form ──────────────────────────────────────
 function AddItemForm({ gradeLevel, type, syId, onAdd, onClose }) {
   const [name, setName]   = useState('')
-  const [desc, setDesc]   = useState('')
   const [saving, setSaving] = useState(false)
 
   const handleSubmit = async e => {
@@ -149,10 +139,7 @@ function AddItemForm({ gradeLevel, type, syId, onAdd, onClose }) {
     if (!name.trim()) return
     setSaving(true)
     try {
-      const payload = type === 'subject'
-        ? { name:name.trim(), grade_level:gradeLevel, description:desc.trim(), sy_id:syId }
-        : { name:name.trim(), grade_level:gradeLevel, sy_id:syId }
-      await onAdd(payload)
+      await onAdd({ name:name.trim(), grade_level:gradeLevel, sy_id:syId })
       toast.success(`${type === 'subject' ? 'Subject' : 'Section'} added to ${gradeLevel}.`)
       onClose()
     } catch (err) {
@@ -168,10 +155,6 @@ function AddItemForm({ gradeLevel, type, syId, onAdd, onClose }) {
         value={name} onChange={e => setName(e.target.value)}
         onKeyDown={e => e.key === 'Escape' && onClose()}
         placeholder={type === 'subject' ? 'Subject name...' : 'Section name...'} required/>
-      {type === 'subject' && (
-        <input className="text-xs text-slate-500 outline-none bg-transparent"
-          value={desc} onChange={e => setDesc(e.target.value)} placeholder="Description (optional)"/>
-      )}
       <div className="flex gap-1 justify-end mt-0.5">
         <button type="button" onClick={onClose}
           className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100"><X size={13}/></button>
@@ -189,7 +172,7 @@ function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradin
   const colors = GRADE_COLORS[grade] || GRADE_COLORS['Grade 1']
 
   return (
-    <div className={clsx('rounded-2xl border-2 overflow-hidden', colors.border)}>
+    <div className={clsx('rounded-2xl border-2 overflow-hidden bg-white flex flex-col', colors.border)}>
     <div className={clsx('w-full flex items-center justify-between px-4 py-3 cursor-pointer', colors.bg)}
         onClick={() => setOpen(!open)}>
         <div className="flex items-center gap-3">
@@ -208,7 +191,7 @@ function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradin
         </div>
       </div>
       {open && (
-        <div className="p-3 space-y-1 bg-white">
+        <div className="p-3 space-y-1 bg-white flex-1">
           {items.length === 0 && !adding && (
             <p className="text-xs text-slate-400 text-center py-3">
               No {type === 'subject' ? 'subjects' : 'sections'} yet.{' '}
@@ -291,11 +274,21 @@ function SYSelector({ schoolYears, selectedSY, onSelect, onManage, canManage = t
 function CreateSYModal({ schoolYears, onClose, onCreate }) {
   const [form, setForm] = useState({
     label:'', start_date:'', end_date:'', copy_from_id:'',
+    // A year created here is normally next year's; the very first year of a fresh
+    // install has to be the active one or the school has nothing to work in.
+    status: schoolYears.length ? 'upcoming' : 'active',
     period_model:'4Q', grading_policy:'DO8_2015',
   })
   const [copyEnabled, setCopyEnabled] = useState(false)
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
+
+  // The API refuses to tag a past year as upcoming, so mirror that here instead of
+  // letting the user walk into a 422. A half-typed label still counts as allowed —
+  // demoting mid-keystroke would make the select jump around.
+  const labelMatch = form.label.trim().match(/^(\d{4})-(\d{4})$/)
+  const canBeUpcoming = !labelMatch || parseInt(labelMatch[2]) > new Date().getFullYear()
+  const status = form.status === 'upcoming' && !canBeUpcoming ? 'archived' : form.status
 
   const handleSubmit = async e => {
     e.preventDefault()
@@ -307,6 +300,8 @@ function CreateSYModal({ schoolYears, onClose, onCreate }) {
         label:       form.label.trim(),
         start_date:  form.start_date || null,
         end_date:    form.end_date   || null,
+        is_active:   status === 'active',
+        is_upcoming: status === 'upcoming',
         period_model:   form.period_model,
         grading_policy: form.grading_policy,
         copy_from_id: copyEnabled && form.copy_from_id ? form.copy_from_id : null,
@@ -337,15 +332,26 @@ function CreateSYModal({ schoolYears, onClose, onCreate }) {
         </div>
       </div>
 
+      <div>
+        <label className="block text-sm font-medium text-slate-700 mb-1.5">Status</label>
+        <select className="input" value={status} onChange={e => set('status', e.target.value)}>
+          <option value="active">Active</option>
+          <option value="upcoming" disabled={!canBeUpcoming}>Upcoming</option>
+          <option value="archived">Archived</option>
+        </select>
+        <p className="text-xs text-slate-400 mt-1">
+          Active is the year everyone works in now — setting it archives the current one.
+          Upcoming is pre-built for later; archived is historical.
+          {!canBeUpcoming && ' A past school year cannot be tagged as upcoming.'}
+        </p>
+      </div>
 
       {/* Grading model — DepEd DO 009 / DO 015, s. 2026 */}
       <div className="p-4 rounded-xl border-2 border-slate-200 bg-slate-50 space-y-3">
         <div>
           <p className="text-sm font-medium text-slate-800">Grading model</p>
           <p className="text-xs text-slate-500">
-            DepEd moved to three terms and a new transmutation table from SY 2026-2027,
-            then drops transmutation entirely from SY 2027-2028. Each school year keeps
-            its own setting so past years stay reproducible.
+            Select grading periods and final grade transmutation for this school year.
           </p>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -425,6 +431,10 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
 
+  // An archived year is closed: its grading model is frozen so nothing can
+  // re-transmute grades that were already issued. The model is chosen at creation.
+  const gradingLocked = getStatus(sy) === 'archived'
+
   const handleSave = async e => {
     e.preventDefault()
     const err = validateSY(form.label, form.start_date, form.end_date)
@@ -475,23 +485,40 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
       {/* Grading model — DepEd DO 009 / DO 015, s. 2026 */}
       <div className="p-4 rounded-xl border-2 border-slate-200 bg-slate-50 space-y-3">
         <div>
-          <p className="text-sm font-medium text-slate-800">Grading model</p>
-          <p className="text-xs text-slate-500">
-            DepEd moved to three terms and a new transmutation table from SY 2026-2027,
-            then drops transmutation entirely from SY 2027-2028. Each school year keeps
-            its own setting so past years stay reproducible.
-          </p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium text-slate-800">Grading model</p>
+            {gradingLocked && (
+              <span className="flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-600 font-medium">
+                <Lock size={10}/> Locked
+              </span>
+            )}
+          </div>
+          {gradingLocked ? (
+            <p className="text-xs text-slate-500">
+              This school year is archived, so its grading model can no longer be
+              changed &mdash; the grades it already issued stay reproducible.
+            </p>
+          ) : (
+            <p className="text-xs text-slate-500">
+              Change this only before teachers start recording &mdash; it changes how
+              grades are computed for this school year.
+            </p>
+          )}
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">Grading periods</label>
-            <select className="input" value={form.period_model} onChange={e => set('period_model', e.target.value)}>
+            <select className="input disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
+              value={form.period_model} disabled={gradingLocked}
+              onChange={e => set('period_model', e.target.value)}>
               {PERIOD_MODEL_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">Final grade</label>
-            <select className="input" value={form.grading_policy} onChange={e => set('grading_policy', e.target.value)}>
+            <select className="input disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
+              value={form.grading_policy} disabled={gradingLocked}
+              onChange={e => set('grading_policy', e.target.value)}>
               {GRADING_POLICY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
@@ -883,6 +910,8 @@ export default function CurriculumManagement() {
           {/* ── Subjects ─────────────────────────────────── */}
           {tab === 'subjects' && (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {/* Default grid stretch: every card in a row takes the height of the
+                  tallest card in that row, and each row is measured on its own. */}
               {visibleGrades.map(grade => (
                 <GradeCard key={grade} grade={grade}
                   items={subjects[grade] || []} type="subject" syId={selectedSY.id}
@@ -901,11 +930,6 @@ export default function CurriculumManagement() {
                   <span className="text-slate-400"> Numeric levels use Score Entry and the transmutation table;
                   descriptive levels are rated against competencies on the scale you pick.</span>
                 </p>
-                <p className="text-xs text-slate-400 mt-2">
-                  DepEd DO 015, s. 2026 moves Grade 1 to descriptive grading in SY 2026-2027,
-                  Grade 2 in 2027-2028 and Grade 3 in 2028-2029, with Kindergarten on CO / DV / BG throughout.
-                  Private schools are encouraged rather than required to adopt, so the schedule is yours to set.
-                </p>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {assessment.config.map(entry => (
@@ -919,6 +943,8 @@ export default function CurriculumManagement() {
           {/* ── Sections ─────────────────────────────────── */}
           {tab === 'sections' && (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {/* Default grid stretch: every card in a row takes the height of the
+                  tallest card in that row, and each row is measured on its own. */}
               {visibleGrades.map(grade => (
                 <GradeCard key={grade} grade={grade}
                   items={sections[grade] || []} type="section" syId={selectedSY.id}

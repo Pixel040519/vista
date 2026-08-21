@@ -243,8 +243,8 @@ router.post('/school-years', authorizeSuperAdmin, async (req, res, next) => {
       // Copy subjects & sections from another school year
       if (value.copy_from_id) {
         await client.query(
-          `INSERT INTO subjects (name, grade_level, description, school_year_id)
-           SELECT name, grade_level, description, $1 FROM subjects
+          `INSERT INTO subjects (name, grade_level, school_year_id)
+           SELECT name, grade_level, $1 FROM subjects
            WHERE school_year_id=$2 AND is_active=TRUE
            ON CONFLICT DO NOTHING`,
           [newSY.id, value.copy_from_id]
@@ -328,6 +328,30 @@ router.put('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
       grading_policy: Joi.string().valid('DO8_2015', 'DO15_2026', 'ZERO_BASED').optional(),
     }).validate(req.body)
     if (error) throw new AppError(error.details[0].message, 422)
+
+    // An archived year is closed, so its grading model is frozen: changing it would
+    // silently re-transmute grades that were already issued. Only a real change is
+    // rejected -- the edit modal resubmits the current values verbatim, and that
+    // no-op must keep working.
+    if (value.period_model !== undefined || value.grading_policy !== undefined) {
+      const cur = await query(
+        'SELECT is_active, is_upcoming, period_model, grading_policy FROM school_years WHERE id=$1',
+        [req.params.id]
+      )
+      if (cur.rows.length) {
+        const row = cur.rows[0]
+        const archived = !row.is_active && !row.is_upcoming
+        const changed =
+          (value.period_model   !== undefined && value.period_model   !== (row.period_model   || '4Q')) ||
+          (value.grading_policy !== undefined && value.grading_policy !== (row.grading_policy || 'DO8_2015'))
+        if (archived && changed) {
+          throw new AppError(
+            'The grading model of an archived school year cannot be changed. Its grades were already issued and must stay reproducible.',
+            409
+          )
+        }
+      }
+    }
 
     // Validate label+dates alignment if any of them are being updated
     if (value.label || value.start_date || value.end_date) {
@@ -419,7 +443,7 @@ router.get('/subjects', async (req, res, next) => {
     }
 
     const result = await query(
-      `SELECT id, name, grade_level, description, created_at,
+      `SELECT id, name, grade_level, created_at,
               EXISTS(SELECT 1 FROM grading_structure gs WHERE gs.subject_id=subjects.id AND gs.is_active=TRUE) AS has_grading
        FROM subjects WHERE ${conditions.join(' AND ')}
        ORDER BY ${GRADE_ORDER}, name`, params
@@ -433,7 +457,7 @@ router.get('/subjects/grouped', async (req, res, next) => {
     const sy_id = await resolveSYId(req.query.sy_id)
     const scope = gradeScopeForRole(req.user.role)
     const result = await query(
-      `SELECT id, name, grade_level, description,
+      `SELECT id, name, grade_level,
               EXISTS(SELECT 1 FROM grading_structure gs WHERE gs.subject_id=subjects.id AND gs.is_active=TRUE) AS has_grading
        FROM subjects WHERE school_year_id=$1 AND is_active=TRUE
          AND grade_level = ANY($2::text[])
@@ -451,7 +475,6 @@ router.post('/subjects', authorizeAnyAdmin, async (req, res, next) => {
     const { error, value } = Joi.object({
       name:         Joi.string().min(1).max(100).required(),
       grade_level:  Joi.string().valid(...GRADE_LEVELS).required(),
-      description:  Joi.string().optional().allow(''),
       sy_id:        Joi.string().uuid().optional(),
     }).validate(req.body)
     if (error) throw new AppError(error.details[0].message, 422)
@@ -466,9 +489,9 @@ router.post('/subjects', authorizeAnyAdmin, async (req, res, next) => {
     if (dup.rows.length) throw new AppError(`"${value.name}" already exists in ${value.grade_level} for this school year.`, 409)
 
     const result = await query(
-      `INSERT INTO subjects (name, grade_level, description, school_year_id)
-       VALUES ($1,$2,$3,$4) RETURNING id, name, grade_level, description, created_at`,
-      [value.name, value.grade_level, value.description || null, sy_id]
+      `INSERT INTO subjects (name, grade_level, school_year_id)
+       VALUES ($1,$2,$3) RETURNING id, name, grade_level, created_at`,
+      [value.name, value.grade_level, sy_id]
     )
     res.status(201).json({ message: 'Subject added.', subject: result.rows[0] })
   } catch (err) { next(err) }
@@ -479,7 +502,6 @@ router.put('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
     const { error, value } = Joi.object({
       name:        Joi.string().min(1).max(100).optional(),
       grade_level: Joi.string().valid(...GRADE_LEVELS).optional(),
-      description: Joi.string().optional().allow(''),
     }).validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
 
@@ -489,7 +511,6 @@ router.put('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
     const sets=[]; const params=[]
     if (value.name)        { params.push(value.name);        sets.push(`name=$${params.length}`) }
     if (value.grade_level) { params.push(value.grade_level); sets.push(`grade_level=$${params.length}`) }
-    if (value.description !== undefined) { params.push(value.description||null); sets.push(`description=$${params.length}`) }
     if (!sets.length) throw new AppError('Nothing to update.', 400)
     sets.push('updated_at=NOW()')
     params.push(req.params.id)
@@ -497,7 +518,7 @@ router.put('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
     const result = await query(
       `UPDATE subjects SET ${sets.join(',')}
        WHERE id=$${params.length} AND is_active=TRUE
-       RETURNING id, name, grade_level, description, created_at`, params
+       RETURNING id, name, grade_level, created_at`, params
     )
     if (!result.rows.length) throw new AppError('Subject not found.', 404)
     res.json({ message: 'Subject updated.', subject: result.rows[0] })
