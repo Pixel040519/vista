@@ -23,7 +23,8 @@ async def get_dashboard_summary(db: AsyncSession = Depends(get_db)):
     # ── Enrollment Summary ──
     enrollment = await db.execute(text("""
         SELECT grade_level, COUNT(*) as count
-        FROM students WHERE is_active = TRUE
+        FROM students
+        WHERE is_active = TRUE AND enrollment_status = 'enrolled'
         GROUP BY grade_level ORDER BY grade_level
     """))
     enrollment_data = [

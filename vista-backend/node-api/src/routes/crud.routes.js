@@ -38,10 +38,14 @@ attendanceRouter.use(authenticate);
 // GET /api/attendance?student_id=&start_date=&end_date=
 attendanceRouter.get('/', enforceParentLinked, async (req, res, next) => {
   try {
-    const { student_id, start_date, end_date } = req.query;
+    const { student_id, start_date, end_date, sy_id } = req.query;
     if (!student_id) throw new AppError('student_id is required.', 400);
 
-    const params = [student_id, start_date || null, end_date || null];
+    // `sy_id` is optional and off by default: with no params this still returns
+    // every record the learner ever had, which is what Student Detail and the
+    // parent app show. It exists so a caller that cares about one school year can
+    // ask for it directly instead of guessing from dates.
+    const params = [student_id, start_date || null, end_date || null, sy_id || null];
     let teacherFilter = '';
     if (req.user.role === 'teacher') {
       const activeSY = await query(
@@ -54,10 +58,10 @@ attendanceRouter.get('/', enforceParentLinked, async (req, res, next) => {
            SELECT ta.subject
            FROM teacher_assignments ta
            JOIN students st ON st.id = $1
-           WHERE ta.teacher_id = $4
+           WHERE ta.teacher_id = $5
              AND ta.grade_level = st.grade_level
              AND ta.section = st.section
-             AND ta.school_year = $5
+             AND ta.school_year = $6
          )`;
     }
 
@@ -68,7 +72,8 @@ attendanceRouter.get('/', enforceParentLinked, async (req, res, next) => {
        LEFT JOIN subjects sub ON sub.id = a.subject_id
        WHERE a.student_id = $1
          AND ($2::date IS NULL OR a.date >= $2::date)
-         AND ($3::date IS NULL OR a.date <= $3::date)${teacherFilter}
+         AND ($3::date IS NULL OR a.date <= $3::date)
+         AND ($4::uuid IS NULL OR a.school_year_id = $4::uuid)${teacherFilter}
        ORDER BY a.date DESC`,
       params
     );
@@ -160,11 +165,18 @@ attendanceRouter.post('/', authorize('teacher'), async (req, res, next) => {
     const inserted = [];
     for (const record of records) {
       if (!record.subject_id) throw new AppError('subject_id is required for each record.', 400);
+      // `school_year_id` is derived from the subject, not from the date. Subjects
+      // are scoped per school year, so the subject is the authoritative answer to
+      // "which year is this attendance from" -- and the date is not: consecutive
+      // school years leave months uncovered between one year's end date and the
+      // next one's start, and a record falling in such a gap used to belong to no
+      // year at all. Done inline so the upsert stays one statement.
       const result = await query(
-        `INSERT INTO attendance (student_id, date, status, remarks, recorded_by, subject_id)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO attendance (student_id, date, status, remarks, recorded_by, subject_id, school_year_id)
+         VALUES ($1, $2, $3, $4, $5, $6, (SELECT school_year_id FROM subjects WHERE id = $6))
          ON CONFLICT (student_id, date, subject_id)
-         DO UPDATE SET status = EXCLUDED.status, remarks = EXCLUDED.remarks, recorded_by = EXCLUDED.recorded_by
+         DO UPDATE SET status = EXCLUDED.status, remarks = EXCLUDED.remarks,
+                       recorded_by = EXCLUDED.recorded_by, school_year_id = EXCLUDED.school_year_id
          RETURNING *`,
         [record.student_id, record.date, record.status, record.remarks, req.user.id, record.subject_id]
       );
@@ -356,6 +368,7 @@ gradeRouter.get('/by-subject', async (req, res, next) => {
       `SELECT id, lrn, surname, first_name, middle_name, gender
        FROM students
        WHERE grade_level=$1 AND section=$2 AND is_active=TRUE
+         AND enrollment_status='enrolled'
        ORDER BY gender DESC NULLS LAST, surname, first_name`,
       [grade_level, section]
     );
@@ -441,6 +454,8 @@ const teacherOwnsStudent = async (teacherId, studentId) => {
       WHERE st.id = $1
         AND ta.teacher_id = $2
         AND ta.school_year = $3
+        AND st.is_active = TRUE
+        AND st.enrollment_status = 'enrolled'
       LIMIT 1`,
     [studentId, teacherId, syLabel]
   );

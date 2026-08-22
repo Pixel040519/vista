@@ -8,6 +8,27 @@ const { authenticate, authorizeAnyAdmin, enforceGradeScope } = require('../middl
 const { AppError } = require('../middleware/error.middleware')
 const { normaliseName } = require('../utils/nameHelper')
 const { ROLES, gradeScopeForRole, canManageGrade, isScopedAdmin } = require('../utils/roles')
+const { assertSectionsExist } = require('../utils/sections')
+const { MANUAL_STATUS_IDS, clampToManual, statusLabel } = require('../utils/enrollment')
+
+// The active school year, needed both to validate section names and to stamp
+// the enrollment record a newly-added learner starts life with.
+const requireActiveSYId = async () => {
+  const r = await query('SELECT id FROM school_years WHERE is_active=TRUE LIMIT 1')
+  if (!r.rows.length) throw new AppError('No active school year configured.', 500)
+  return r.rows[0].id
+}
+
+// A student only exists inside a school year. Every create path stamps the
+// active year's enrollment row so the roster and the year-by-year history agree
+// from the moment the learner is added.
+const enrollForActiveYear = async (client, syId, student) =>
+  client.query(
+    `INSERT INTO student_enrollments (student_id, school_year_id, grade_level, section, status)
+     VALUES ($1,$2,$3,$4,'enrolled')
+     ON CONFLICT (student_id, school_year_id) DO NOTHING`,
+    [student.id, syId, student.grade_level, student.section || null]
+  )
 
 // Throws 403 if the targeted student's grade_level is outside the caller's scope.
 // Super_admin, teachers, and parents are untouched (teachers/parents are scoped
@@ -201,13 +222,19 @@ router.get('/parents/search', authorizeAnyAdmin, async (req, res, next) => {
 // GET /api/students
 router.get('/', async (req, res, next) => {
   try {
-    const { grade_level, section, search, page=1, limit=20 } = req.query
+    const { grade_level, section, search, enrollment_status, page=1, limit=20 } = req.query
     const offset = (page-1)*limit
     const conditions = ['s.is_active=TRUE']
     const params = []
 
     if (grade_level) { params.push(grade_level); conditions.push(`s.grade_level=$${params.length}`) }
     if (section)     { params.push(section);      conditions.push(`s.section=$${params.length}`) }
+    // Teachers and parents only ever see learners actually studying this year --
+    // a pending or withdrawn student must not appear on a class list. Admins
+    // keep the full roster so nobody becomes invisible.
+    if (req.user.role === ROLES.TEACHER || req.user.role === ROLES.PARENT) {
+      conditions.push(`s.enrollment_status='enrolled'`)
+    }
     if (search) {
       params.push(`%${search}%`)
       conditions.push(`(s.surname ILIKE $${params.length} OR s.first_name ILIKE $${params.length} OR s.full_name ILIKE $${params.length} OR s.lrn ILIKE $${params.length})`)
@@ -222,21 +249,40 @@ router.get('/', async (req, res, next) => {
     }
 
     const join  = req.user.role === 'parent' ? 'INNER JOIN parent_student ps ON ps.student_id=s.id' : ''
+
+    // Snapshot the filters before the status filter is applied -- the breakdown
+    // below has to count every status, including the ones filtered out.
+    const unstatusedConditions = [...conditions]
+    const unstatusedParams     = [...params]
+
+    if (enrollment_status) { params.push(enrollment_status); conditions.push(`s.enrollment_status=$${params.length}`) }
+
     const where = `WHERE ${conditions.join(' AND ')}`
     params.push(limit, offset)
 
     const [rows, count] = await Promise.all([
       query(
         `SELECT s.id, s.lrn, s.surname, s.first_name, s.middle_name, s.full_name,
-                s.date_of_birth, s.gender, s.grade_level, s.section, s.profile_photo_url, s.home_address, s.created_at
+                s.date_of_birth, s.gender, s.grade_level, s.section, s.enrollment_status,
+                s.profile_photo_url, s.home_address, s.created_at
          FROM students s ${join} ${where}
          ORDER BY s.surname, s.first_name
          LIMIT $${params.length-1} OFFSET $${params.length}`, params),
       query(`SELECT COUNT(*) FROM students s ${join} ${where}`, params.slice(0,-2))
     ])
 
+    // Status breakdown over the same filters *except* the status filter itself,
+    // so the header can report "N enrolled / M pending" and the status tabs keep
+    // showing their counts while one of them is selected.
+    const byStatus = await query(
+      `SELECT s.enrollment_status, COUNT(*)::int AS count
+       FROM students s ${join} WHERE ${unstatusedConditions.join(' AND ')} GROUP BY 1`,
+      unstatusedParams
+    )
+
     res.json({
       students: rows.rows,
+      by_status: Object.fromEntries(byStatus.rows.map(r => [r.enrollment_status, r.count])),
       pagination: { total: parseInt(count.rows[0].count), page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(count.rows[0].count/limit) }
     })
   } catch (err) { next(err) }
@@ -305,6 +351,52 @@ router.patch('/:id/academic-access', authorizeAnyAdmin, async (req, res, next) =
   } catch (err) { next(err) }
 })
 
+// PATCH /api/students/:id/enrollment-status — admin-only.
+// Confirms a pending learner, or records that one has left. Writes the mirror on
+// `students` AND the active year's `student_enrollments` row together, so the
+// roster and the year-by-year history can never disagree.
+//
+// Attendance only. 'graduated' is a year-end outcome earned from results, so it
+// is not on offer here — the promotion wizard is the only thing that sets one.
+router.patch('/:id/enrollment-status', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const schema = Joi.object({
+      status:  Joi.string().valid(...MANUAL_STATUS_IDS).required(),
+      remarks: Joi.string().allow('').max(500).optional(),
+    })
+    const { error, value } = schema.validate(req.body, { stripUnknown: true })
+    if (error) throw new AppError(error.details[0].message, 422)
+
+    await assertStudentInScope(req, req.params.id)
+    const activeSY = await requireActiveSYId()
+
+    const student = await withTransaction(async (client) => {
+      const r = await client.query(
+        `UPDATE students SET enrollment_status=$1, updated_at=NOW()
+          WHERE id=$2 AND is_active=TRUE
+          RETURNING id, full_name, grade_level, section, enrollment_status`,
+        [value.status, req.params.id]
+      )
+      if (!r.rows.length) throw new AppError('Student not found.', 404)
+      const row = r.rows[0]
+
+      await client.query(
+        `INSERT INTO student_enrollments
+           (student_id, school_year_id, grade_level, section, status, remarks, decided_by, decided_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+         ON CONFLICT (student_id, school_year_id) DO UPDATE
+           SET status=EXCLUDED.status, remarks=EXCLUDED.remarks,
+               decided_by=EXCLUDED.decided_by, decided_at=NOW(), updated_at=NOW()`,
+        [row.id, activeSY, row.grade_level, row.section || null,
+         value.status, value.remarks || null, req.user.id]
+      )
+      return row
+    })
+
+    res.json({ message: `${student.full_name} marked ${statusLabel(value.status).toLowerCase()}.`, student })
+  } catch (err) { next(err) }
+})
+
 // POST /api/students
 router.post('/', authorizeAnyAdmin, async (req, res, next) => {
   try {
@@ -319,13 +411,16 @@ router.post('/', authorizeAnyAdmin, async (req, res, next) => {
     const dup = await query('SELECT id FROM students WHERE lrn=$1', [data.lrn])
     if (dup.rows.length) throw new AppError('A student with this LRN already exists.', 409)
 
+    const activeSY = await requireActiveSYId()
+
     const student = await withTransaction(async (client) => {
       const sRes = await client.query(
         `INSERT INTO students (lrn, surname, first_name, middle_name, date_of_birth, gender, grade_level, section, profile_photo_url, home_address)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, grade_level, section`,
         [data.lrn, surname, first_name, middle_name||null, data.date_of_birth,
          data.gender, data.grade_level, data.section||null, data.profile_photo_url||null, data.home_address||null]
       )
+      await enrollForActiveYear(client, activeSY, sRes.rows[0])
       for (const g of guardians) await insertGuardian(client, sRes.rows[0].id, g)
       return await getStudentWithGuardians(sRes.rows[0].id)
     })
@@ -401,23 +496,8 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
 
     // Validate (grade_level, section) against sections defined for the active
     // school year. Empty section is allowed (mirrors single-student POST).
-    const rowsWithSection = rows.filter(r => r.section && String(r.section).trim())
-    if (rowsWithSection.length) {
-      const sy = await query('SELECT id FROM school_years WHERE is_active=TRUE LIMIT 1')
-      if (!sy.rows.length) throw new AppError('No active school year configured.', 500)
-      const secs = await query(
-        'SELECT grade_level, name FROM sections WHERE school_year_id=$1 AND is_active=TRUE',
-        [sy.rows[0].id]
-      )
-      const valid = new Set(secs.rows.map(s => `${s.grade_level}|${s.name}`))
-      const badSections = []
-      rows.forEach((r, i) => {
-        if (r.section && !valid.has(`${r.grade_level}|${r.section}`)) {
-          badSections.push(`Row ${i + 1}: section "${r.section}" does not exist for ${r.grade_level}`)
-        }
-      })
-      if (badSections.length) throw new AppError(badSections.join('; '), 400)
-    }
+    const activeSY = await requireActiveSYId()
+    await assertSectionsExist(activeSY, rows, (_r, i) => `Row ${i + 1}`)
 
     const inserted = await withTransaction(async (client) => {
       const out = []
@@ -426,11 +506,12 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
         const res = await client.query(
           `INSERT INTO students (lrn, surname, first_name, middle_name, date_of_birth,
                                  gender, grade_level, section, home_address)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, lrn`,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, lrn, grade_level, section`,
           [r.lrn, surname, first_name, middle_name || null, r.date_of_birth,
            r.gender, r.grade_level, r.section || null, r.home_address]
         )
-        out.push(res.rows[0])
+        await enrollForActiveYear(client, activeSY, res.rows[0])
+        out.push({ id: res.rows[0].id, lrn: res.rows[0].lrn })
       }
       return out
     })
@@ -468,11 +549,38 @@ router.put('/:id', authorizeAnyAdmin, async (req, res, next) => {
     sets.push('updated_at=NOW()')
     params.push(req.params.id)
 
-    const r = await query(
-      `UPDATE students SET ${sets.join(',')} WHERE id=$${params.length} AND is_active=TRUE RETURNING id`, params
-    )
-    if (!r.rows.length) throw new AppError('Student not found.', 404)
-    res.json({ message: 'Student updated.', student: await getStudentWithGuardians(req.params.id) })
+    // Moving a learner here has to move the active year's enrolment record with
+    // them. Otherwise the record still names last month's class, and the next
+    // rollover would quietly undo the edit.
+    const movesClass = normed.grade_level !== undefined || normed.section !== undefined
+    const activeSY = movesClass ? await requireActiveSYId() : null
+
+    const updated = await withTransaction(async (client) => {
+      const r = await client.query(
+        `UPDATE students SET ${sets.join(',')} WHERE id=$${params.length} AND is_active=TRUE
+         RETURNING id, grade_level, section, enrollment_status`, params
+      )
+      if (!r.rows.length) throw new AppError('Student not found.', 404)
+
+      if (movesClass) {
+        const row = r.rows[0]
+        await client.query(
+          `INSERT INTO student_enrollments
+             (student_id, school_year_id, grade_level, section, status, decided_by, decided_at)
+           VALUES ($1,$2,$3,$4,$5,$6,NOW())
+           ON CONFLICT (student_id, school_year_id) DO UPDATE
+             SET grade_level=EXCLUDED.grade_level, section=EXCLUDED.section,
+                 decided_by=EXCLUDED.decided_by, decided_at=NOW(), updated_at=NOW()`,
+                // The mirror can say 'graduated', which the record's CHECK refuses:
+          // in the year itself the learner was enrolled, so clamp it.
+          [row.id, activeSY, row.grade_level, row.section || null,
+           clampToManual(row.enrollment_status), req.user.id]
+        )
+      }
+      return r.rows[0]
+    })
+
+    res.json({ message: 'Student updated.', student: await getStudentWithGuardians(updated.id) })
   } catch (err) { next(err) }
 })
 

@@ -88,6 +88,7 @@ export const studentApi = {
   updateGuardian: (id, gid, d) => api.put(`/students/${id}/guardians/${gid}`, d),
   removeGuardian: (id, gid) => api.delete(`/students/${id}/guardians/${gid}`),
   setAcademicAccess: (id, data) => api.patch(`/students/${id}/academic-access`, data),
+  setEnrollmentStatus: (id, data) => api.patch(`/students/${id}/enrollment-status`, data),
 }
 
 // ── Attendance ────────────────────────────────────────────────
@@ -195,6 +196,28 @@ export const scoreApi = {
   getBreakdown: (params) => api.get('/scores/breakdown', { params }),
 }
 
+// ── Enrollment (per school year, admin only) ─────────────────
+export const enrollmentApi = {
+  // params: { sy_id, grade_level, section, status, outcome, include_left, q }
+  roster:   (params)     => api.get('/enrollment', { params }),
+  previous: (sy_id)      => api.get('/enrollment/previous', { params: { sy_id } }),
+  history:  (studentId)  => api.get(`/enrollment/student/${studentId}`),
+  // `allow_archived` is the Enrollment page saying the admin unlocked a closed
+  // year on purpose; without it the API refuses to rewrite one.
+  save:     (sy_id, entries, allow_archived = false) =>
+    api.put('/enrollment', { sy_id, entries, allow_archived }),
+  remove:   (sy_id, student_id, allow_archived = false) =>
+    api.delete('/enrollment', { params: { sy_id, student_id, allow_archived } }),
+
+  // Year-end promotion
+  promotionReview: (sy_id, target_sy_id) =>
+    api.get('/enrollment/promotion-review', { params: { sy_id, target_sy_id } }),
+  // `allow_archived` is the wizard saying the admin unlocked a closed handover
+  // year on purpose; without it the API refuses to rewrite one.
+  promote: (sy_id, target_sy_id, decisions, allow_archived = false) =>
+    api.post('/enrollment/promotion', { sy_id, target_sy_id, decisions, allow_archived }),
+}
+
 // ── Curriculum (Subjects & Sections) ─────────────────────────
 export const curriculumApi = {
   // School Years
@@ -202,6 +225,7 @@ export const curriculumApi = {
   createSchoolYear:   (data)      => api.post('/curriculum/school-years', data),
   updateSchoolYear:   (id, d)     => api.put(`/curriculum/school-years/${id}`, d),
   deleteSchoolYear:   (id)        => api.delete(`/curriculum/school-years/${id}`),
+  enrollmentReadiness:(id)        => api.get(`/curriculum/school-years/${id}/enrollment-readiness`),
   // Subjects (sy_id filters by school year)
   getSubjects:        (params)    => api.get('/curriculum/subjects', { params }),
   getSubjectsGrouped: (sy_id)     => api.get('/curriculum/subjects/grouped', { params: { sy_id } }),

@@ -396,7 +396,7 @@ async def get_all_risk_levels(db: AsyncSession = Depends(get_db)):
     stu_rows = (await db.execute(text("""
         SELECT id, full_name, grade_level, section
           FROM students
-         WHERE is_active = TRUE
+         WHERE is_active = TRUE AND enrollment_status = 'enrolled'
          ORDER BY full_name
     """))).fetchall()
 

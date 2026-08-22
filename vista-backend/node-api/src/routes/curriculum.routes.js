@@ -4,6 +4,7 @@ const Joi     = require('joi')
 const { query, withTransaction } = require('../config/database')
 const { authenticate, authorizeAnyAdmin, authorizeSuperAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
+const { loadSection, sectionUsage, describeUsage, renameSectionEverywhere } = require('../utils/sections')
 const { gradeScopeForRole, canManageGrade, isScopedAdmin, isSuperAdmin } = require('../utils/roles')
 const { RATING_SCALES, resolveAssessment } = require('../utils/grading')
 const { loadAssessmentRows } = require('../utils/assessmentConfig')
@@ -185,6 +186,51 @@ router.delete('/assessment-config/:grade_level', authorizeAnyAdmin, async (req, 
 })
 
 
+// Rolling the school year over is what actually moves students. `students`
+// carries the *current* grade_level/section/enrollment_status -- every roster
+// query in the system reads those columns directly -- while
+// `student_enrollments` holds the year-by-year record. Activating a year is the
+// one moment the two are reconciled.
+//
+// A learner with no record for the incoming year is NOT carried over as
+// enrolled: that is exactly the silent behaviour this replaces. They keep the
+// grade level they left off at, so the admin can see where they stood, but go
+// 'pending' and drop off the class lists until someone confirms them.
+//
+// `student_enrollments.status` is now a straight copy: it carries only the four
+// attendance values, and the year-end outcome lives in its own column. (This
+// UPDATE used to re-implement `mirrorStatus()` in SQL, which was a second copy
+// of a rule that had to stay in step with the JS one.)
+const rolloverStudents = async (client, schoolYearId) => {
+  const adopted = await client.query(
+    `UPDATE students s
+        SET grade_level = e.grade_level,
+            section = e.section,
+            enrollment_status = e.status,
+            updated_at = NOW()
+       FROM student_enrollments e
+      WHERE e.student_id = s.id AND e.school_year_id = $1 AND s.is_active = TRUE
+      RETURNING s.id`,
+    [schoolYearId]
+  )
+
+  // Learners who have left keep their standing. Marking a graduate or a
+  // transferred-out learner 'pending' would quietly put them back on the
+  // school's books every time a year is activated.
+  const pending = await client.query(
+    `UPDATE students s
+        SET enrollment_status = 'pending', updated_at = NOW()
+      WHERE s.is_active = TRUE
+        AND s.enrollment_status NOT IN ('transferred_out','dropped','graduated')
+        AND NOT EXISTS (SELECT 1 FROM student_enrollments e
+                         WHERE e.student_id = s.id AND e.school_year_id = $1)
+      RETURNING s.id`,
+    [schoolYearId]
+  )
+
+  return { adopted: adopted.rowCount, pending: pending.rowCount }
+}
+
 // ════════════════════════════════════════════════════════════
 // SCHOOL YEARS
 // ════════════════════════════════════════════════════════════
@@ -197,6 +243,48 @@ router.get('/school-years', async (req, res, next) => {
        FROM school_years ORDER BY label DESC`
     )
     res.json({ school_years: result.rows })
+  } catch (err) { next(err) }
+})
+
+// GET /school-years/:id/enrollment-readiness
+//
+// Feeds the pre-flight panel in the Edit School Year modal: how many learners
+// already have an enrolment record for this year, and how many would be marked
+// pending if it were activated right now. Any admin may read it -- it is the
+// warning that keeps activation from being a surprise, even though only a
+// super_admin can pull the trigger.
+router.get('/school-years/:id/enrollment-readiness', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const sy = await query('SELECT id, label, is_active FROM school_years WHERE id=$1', [req.params.id])
+    if (!sy.rows.length) throw new AppError('School year not found.', 404)
+
+    const params = [req.params.id]
+    const conditions = ['s.is_active=TRUE']
+    if (isScopedAdmin(req.user.role)) {
+      params.push(gradeScopeForRole(req.user.role))
+      conditions.push(`s.grade_level = ANY($${params.length}::text[])`)
+    }
+
+    const rows = await query(
+      `SELECT COALESCE(e.status, 'none') AS status, COUNT(*)::int AS count
+         FROM students s
+         LEFT JOIN student_enrollments e ON e.student_id=s.id AND e.school_year_id=$1
+        WHERE ${conditions.join(' AND ')}
+        GROUP BY 1`,
+      params
+    )
+
+    const by_status = Object.fromEntries(rows.rows.map(r => [r.status, r.count]))
+    const total = rows.rows.reduce((a, r) => a + r.count, 0)
+    const without_record = by_status.none || 0
+
+    res.json({
+      school_year: sy.rows[0],
+      total_students: total,
+      with_record: total - without_record,
+      without_record,
+      by_status,
+    })
   } catch (err) { next(err) }
 })
 
@@ -329,52 +417,47 @@ router.put('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
     }).validate(req.body)
     if (error) throw new AppError(error.details[0].message, 422)
 
+    // One read of the current row serves every guard below, and the rollover
+    // needs `is_active` regardless of which fields were submitted.
+    const existingRes = await query(
+      `SELECT label, is_active, is_upcoming, start_date, end_date, period_model, grading_policy
+         FROM school_years WHERE id=$1`,
+      [req.params.id]
+    )
+    if (!existingRes.rows.length) throw new AppError('School year not found.', 404)
+    const existing = existingRes.rows[0]
+
     // An archived year is closed, so its grading model is frozen: changing it would
     // silently re-transmute grades that were already issued. Only a real change is
     // rejected -- the edit modal resubmits the current values verbatim, and that
     // no-op must keep working.
     if (value.period_model !== undefined || value.grading_policy !== undefined) {
-      const cur = await query(
-        'SELECT is_active, is_upcoming, period_model, grading_policy FROM school_years WHERE id=$1',
-        [req.params.id]
-      )
-      if (cur.rows.length) {
-        const row = cur.rows[0]
-        const archived = !row.is_active && !row.is_upcoming
-        const changed =
-          (value.period_model   !== undefined && value.period_model   !== (row.period_model   || '4Q')) ||
-          (value.grading_policy !== undefined && value.grading_policy !== (row.grading_policy || 'DO8_2015'))
-        if (archived && changed) {
-          throw new AppError(
-            'The grading model of an archived school year cannot be changed. Its grades were already issued and must stay reproducible.',
-            409
-          )
-        }
+      const archived = !existing.is_active && !existing.is_upcoming
+      const changed =
+        (value.period_model   !== undefined && value.period_model   !== (existing.period_model   || '4Q')) ||
+        (value.grading_policy !== undefined && value.grading_policy !== (existing.grading_policy || 'DO8_2015'))
+      if (archived && changed) {
+        throw new AppError(
+          'The grading model of an archived school year cannot be changed. Its grades were already issued and must stay reproducible.',
+          409
+        )
       }
     }
 
     // Validate label+dates alignment if any of them are being updated
     if (value.label || value.start_date || value.end_date) {
-      // Fetch current values to fill in any missing fields
-      const current = await query('SELECT label, start_date, end_date FROM school_years WHERE id=$1', [req.params.id])
-      if (current.rows.length) {
-        const cur = current.rows[0]
-        const checkLabel = value.label || cur.label
-        const checkStart = value.start_date !== undefined ? value.start_date : cur.start_date
-        const checkEnd   = value.end_date   !== undefined ? value.end_date   : cur.end_date
-        const syErr = validateSchoolYear(checkLabel, checkStart, checkEnd)
-        if (syErr) throw new AppError(syErr, 422)
-      }
+      const checkLabel = value.label || existing.label
+      const checkStart = value.start_date !== undefined ? value.start_date : existing.start_date
+      const checkEnd   = value.end_date   !== undefined ? value.end_date   : existing.end_date
+      const syErr = validateSchoolYear(checkLabel, checkStart, checkEnd)
+      if (syErr) throw new AppError(syErr, 422)
     }
 
     if (value.is_active && value.is_upcoming) throw new AppError('A school year cannot be both active and upcoming.', 422)
 
     if (value.is_upcoming === true) {
-      const cur = await query('SELECT label FROM school_years WHERE id=$1', [req.params.id])
-      if (cur.rows.length) {
-        const endYear = parseInt((value.label || cur.rows[0].label).split('-')[1])
-        if (endYear <= new Date().getFullYear()) throw new AppError('Past school years cannot be tagged as upcoming.', 422)
-      }
+      const endYear = parseInt((value.label || existing.label).split('-')[1])
+      if (endYear <= new Date().getFullYear()) throw new AppError('Past school years cannot be tagged as upcoming.', 422)
     }
 
     const sets=[]; const params=[]
@@ -388,6 +471,10 @@ router.put('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
     if (!sets.length) throw new AppError('Nothing to update.', 400)
     sets.push('updated_at=NOW()')
     params.push(req.params.id)
+
+    // Switching the school year is the moment students move. Anything else is
+    // just an edit to the year's own metadata.
+    const activating = value.is_active === true && !existing.is_active
 
     const result = await withTransaction(async (client) => {
       // Enforce single-active across all school years
@@ -403,9 +490,16 @@ router.put('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
         params
       )
       if (!r.rows.length) throw new AppError('School year not found.', 404)
-      return r.rows[0]
+
+      const rollover = activating ? await rolloverStudents(client, req.params.id) : null
+      return { school_year: r.rows[0], rollover }
     })
-    res.json({ message: 'School year updated.', school_year: result })
+
+    res.json({
+      message: 'School year updated.',
+      school_year: result.school_year,
+      rollover: result.rollover,
+    })
   } catch (err) { next(err) }
 })
 
@@ -610,6 +704,12 @@ router.post('/sections', authorizeAnyAdmin, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// Nothing references a section by id -- five tables hold it as a bare name
+// string (see `utils/sections.js`). So renaming one is a fan-out write, and
+// moving one between grade levels is not a rename at all: the learners, teacher
+// assignments and score items sitting in it belong to the old grade level and
+// would become nonsense. Renames cascade; grade-level moves are refused once
+// anything depends on the section.
 router.put('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
@@ -621,41 +721,83 @@ router.put('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
     await assertCurriculumRowInScope(req, 'sections', req.params.id)
     if (value.grade_level) enforceGradeScope(req, value.grade_level)
 
-    const sets=[]; const params=[]
-    if (value.name)        { params.push(value.name);        sets.push(`name=$${params.length}`) }
-    if (value.grade_level) { params.push(value.grade_level); sets.push(`grade_level=$${params.length}`) }
-    if (!sets.length) throw new AppError('Nothing to update.', 400)
-    sets.push('updated_at=NOW()')
-    params.push(req.params.id)
+    const sec = await loadSection(req.params.id)
+    if (!sec || !sec.section_is_active) throw new AppError('Section not found.', 404)
 
-    const result = await query(
-      `UPDATE sections SET ${sets.join(',')}
-       WHERE id=$${params.length} AND is_active=TRUE
-       RETURNING id, name, grade_level, created_at`, params
+    const newName  = value.name        !== undefined ? value.name        : sec.name
+    const newGrade = value.grade_level !== undefined ? value.grade_level : sec.grade_level
+    const renaming = newName  !== sec.name
+    const moving   = newGrade !== sec.grade_level
+    if (!renaming && !moving) throw new AppError('Nothing to update.', 400)
+
+    // The unique constraint is (school_year_id, grade_level, name); catching the
+    // collision here gives a readable message instead of a 500 from Postgres.
+    const dup = await query(
+      `SELECT id FROM sections
+        WHERE school_year_id=$1 AND grade_level=$2 AND name=$3 AND is_active=TRUE AND id<>$4`,
+      [sec.school_year_id, newGrade, newName, sec.id]
     )
-    if (!result.rows.length) throw new AppError('Section not found.', 404)
-    res.json({ message: 'Section updated.', section: result.rows[0] })
+    if (dup.rows.length) {
+      throw new AppError(`Section "${newName}" already exists in ${newGrade} for SY ${sec.label}.`, 409)
+    }
+
+    const usage = await sectionUsage(sec)
+
+    if (moving && usage.total > 0) {
+      throw new AppError(
+        `Cannot move "${sec.name}" to ${newGrade}: it still holds ${describeUsage(usage)} in ${sec.grade_level}. ` +
+        'Move those first, or create a new section under the target grade level.',
+        409
+      )
+    }
+
+    const result = await withTransaction(async (client) => {
+      const r = await client.query(
+        `UPDATE sections SET name=$1, grade_level=$2, updated_at=NOW()
+          WHERE id=$3 AND is_active=TRUE
+          RETURNING id, name, grade_level, created_at`,
+        [newName, newGrade, sec.id]
+      )
+      if (!r.rows.length) throw new AppError('Section not found.', 404)
+
+      // Carry the name across everything that holds it, scoped to this
+      // section's grade level and school year.
+      const moved = renaming ? await renameSectionEverywhere(client, sec, newName) : null
+      return { section: r.rows[0], moved }
+    })
+
+    const moved = result.moved
+    res.json({
+      message: moved && moved.total
+        ? `Section renamed to "${newName}". Updated ${describeUsage(moved) || `${moved.total} record(s)`}.`
+        : 'Section updated.',
+      section: result.section,
+      updated: moved,
+    })
   } catch (err) { next(err) }
 })
 
 router.delete('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
-    const sec = await query('SELECT name, grade_level FROM sections WHERE id=$1', [req.params.id])
-    if (!sec.rows.length) throw new AppError('Section not found.', 404)
-    if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, sec.rows[0].grade_level)) {
+    const sec = await loadSection(req.params.id)
+    if (!sec || !sec.section_is_active) throw new AppError('Section not found.', 404)
+    if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, sec.grade_level)) {
       throw new AppError('Section is outside your grade scope.', 403)
     }
 
-    const inUse = await query(
-      `SELECT COUNT(*) FROM students
-       WHERE section=(SELECT name FROM sections WHERE id=$1) AND is_active=TRUE`,
-      [req.params.id]
-    )
-    if (parseInt(inUse.rows[0].count) > 0) {
-      throw new AppError('Cannot delete: students are currently enrolled in this section.', 409)
+    // Scoped by grade level AND school year. The old guard matched on the name
+    // alone, so a Grade 6 "Mabuhay" could not be deleted while a Kinder learner
+    // sat in a differently-scoped section that happened to share the name.
+    const usage = await sectionUsage(sec)
+    if (usage.total > 0) {
+      throw new AppError(
+        `Cannot delete "${sec.name}" (${sec.grade_level}, SY ${sec.label}): it still holds ${describeUsage(usage)}.`,
+        409
+      )
     }
+
     await query('UPDATE sections SET is_active=FALSE, updated_at=NOW() WHERE id=$1', [req.params.id])
-    res.json({ message: `Section "${sec.rows[0].name}" removed from ${sec.rows[0].grade_level}.` })
+    res.json({ message: `Section "${sec.name}" removed from ${sec.grade_level}.` })
   } catch (err) { next(err) }
 })
 

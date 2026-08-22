@@ -90,6 +90,7 @@ async def get_teacher_dashboard_summary(
             SELECT id, full_name, grade_level, section
             FROM students
             WHERE is_active = TRUE
+              AND enrollment_status = 'enrolled'
               AND grade_level = ANY(:grades)
               AND section = ANY(:sections)
             """

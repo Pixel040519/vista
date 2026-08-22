@@ -27,6 +27,7 @@ const eceRoutes = require('./routes/ece.routes');
 const profileRoutes = require('./routes/profile.routes');
 const deviceRoutes = require('./routes/device.routes');
 const pickupRoutes = require('./routes/pickup.routes');
+const enrollmentRoutes = require('./routes/enrollment.routes');
 
 const { errorHandler } = require('./middleware/error.middleware');
 
@@ -87,6 +88,7 @@ app.use('/api/ece', eceRoutes);              // ECE competency catalog & records
 app.use('/api/profile', profileRoutes);      // Self-service profile (any role)
 app.use('/api/devices', deviceRoutes);       // FCM device-token registry
 app.use('/api/pickup-persons', pickupRoutes); // Parent: authorized non-account fetchers
+app.use('/api/enrollment', enrollmentRoutes); // Admin: per-school-year student enrollment
 
 // ─── 404 Handler ──────────────────────────────────────────────
 app.use((req, res) => {

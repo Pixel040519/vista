@@ -14,6 +14,8 @@ import Announcements from './pages/Announcements'
 import RiskOverview from './pages/RiskOverview'
 import AccountManagement from './pages/AccountManagement'
 import CurriculumManagement from './pages/CurriculumManagement'
+import Enrollment from './pages/Enrollment'
+import PromotionWizard from './pages/PromotionWizard'
 import ScoreEntry from './pages/ScoreEntry'
 import EceCompetency from './pages/EceCompetency'
 import Profile from './pages/Profile'
@@ -87,6 +89,14 @@ export default function App() {
 
             <Route path="accounts" element={
               <PrivateRoute roles={ANY_ADMIN}><AccountManagement /></PrivateRoute>
+            } />
+
+            <Route path="enrollment" element={
+              <PrivateRoute roles={ANY_ADMIN}><Enrollment /></PrivateRoute>
+            } />
+
+            <Route path="enrollment/promotion" element={
+              <PrivateRoute roles={ANY_ADMIN}><PromotionWizard /></PrivateRoute>
             } />
 
             <Route path="curriculum" element={

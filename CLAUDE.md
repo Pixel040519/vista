@@ -22,8 +22,12 @@ cd vista-backend/node-api
 npm install
 npm run dev        # nodemon watch mode
 npm start          # production
-npm run migrate    # run DB migrations
 ```
+> There is **no migration runner**. `package.json` still declares a `migrate`
+> script, but `src/config/migrate.js` does not exist and there is no ledger table.
+> Migrations are applied by hand, newest last:
+> `psql vista_db -f vista-backend/database/migrations/<file>.sql`. Every file is
+> written to be safe to re-run — that idempotency is what stands in for a runner.
 
 ### React Dashboard
 ```bash
@@ -64,11 +68,12 @@ PostgreSQL database `vista_db`. Schema: `vista-backend/database/vistaDB_query.sq
 
 Key tables:
 - `users` — admin/teacher/parent accounts. Name fields are `surname`/`first_name`/`middle_name` (no `full_name`, no `home_address` on users). `photo_path` (TEXT, relative path under `/uploads/profile/`) is the parent's avatar shown to the guard on the SecurePass scan result; uploaded via `POST /api/profile/me/photo`.
-- `students` — student profiles with LRN, grade_level, section, QR code for SecurePass. `qr_generated_by` (UUID, FK `users.id`) is stamped by `POST /api/students/:id/generate-qr` so the guard scan flow can identify the parent who pressed Generate and skip the guardian picker. `qr_fetcher_type` (`'self'` | `'auth'` | NULL) + `qr_fetcher_id` bind the active QR to a chosen fetcher: `'self'` → `users.id` of the parent themself, `'auth'` → `authorized_pickup_persons.id`, NULL → legacy/admin-generated path that falls back to the full authorized list. **Expiry policy depends on `qr_fetcher_type`**: `'self'` and NULL/admin QRs use time-based expiry (20 min parents, 30 min admins) AND one-time use; `'auth'` QRs are **single-use only with no time expiry** (the authorized fetcher has no account access to refresh, so a timer would strand them at the gate). Either way, a successful `/verify` clears `qr_code`, `qr_expires_at`, `qr_fetcher_type`, and `qr_fetcher_id`.
+- `students` — student profiles with LRN, grade_level, section, QR code for SecurePass. `grade_level`/`section`/`enrollment_status` are the **denormalised snapshot of the active school year** — every roster query reads them directly; the year-by-year record lives in `student_enrollments`, and the two are reconciled by the rollover when a year is activated. `enrollment_status` (`'pending'` | `'enrolled'` | `'transferred_out'` | `'dropped'` | `'graduated'`) gates who appears on a teacher's class list: only `'enrolled'` does. `is_active` is a separate thing — a soft-delete tombstone, not an enrolment state. `qr_generated_by` (UUID, FK `users.id`) is stamped by `POST /api/students/:id/generate-qr` so the guard scan flow can identify the parent who pressed Generate and skip the guardian picker. `qr_fetcher_type` (`'self'` | `'auth'` | NULL) + `qr_fetcher_id` bind the active QR to a chosen fetcher: `'self'` → `users.id` of the parent themself, `'auth'` → `authorized_pickup_persons.id`, NULL → legacy/admin-generated path that falls back to the full authorized list. **Expiry policy depends on `qr_fetcher_type`**: `'self'` and NULL/admin QRs use time-based expiry (20 min parents, 30 min admins) AND one-time use; `'auth'` QRs are **single-use only with no time expiry** (the authorized fetcher has no account access to refresh, so a timer would strand them at the gate). Either way, a successful `/verify` clears `qr_code`, `qr_expires_at`, `qr_fetcher_type`, and `qr_fetcher_id`.
+- `student_enrollments` — one row per `(student_id, school_year_id)`, carrying **two independent facts**. `status` (`'pending'` | `'enrolled'` | `'transferred_out'` | `'dropped'`) answers *is this learner attending this school year* and is owned by the Enrollment page. `outcome` (`'promoted'` | `'retained'` | `'graduated'`, NULL until the year is closed) answers *how did the year end for them* and is owned by the Year-End Promotion wizard. They are orthogonal — a learner is enrolled in 2025-2026 **and** promoted at the end of it — so writing one must never overwrite the other. `remarks` and `outcome_remarks` split the same way. `decided_by`/`decided_at` record who made the call.
 - `parent_student` — many-to-many guardian↔student link.
 - `authorized_pickup_persons` — non-account fetchers (yaya, lola, driver, relative) a parent has authorized to pick up a specific child. Unlike `parent_student` rows these have **no portal account** — they're scoped to `(parent_id, student_id)`, hold their own `surname`/`first_name`/`middle_name`/`relationship`/`photo_path`, and are managed exclusively by the owning parent through `/api/pickup-persons` from the vista_parent app. The Pickup QR tab lets the parent pick one of these as the fetcher before generating the QR; the chosen row's `id` lands in `students.qr_fetcher_id` and the `vista_guard` scan result renders the photo verbatim.
 - `teacher_assignments` / `class_assignments` — teacher↔class/subject mappings, scoped to a school year; unique per `(grade_level, section, subject, school_year)`.
-- `attendance` — per-student, per-subject, per-day record (Present/Absent/Late/Excused); unique on `(student_id, date, subject_id)` so each teacher records independently per subject.
+- `attendance` — per-student, per-subject, per-day record (Present/Absent/Late/Excused); unique on `(student_id, date, subject_id)` so each teacher records independently per subject. `school_year_id` (nullable, FK `school_years.id`) records **which year the attendance belongs to**, derived from the subject on write — `subjects` is scoped per school year, so the subject is authoritative. It is deliberately **not** derived from the date: consecutive school years leave months uncovered between one year's `end_date` and the next one's `start_date`, and every record falling in such a gap used to belong to no year at all and was invisible to every year-scoped query. NULL means genuinely unattributable (a legacy row with no subject) and counts for no year.
 - `subjects` — curriculum subjects scoped to grade level + school year.
 - `grades` — per-subject, per **grading period** (`score` = initial weighted avg; `grade` = final grade; `remarks` = "Passed"/"Failed" under the DO 8 policy, or a DO 015 descriptor under the newer ones). The column is still named `quarter` but means "period index" — see the grading-policy note below.
 - `grading_structure` — configurable categories + components per subject (self-ref `category_id`; NULL = category, non-NULL = component).
@@ -176,6 +181,152 @@ grade level configured as descriptive. Add that guard before configuring one in 
 Still not implemented from DO 015: the new component weights (WW/PT/**Examinations**
 20/50/30), the per-learning-area descriptive grade on the report card (SF9 Learner's
 Progress Report), and the PACE form.
+
+## Enrollment & school-year rollover
+
+A learner's position is two separate facts, and conflating them is the trap:
+
+| | Holds | Read by |
+|---|---|---|
+| `students.grade_level` / `section` / `enrollment_status` | the **current** standing — a snapshot of the active school year | every roster query, in Node and in FastAPI |
+| `student_enrollments.status` | is the learner **attending** that year | the Enrollment page |
+| `student_enrollments.outcome` | how that year **ended** for them | the Year-End Promotion wizard |
+
+**Status and outcome are two questions, not one vocabulary.** They were a single
+seven-value column at first, which broke both ways: the Enrollment page's status
+dropdown offered year-end verdicts alongside "enrolled", and recording an outcome
+destroyed the enrolment fact it overwrote. `2026_08_22_split_enrollment_outcome.sql`
+separated them. Never offer both in one select, and never let one surface write
+the other's column.
+
+`students.enrollment_status` is one value wider than `student_enrollments.status`:
+it also carries `'graduated'`, because graduating is an outcome that *also* ends
+the learner's presence in the school and so has to be expressible as a current
+standing. `clampToManual()` in `utils/enrollment.js` handles the one path that
+copies the mirror back into a record.
+
+The snapshot is denormalised on purpose. Dozens of Node queries and four FastAPI
+routers read `students.grade_level`/`section` directly, and `section` is matched
+by *name* against `sections.name`; converting all of them to join through the
+enrolment table was not worth the blast radius.
+
+**The two are reconciled at exactly one moment**: when `PUT /api/curriculum/school-years/:id`
+switches a year to active. `rolloverStudents()` then copies each learner's record
+for the incoming year onto their `students` row, and marks everyone **without** a
+record `'pending'`. That is the whole point — before this existed, activating a
+year left every learner sitting in last year's grade, still counted as enrolled,
+with no way to say "has not enrolled yet", "transferred out" or "repeats the level".
+Activation is never blocked; the Edit School Year modal shows a pre-flight count
+(`GET /school-years/:id/enrollment-readiness`) so it is not a surprise, and the
+response carries `rollover: { adopted, pending }` for the toast.
+
+Removing a record ("Not enrolled") is refused when the record carries a year-end
+`outcome`, or when the learner has grades, scores, competency ratings or
+attendance in that year — the row itself is cheap to delete (nothing references
+`student_enrollments`), which is exactly why the things hanging off the *learner*
+have to be checked instead. Both refusals are absolute. The year's own status no
+longer blocks it: removing the **active** year's record sets
+`students.enrollment_status='pending'`, matching what the rollover gives anyone
+without a record.
+
+Editing the **active** year through `PUT /api/enrollment` writes the `students`
+row immediately, because there is no later activation to pick the change up.
+Editing an **upcoming** year only records the plan. An **archived** year is
+read-only: `PUT` and `DELETE /api/enrollment` answer 409 unless the request
+carries `allow_archived: true`, which the Enrollment page sends only after an
+admin has explicitly unlocked that year. A closed year's records are the history
+of who actually attended, and the page's dropdown offers closed years like any
+other, so an unmarked write there is far more likely to be a mis-picked year than
+an intended correction. The override exists because a year archives the instant
+the next is activated — exactly when year-end corrections are still arriving — so
+unlike the grading-model freeze this cannot be absolute. `isArchivedYear` lives in
+`utils/schoolYear.js`, mirrored in `components/SchoolYearPicker.jsx`. The
+promotion wizard is **not** gated: it writes `outcome`, not status.
+
+A learner who has **left** — `transferred_out`, `dropped`, or an `outcome` of
+`graduated` in their most recent earlier year — drops out of later years' rosters
+entirely, or every future year would accumulate every ex-student the school ever
+had. `GET /api/enrollment?include_left=true` brings them back so a returning
+learner can be re-enrolled, and the rollover leaves their standing alone instead
+of resetting it to `pending`.
+
+Only `enrollment_status = 'enrolled'` puts a learner on a teacher's class list —
+Attendance, Score Entry, ECE Competency, class-health and the FastAPI rosters all
+filter on it, as does `GET /api/students` for the `teacher` and `parent` roles.
+Admins always see everyone, with a status filter. **SecurePass is deliberately
+exempt**: a gate scan is a physical-safety flow and must not fail because a
+record is mid-update.
+
+Vocabulary and the grade ladder live in `vista-backend/node-api/src/utils/enrollment.js`,
+mirrored in `vista-dashboard/src/utils/enrollment.js` (same convention as
+`utils/roles.js`). `nextGradeLevel()` is derived from `ALL_GRADES`, so retiring a
+grade level cannot leave a stale ladder behind.
+
+### Year-end promotion
+
+`/enrollment/promotion` is a three-step wizard — review results, place learners,
+confirm — that closes one school year into another. It reads the evidence VISTA
+already holds and **recommends** an outcome per learner; it never decides.
+
+| Grade level assessed | Evidence | Rule |
+|---|---|---|
+| numeric | final grade per subject (`finalGradeFrom` over the period grades) | DO 8, s. 2015 Table 10: all areas ≥ 75 → promoted; 1-2 below → promoted **flagged for review** (remedial classes, which VISTA does not track); 3+ below → retained |
+| descriptive | latest period's rating distribution, banded by `bandDistribution()` | never retains — DO 015 treats KS1 as developmental; an `urgent` band is flagged for review |
+
+Two rules the UI enforces on top: a learner with **no** results gets no
+recommendation at all (a guess from nothing would be worse than none), and
+promoting someone the data says to retain **requires a written reason**.
+
+Only learners whose `status` is `enrolled` are reviewed. Someone who transferred
+out, dropped, or was never confirmed did not finish the year — their status
+already says what happened, and the wizard reports them as a count instead of
+asking for a verdict.
+
+A close whose **handover year is archived** is refused (409) unless the wizard is
+unlocked — the same `allow_archived` idiom the Enrollment page uses, and in practice it
+fires exactly when both years are closed. It keys on the target because writing an
+outcome onto an already-archived closing year is the normal sequence, while the two
+writes that rewrite history — the placement upsert and the graduated-row delete — both
+land on the target. An **upcoming** closing year is refused outright (422): a year that
+has not started has no results to judge. The wizard is the only writer of `outcome`
+anywhere, which is why this is an unlock rather than a freeze.
+
+The year they move into is **derived from the closing year**, never picked: it is
+the next `school_years` row by label, and both promotion endpoints 409 on anything
+else. It was a free choice defaulting to the earliest *upcoming* year — not the
+same year once one has been activated — so a re-run closed the year into the one
+after next and orphaned the placements the first run had written.
+
+Committing writes twice per learner in one transaction — the **outcome** onto the
+closing year's record (its `status` is left alone, so the enrolment fact
+survives), and a **`pending`** record in the year they move into. Pending, not
+enrolled: a promotion says where they belong if they come back, not that they
+have. A graduate gets no forward record at all, and reversing an earlier decision
+deletes the stale placement. Re-running updates the same rows, so the wizard is
+resumable, not duplicative.
+
+Only `graduated` touches `students.enrollment_status`, and only while the closing
+year is still active. Promotion and retention leave it alone — the learner is
+still in their current class until the next year is activated.
+
+**Sections are renamed, not orphaned.** Nothing references a section by id — five
+tables hold it as a bare name string (`students`, `student_enrollments`,
+`teacher_assignments`, `class_assignments`, `score_items`). `PUT
+/api/curriculum/sections/:id` now cascades a rename across all of them, scoped to
+the section's grade level *and* school year, and `DELETE` counts dependents the
+same way instead of matching on the name alone. Moving a section to another grade
+level is refused once anything depends on it — that is not a rename, and the
+learners and score items in it belong to the old grade. See `utils/sections.js`.
+
+**Still open:** `behavior_logs`, `risk_assessments` and `dismissal_logs` carry
+only timestamps, no year dimension — and unlike `attendance`, which gained a
+`school_year_id` in `2026_08_23_attendance_school_year.sql`, none of them has a
+`subject_id` to derive one from, so backfilling them would be a guess.
+Enrolment history
+starts at the school year that was active when
+`2026_08_21_student_enrollments.sql` ran; earlier rosters cannot be reconstructed.
+The wizard has no record of remedial classes, which is why the 1-2-failed case is
+flagged for a human rather than decided.
 
 ## Role-Based Access (summary)
 

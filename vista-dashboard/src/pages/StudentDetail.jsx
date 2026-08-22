@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ClipboardCheck, Heart, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock } from 'lucide-react'
+import { ArrowLeft, BookOpen, ClipboardCheck, Heart, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock, CalendarDays } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
-import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi, eceApi, curriculumApi } from '../api/client'
+import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi, eceApi, curriculumApi, enrollmentApi } from '../api/client'
 import { resolveGradingPolicy } from '../utils/grading'
 import { RiskBadge, SentimentBadge, LoadingSpinner, GradeChip } from '../components/UI'
 import { format } from 'date-fns'
 import { formatName, nameInitial } from '../utils/nameHelper'
+import { statusLabel, statusClasses } from '../utils/enrollment'
 import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
 
@@ -76,6 +77,16 @@ export default function StudentDetail() {
       .then(res => setSchoolYears(res.data.school_years || res.data || []))
       .catch(() => setSchoolYears([]))
   }, [])
+
+  // Year-by-year enrolment. Admin-only: the endpoint is admin-scoped, and a
+  // teacher has no business reading a learner's placement in other years.
+  const [enrollments, setEnrollments] = useState(null)
+  useEffect(() => {
+    if (isTeacher || !id) return
+    enrollmentApi.history(id)
+      .then(res => setEnrollments(res.data.enrollments || []))
+      .catch(() => setEnrollments([]))
+  }, [id, isTeacher])
 
   const gradingForSY = (label) =>
     resolveGradingPolicy(schoolYears.find(sy => sy.label === label) || null, student?.grade_level)
@@ -518,6 +529,71 @@ export default function StudentDetail() {
             </div>
           </div>
         </div>
+
+        {/* Enrolment history — full width. `students.grade_level` above is only
+            the current year; this is where the learner has actually been. */}
+        {!isTeacher && (
+          <div className="card p-5">
+            <h3 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+              <CalendarDays size={15} className="text-brand-500" /> Enrolment History
+            </h3>
+            {enrollments === null ? (
+              <p className="text-sm text-slate-400 italic">Loading...</p>
+            ) : enrollments.length === 0 ? (
+              <p className="text-sm text-slate-400 italic">
+                No enrolment records yet. Records start from the school year in which enrolment tracking began.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table-base">
+                  <thead>
+                    <tr>
+                      <th className="whitespace-nowrap">School Year</th>
+                      <th className="whitespace-nowrap">Grade Level</th>
+                      <th className="whitespace-nowrap">Section</th>
+                      <th className="whitespace-nowrap">Status</th>
+                      <th className="whitespace-nowrap">Outcome</th>
+                      <th>Remarks</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {enrollments.map(e => (
+                      <tr key={e.id}>
+                        <td className="whitespace-nowrap">
+                          <span className="font-medium text-slate-800">SY {e.school_year}</span>
+                          {e.is_active && <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">current</span>}
+                          {e.is_upcoming && <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">upcoming</span>}
+                        </td>
+                        <td className="text-sm text-slate-700">{e.grade_level}</td>
+                        <td className="text-sm text-slate-500">{e.section || '—'}</td>
+                        <td>
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${statusClasses(e.status)}`}>
+                            {statusLabel(e.status)}
+                          </span>
+                        </td>
+                        {/* How the year ended, independent of whether they
+                            attended it. Blank until that year is closed. */}
+                        <td>
+                          {e.outcome ? (
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${statusClasses(e.outcome)}`}>
+                              {statusLabel(e.outcome)}
+                            </span>
+                          ) : <span className="text-sm text-slate-300">—</span>}
+                        </td>
+                        <td className="text-sm text-slate-500">
+                          {e.remarks || (e.outcome_remarks ? null : '—')}
+                          {e.outcome_remarks && (
+                            <span className="block text-xs text-slate-400">{e.outcome_remarks}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Home Address card — full width */}
         {!isTeacher && (

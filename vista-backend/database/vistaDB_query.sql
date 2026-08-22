@@ -95,6 +95,13 @@ CREATE TABLE attendance (
     remarks TEXT,
     recorded_by UUID REFERENCES users(id),
     subject_id UUID REFERENCES subjects(id),
+    -- Which school year this belongs to. Derived from the subject on write, not
+    -- from the date: consecutive school years leave months uncovered between one
+    -- year's end_date and the next one's start_date, so a date test attributes
+    -- records in those gaps to no year at all. Nullable -- legacy rows with no
+    -- subject may be genuinely unattributable. See
+    -- migrations/2026_08_23_attendance_school_year.sql
+    school_year_id UUID REFERENCES school_years(id),
     created_at TIMESTAMP DEFAULT NOW(),
     UNIQUE(student_id, date, subject_id)
 );
@@ -238,6 +245,7 @@ CREATE INDEX IF NOT EXISTS idx_teacher_assignments_teacher ON teacher_assignment
 -- INDEXES FOR PERFORMANCE
 -- ============================================================
 CREATE INDEX idx_attendance_student_date ON attendance(student_id, date);
+CREATE INDEX idx_attendance_student_sy ON attendance(student_id, school_year_id, date);
 CREATE INDEX idx_grades_student ON grades(student_id, school_year);
 CREATE INDEX idx_behavior_student ON behavior_logs(student_id);
 CREATE INDEX idx_risk_student ON risk_assessments(student_id);
@@ -655,3 +663,52 @@ CREATE TABLE IF NOT EXISTS student_scores (
 
 CREATE INDEX IF NOT EXISTS idx_student_scores_item    ON student_scores(score_item_id);
 CREATE INDEX IF NOT EXISTS idx_student_scores_student ON student_scores(student_id);
+
+-- ════════════════════════════════════════════════════════════════
+-- PER-SCHOOL-YEAR STUDENT ENROLLMENT
+-- (migrations 2026_08_21_student_enrollments.sql, 2026_08_22_split_enrollment_outcome.sql)
+-- ════════════════════════════════════════════════════════════════
+--
+-- `students` holds the learner's *current* grade_level/section -- a snapshot of
+-- the active school year, denormalised because dozens of roster queries read it
+-- directly. `student_enrollments` is the year-by-year record behind it: one row
+-- per (student, school year) with the grade, section and status held that year.
+-- The two are reconciled by the rollover inside
+-- PUT /api/curriculum/school-years/:id when a year is activated.
+
+CREATE TABLE IF NOT EXISTS student_enrollments (
+    id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    student_id     UUID NOT NULL REFERENCES students(id)     ON DELETE CASCADE,
+    school_year_id UUID NOT NULL REFERENCES school_years(id) ON DELETE CASCADE,
+    grade_level    VARCHAR(20) NOT NULL,
+    section        VARCHAR(50),
+    -- Is the learner attending this school year? Owned by the Enrollment page.
+    status         VARCHAR(20) NOT NULL DEFAULT 'enrolled'
+                   CHECK (status IN ('pending','enrolled','transferred_out','dropped')),
+    -- How did the school year end for them? Owned by the promotion wizard, and
+    -- NULL until that year is closed. Orthogonal to `status`: a learner is
+    -- enrolled in 2025-2026 AND promoted at the end of it.
+    outcome        VARCHAR(20)
+                   CHECK (outcome IS NULL OR outcome IN ('promoted','retained','graduated')),
+    remarks        TEXT,            -- why the status is what it is (e.g. "moved to Cebu")
+    outcome_remarks TEXT,           -- why the outcome is what it is (e.g. an override reason)
+    decided_by     UUID REFERENCES users(id) ON DELETE SET NULL,
+    decided_at     TIMESTAMP,
+    created_at     TIMESTAMP DEFAULT NOW(),
+    updated_at     TIMESTAMP DEFAULT NOW(),
+    UNIQUE (student_id, school_year_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_student_enrollments_sy      ON student_enrollments(school_year_id, grade_level, section);
+CREATE INDEX IF NOT EXISTS idx_student_enrollments_student ON student_enrollments(student_id);
+CREATE INDEX IF NOT EXISTS idx_student_enrollments_outcome ON student_enrollments(school_year_id, outcome) WHERE outcome IS NOT NULL;
+
+-- Current standing, mirrored from the active year's enrollment row. Carries one
+-- value `student_enrollments.status` does not: 'graduated', which is a year-end
+-- outcome that also ends the learner's presence in the school. Every roster
+-- filter in Node and FastAPI reads `enrollment_status = 'enrolled'`.
+ALTER TABLE students ADD COLUMN IF NOT EXISTS enrollment_status VARCHAR(20) NOT NULL DEFAULT 'enrolled';
+ALTER TABLE students DROP CONSTRAINT IF EXISTS students_enrollment_status_check;
+ALTER TABLE students ADD CONSTRAINT students_enrollment_status_check
+    CHECK (enrollment_status IN ('pending','enrolled','transferred_out','dropped','graduated'));
+CREATE INDEX IF NOT EXISTS idx_students_enrollment_status ON students(enrollment_status) WHERE is_active = TRUE;

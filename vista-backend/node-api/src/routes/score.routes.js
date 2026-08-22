@@ -315,6 +315,7 @@ router.get('/', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
       `SELECT id, lrn, surname, first_name, middle_name, gender
        FROM students
        WHERE grade_level=$1 AND section=$2 AND is_active=TRUE
+         AND enrollment_status='enrolled'
        ORDER BY surname, first_name`,
       [grade_level, section]
     )
@@ -490,6 +491,7 @@ router.get('/breakdown', authorize(...ANY_ADMIN, 'teacher'), async (req, res, ne
       `SELECT id, lrn, surname, first_name, middle_name, gender
        FROM students
        WHERE grade_level=$1 AND section=$2 AND is_active=TRUE
+         AND enrollment_status='enrolled'
        ORDER BY surname, first_name`,
       [grade_level, section]
     )

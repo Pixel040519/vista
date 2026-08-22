@@ -790,7 +790,8 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
     const stuRes = await query(
       `SELECT id, surname, first_name, middle_name, grade_level, section
          FROM students
-        WHERE is_active = TRUE AND (${orClauses.join(' OR ')})
+        WHERE is_active = TRUE AND enrollment_status = 'enrolled'
+          AND (${orClauses.join(' OR ')})
         ORDER BY surname, first_name`,
       studentParams
     );
@@ -1116,7 +1117,8 @@ router.get('/dashboard-summary', authorizeAnyAdmin, async (req, res, next) => {
     try {
       const totalRes = await query(
         `SELECT COUNT(*)::int AS n FROM students
-          WHERE is_active = TRUE AND grade_level = ANY($1::text[])`,
+          WHERE is_active = TRUE AND enrollment_status = 'enrolled'
+            AND grade_level = ANY($1::text[])`,
         [scope]
       );
       payload.overview = payload.overview || {};

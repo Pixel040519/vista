@@ -12,6 +12,7 @@ import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
+import { MANUAL_STATUSES, STUDENT_STATUSES, WITHDRAWN_STATUS_IDS, statusLabel, statusClasses } from '../utils/enrollment'
 
 // ── School constants ──────────────────────────────────────────
 const GRADE_LEVELS = ['Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
@@ -764,6 +765,98 @@ function DeleteConfirm({ student, onConfirm, onClose }) {
   )
 }
 
+// ── Enrolment Status ──────────────────────────────────────────
+//
+// Changing status here writes the active school year's enrolment record too, so
+// the roster and the year-by-year history stay in step. Only a learner marked
+// `enrolled` appears on a teacher's class list, which is why confirming a
+// pending learner matters as much as recording one who left.
+//
+// Attendance only. 'Graduated' is a year-end outcome earned from results, so the
+// Year-End Promotion wizard is the only thing that records one.
+function StatusChange({ student, onConfirm, onClose }) {
+  const [status, setStatus]   = useState(student.enrollment_status || 'enrolled')
+  const [remarks, setRemarks] = useState('')
+  const [saving, setSaving]   = useState(false)
+
+  const leaving = WITHDRAWN_STATUS_IDS.includes(status)
+  const unchanged = status === student.enrollment_status
+  // A graduate's current standing is not on the list below, so nothing is
+  // selected until the admin picks something — which would re-enrol them.
+  const wasGraduated = student.enrollment_status === 'graduated'
+
+  const handle = async () => {
+    setSaving(true)
+    try { await onConfirm({ status, remarks: remarks.trim() || undefined }) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="p-4 bg-slate-50 rounded-xl flex items-center gap-3">
+        <div className="w-10 h-10 rounded-full bg-brand-100 flex items-center justify-center font-bold text-brand-700">
+          {nameInitial(student)}
+        </div>
+        <div>
+          <p className="font-semibold text-slate-800">{formatName(student)}</p>
+          <p className="text-xs text-slate-500">
+            {student.grade_level}{student.section ? ` — ${student.section}` : ''} · LRN {student.lrn}
+          </p>
+        </div>
+      </div>
+
+      {wasGraduated && (
+        <div className="p-3 bg-brand-50 border border-brand-200 rounded-xl text-xs text-brand-800">
+          This learner is recorded as <strong>Graduated</strong> in Year-End Promotion. Graduation is not
+          set here &mdash; choosing a status below would put them back on the school&rsquo;s books.
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {MANUAL_STATUSES.map(st => (
+          <label key={st.id}
+            className={clsx(
+              'flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors',
+              status === st.id ? 'border-brand-400 bg-brand-50' : 'border-slate-200 hover:bg-slate-50'
+            )}>
+            <input type="radio" name="enrollment-status" className="mt-0.5"
+              checked={status === st.id} onChange={() => setStatus(st.id)}/>
+            <span>
+              <span className="block text-sm font-medium text-slate-800">{st.label}</span>
+              <span className="block text-xs text-slate-500">{st.description}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      {leaving && (
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            Reason <span className="text-slate-400 font-normal">(optional, kept on the record)</span>
+          </label>
+          <input className="input" value={remarks} maxLength={500}
+            onChange={e => setRemarks(e.target.value)}
+            placeholder="e.g. Moved to Cebu"/>
+        </div>
+      )}
+
+      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+        {status === 'enrolled'
+          ? 'This learner will appear on their teachers’ class lists for attendance, score entry and competency ratings.'
+          : 'This learner will be hidden from teachers’ class lists. Their grades, attendance and behavior logs are kept.'}
+      </div>
+
+      <div className="flex gap-3">
+        <button onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+        <button onClick={handle} disabled={saving || unchanged}
+          className="btn-primary flex-1 justify-center disabled:opacity-50 disabled:cursor-not-allowed">
+          {saving ? 'Saving...' : 'Save status'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────
 export default function Students() {
   const { user, activeAssignments, isAnyAdmin, isTeacher, gradeScope } = useAuth()
@@ -793,19 +886,23 @@ export default function Students() {
   const search        = searchParams.get('q')       || ''
   const gradeFilter   = searchParams.get('grade')   || ''
   const sectionFilter = searchParams.get('section') || ''
+  const statusFilter  = searchParams.get('status')  || ''
   // Teacher: combined section key
   const teacherSection = searchParams.get('ts') || ''
 
-  const setSearch        = (v) => updateParams({ q: v, grade: gradeFilter, section: sectionFilter, ts: teacherSection })
-  const setGradeFilter   = (v) => updateParams({ q: search, grade: v, section: '', ts: teacherSection })
-  const setSectionFilter = (v) => updateParams({ q: search, grade: gradeFilter, section: v, ts: teacherSection })
-  const setTeacherSection = (v) => updateParams({ q: search, grade: '', section: '', ts: v })
+  const base = () => ({ q: search, grade: gradeFilter, section: sectionFilter, status: statusFilter, ts: teacherSection })
+  const setSearch        = (v) => updateParams({ ...base(), q: v })
+  const setGradeFilter   = (v) => updateParams({ ...base(), grade: v, section: '' })
+  const setSectionFilter = (v) => updateParams({ ...base(), section: v })
+  const setStatusFilter  = (v) => updateParams({ ...base(), status: v })
+  const setTeacherSection = (v) => updateParams({ q: search, grade: '', section: '', status: '', ts: v })
 
   const updateParams = (vals) => {
     const p = {}
     if (vals.q)       p.q       = vals.q
     if (vals.grade)   p.grade   = vals.grade
     if (vals.section) p.section = vals.section
+    if (vals.status)  p.status  = vals.status
     if (vals.ts)      p.ts      = vals.ts
     setSearchParams(p, { replace: true })
   }
@@ -822,6 +919,7 @@ export default function Students() {
   const activeSection = isTeacher ? (teacherSection.split('|||')[1] || '') : sectionFilter
 
   const [students, setStudents]     = useState([])
+  const [byStatus, setByStatus]     = useState({})
   const [pagination, setPagination] = useState({ total:0, page:1, totalPages:1 })
   const [loading, setLoading]       = useState(true)
   const [filterSections, setFilterSections] = useState([])
@@ -831,6 +929,7 @@ export default function Students() {
   const [editTarget, setEditTarget]       = useState(null)
   const [editGuardians, setEditGuardians] = useState(null)
   const [deleteTarget, setDeleteTarget]   = useState(null)
+  const [statusTarget, setStatusTarget]   = useState(null)
 
   // Load sections for the filter bar when grade changes (admin only)
   useEffect(() => {
@@ -849,12 +948,14 @@ export default function Students() {
         search,
         grade_level: activeGrade || undefined,
         section: activeSection || undefined,
+        enrollment_status: statusFilter || undefined,
         page, limit: 20
       })
       setStudents(res.data.students)
+      setByStatus(res.data.by_status || {})
       setPagination(res.data.pagination)
     } catch {} finally { setLoading(false) }
-  }, [search, activeGrade, activeSection, isTeacher, teacherSection])
+  }, [search, activeGrade, activeSection, statusFilter, isTeacher, teacherSection])
 
   useEffect(() => {
     const t = setTimeout(() => fetchStudents(1), 300)
@@ -881,6 +982,16 @@ export default function Students() {
     setEditTarget(null); fetchStudents()
   }
 
+  const handleStatusChange = async (payload) => {
+    try {
+      const res = await studentApi.setEnrollmentStatus(statusTarget.id, payload)
+      toast.success(res.data.message)
+      setStatusTarget(null); fetchStudents(pagination.page)
+    } catch (e) {
+      toast.error(e?.response?.data?.error || 'Failed to change status.')
+    }
+  }
+
   const handleDelete = async () => {
     const res = await studentApi.remove(deleteTarget.id)
     toast.success(res.data.message)
@@ -893,7 +1004,16 @@ export default function Students() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="page-title">Students</h1>
-          <p className="page-subtitle">{pagination.total} enrolled students</p>
+          <p className="page-subtitle">
+            {isTeacher
+              ? `${pagination.total} students`
+              : [
+                  `${byStatus.enrolled || 0} enrolled`,
+                  byStatus.pending && `${byStatus.pending} pending`,
+                  (byStatus.transferred_out || byStatus.dropped || byStatus.graduated) &&
+                    `${(byStatus.transferred_out || 0) + (byStatus.dropped || 0) + (byStatus.graduated || 0)} left`,
+                ].filter(Boolean).join(' · ')}
+          </p>
         </div>
         {isAdmin && (
           <div className="flex items-center gap-2">
@@ -962,6 +1082,21 @@ export default function Students() {
           </div>
         )}
 
+        {/* Enrolment status (admin only) — teachers only ever see enrolled learners */}
+        {isAdmin && (
+          <div className="relative sm:w-44">
+            <select className="input appearance-none cursor-pointer"
+              value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+              <option value="">All Statuses</option>
+              {STUDENT_STATUSES.map(st => (
+                <option key={st.id} value={st.id}>
+                  {st.label}{byStatus[st.id] ? ` (${byStatus[st.id]})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
       </div>
 
       {/* Table */}
@@ -981,6 +1116,7 @@ export default function Students() {
                     <th>LRN</th>
                     {!isTeacher && <th>Grade Level</th>}
                     {!isTeacher && <th>Section</th>}
+                    {isAdmin && <th className="whitespace-nowrap">Status</th>}
                     <th>Gender</th>
                     {isAdmin && <th className="text-right pr-4">Actions</th>}
                     <th></th>
@@ -1013,6 +1149,17 @@ export default function Students() {
                         </td>
                       )}
                       {!isTeacher && <td className="text-sm text-slate-500">{s.section || '—'}</td>}
+                      {isAdmin && (
+                        <td>
+                          <button onClick={() => setStatusTarget(s)} title="Change enrolment status"
+                            className={clsx(
+                              'px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap hover:ring-2 hover:ring-offset-1 hover:ring-brand-300 transition-all',
+                              statusClasses(s.enrollment_status)
+                            )}>
+                            {statusLabel(s.enrollment_status)}
+                          </button>
+                        </td>
+                      )}
                       <td>
                         <span className={clsx('px-2 py-0.5 rounded-full text-xs font-medium', GENDER_STYLE[s.gender] || 'bg-slate-100 text-slate-600')}>
                           {s.gender}
@@ -1113,6 +1260,14 @@ export default function Students() {
               <button onClick={() => setEditGuardians(null)} className="btn-secondary w-full justify-center">Done</button>
             </div>
           </div>
+        )}
+      </Modal>
+
+      <Modal open={!!statusTarget} onClose={() => setStatusTarget(null)} title="Enrolment Status">
+        {statusTarget && (
+          <StatusChange student={statusTarget}
+            onConfirm={handleStatusChange}
+            onClose={() => setStatusTarget(null)}/>
         )}
       </Modal>
 

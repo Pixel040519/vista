@@ -149,7 +149,8 @@ router.get('/summary', eceAllowed, async (req, res, next) => {
       // Count students
       const stRes = await query(
         `SELECT COUNT(*)::int AS cnt FROM students
-         WHERE is_active=TRUE AND grade_level=$1 AND section=$2`,
+         WHERE is_active=TRUE AND enrollment_status='enrolled'
+           AND grade_level=$1 AND section=$2`,
         [a.grade_level, a.section]
       )
       const studentCount = stRes.rows[0].cnt
@@ -352,7 +353,8 @@ router.get('/records', async (req, res, next) => {
 
     const students = await query(
       `SELECT id, full_name, gender FROM students
-       WHERE is_active=TRUE AND grade_level=$1 AND section=$2
+       WHERE is_active=TRUE AND enrollment_status='enrolled'
+         AND grade_level=$1 AND section=$2
        ORDER BY full_name`,
       [grade_level, section]
     )

@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext'
 import {
   LayoutDashboard, Users, ClipboardCheck, BookOpen,
   Heart, QrCode, AlertTriangle, Megaphone, UserCog,
-  LogOut, GraduationCap, ChevronRight, X, PenLine, Baby
+  LogOut, GraduationCap, ChevronRight, X, PenLine, Baby, ClipboardList
 } from 'lucide-react'
 import clsx from 'clsx'
 import { formatName, nameInitial } from '../../utils/nameHelper'
@@ -44,6 +44,7 @@ const adminNavGroups = [
     items: [
       { to: '/accounts',     icon: UserCog,        label: 'Accounts',      roles: ANY_ADMIN },
       { to: '/curriculum',   icon: GraduationCap,  label: 'Curriculum',    roles: ANY_ADMIN },
+      { to: '/enrollment',   icon: ClipboardList,  label: 'Enrollment',    roles: ANY_ADMIN },
     ]
   }
 ]

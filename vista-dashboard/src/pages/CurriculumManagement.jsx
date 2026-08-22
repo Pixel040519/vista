@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Plus, Pencil, Trash2, BookOpen, LayoutGrid,
   ChevronDown, ChevronRight, X, Check, CalendarDays,
-  ChevronDown as ChevDown, Copy, SlidersHorizontal, ClipboardList, Lock
+  ChevronDown as ChevDown, Copy, SlidersHorizontal, ClipboardList, Lock, Users
 } from 'lucide-react'
 import { curriculumApi } from '../api/client'
 import { LoadingSpinner, Modal } from '../components/UI'
@@ -10,6 +11,7 @@ import GradingConfigModal from '../components/GradingConfigModal'
 import toast from 'react-hot-toast'
 import { PERIOD_MODEL_OPTIONS, GRADING_POLICY_OPTIONS } from '../utils/grading'
 import clsx from 'clsx'
+import SchoolYearPicker from '../components/SchoolYearPicker'
 import { useAuth } from '../context/AuthContext'
 
 // ── School year validation helper ────────────────────────────
@@ -210,66 +212,6 @@ function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradin
   )
 }
 
-// ── School Year Selector Dropdown ─────────────────────────────
-function SYSelector({ schoolYears, selectedSY, onSelect, onManage, canManage = true }) {
-  const [open, setOpen] = useState(false)
-  const current = selectedSY
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 hover:border-brand-300 transition-colors shadow-sm"
-      >
-        <CalendarDays size={15} className="text-brand-500"/>
-        SY {current?.label || '—'}
-        {current?.is_active
-          ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">active</span>
-          : current?.is_upcoming
-            ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">upcoming</span>
-            : current
-              ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 font-medium">archived</span>
-              : null
-        }
-        <ChevDown size={13} className={clsx('text-slate-400 transition-transform', open && 'rotate-180')}/>
-      </button>
-
-      {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)}/>
-          <div className="absolute top-full left-0 mt-1 z-20 w-64 bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden">
-            {schoolYears.map(sy => (
-              <button key={sy.id}
-                onClick={() => { onSelect(sy); setOpen(false) }}
-                className={clsx(
-                  'w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 transition-colors',
-                  sy.id === selectedSY?.id && 'bg-brand-50'
-                )}>
-                <CalendarDays size={14} className="text-slate-400 flex-shrink-0"/>
-                <span className="flex-1 text-sm font-medium text-slate-800">SY {sy.label}</span>
-                {sy.is_active
-                  ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">active</span>
-                  : sy.is_upcoming
-                    ? <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">upcoming</span>
-                    : <span className="text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 font-medium">archived</span>
-                }
-              </button>
-            ))}
-            {canManage && (
-              <div className="border-t border-slate-100">
-                <button onClick={() => { setOpen(false); onManage() }}
-                  className="w-full flex items-center gap-2 px-4 py-3 text-sm text-brand-600 hover:bg-brand-50 transition-colors font-medium">
-                  <Plus size={14}/> Create New School Year
-                </button>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
-
 // ── Create School Year Modal ──────────────────────────────────
 function CreateSYModal({ schoolYears, onClose, onCreate }) {
   const [form, setForm] = useState({
@@ -435,6 +377,21 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
   // re-transmute grades that were already issued. The model is chosen at creation.
   const gradingLocked = getStatus(sy) === 'archived'
 
+  // Activating a year is the moment students move: everyone with an enrolment
+  // record for it adopts that record's grade and section, and everyone without
+  // one is marked pending and drops off the class lists. That is worth saying
+  // out loud before it happens, so load the counts when Active is selected.
+  const activating = form.status === 'active' && !sy.is_active
+  const [readiness, setReadiness] = useState(null)
+  useEffect(() => {
+    if (!activating) { setReadiness(null); return }
+    let cancelled = false
+    curriculumApi.enrollmentReadiness(sy.id)
+      .then(res => { if (!cancelled) setReadiness(res.data) })
+      .catch(() => { if (!cancelled) setReadiness(null) })
+    return () => { cancelled = true }
+  }, [activating, sy.id])
+
   const handleSave = async e => {
     e.preventDefault()
     const err = validateSY(form.label, form.start_date, form.end_date)
@@ -481,6 +438,38 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
           <option value="archived">Archived</option>
         </select>
       </div>
+
+      {/* Pre-flight: what activating this year will do to the students */}
+      {activating && (
+        <div className={clsx(
+          'p-3 rounded-xl border text-xs space-y-1.5',
+          readiness?.without_record ? 'bg-amber-50 border-amber-200 text-amber-800'
+                                    : 'bg-slate-50 border-slate-200 text-slate-600'
+        )}>
+          <p className="font-semibold flex items-center gap-1.5">
+            <Users size={13}/> Switching to SY {sy.label}
+          </p>
+          {!readiness ? (
+            <p>Checking enrolment records&hellip;</p>
+          ) : readiness.total_students === 0 ? (
+            <p>There are no students on the books yet, so nothing moves.</p>
+          ) : (
+            <>
+              <p>
+                <strong>{readiness.with_record}</strong> of {readiness.total_students} learners have an
+                enrolment record for this school year and will move to the grade level and section it names.
+              </p>
+              {readiness.without_record > 0 && (
+                <p>
+                  The other <strong>{readiness.without_record}</strong> will be marked <strong>Pending</strong> and
+                  hidden from class lists until you enrol them.{' '}
+                  <Link to="/enrollment" className="underline font-medium">Open Enrollment</Link> to set them up first.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Grading model — DepEd DO 009 / DO 015, s. 2026 */}
       <div className="p-4 rounded-xl border-2 border-slate-200 bg-slate-50 space-y-3">
@@ -788,8 +777,19 @@ export default function CurriculumManagement() {
   }
 
   const handleUpdateSY = async (id, data) => {
-    await curriculumApi.updateSchoolYear(id, data)
-    toast.success('School year updated.')
+    const res = await curriculumApi.updateSchoolYear(id, data)
+    // `rollover` is only present when this call actually switched the active
+    // year -- the moment students move -- so report what happened to them.
+    const roll = res.data.rollover
+    if (roll) {
+      toast.success(
+        `School year switched. ${roll.adopted} learner${roll.adopted === 1 ? '' : 's'} moved into their enrolled class` +
+        (roll.pending ? `, ${roll.pending} marked pending.` : '.'),
+        { duration: 6000 }
+      )
+    } else {
+      toast.success('School year updated.')
+    }
     await fetchSchoolYears()
   }
 
@@ -823,7 +823,7 @@ export default function CurriculumManagement() {
       {/* SY selector + tabs row */}
       <div className="flex items-center gap-3 flex-wrap">
         {/* School Year Selector */}
-        <SYSelector
+        <SchoolYearPicker
           schoolYears={schoolYears}
           selectedSY={selectedSY}
           onSelect={setSelectedSY}
