@@ -859,7 +859,7 @@ function StatusChange({ student, onConfirm, onClose }) {
 
 // ── Main Page ─────────────────────────────────────────────────
 export default function Students() {
-  const { user, activeAssignments, isAnyAdmin, isTeacher, gradeScope } = useAuth()
+  const { user, activeAssignments, isAnyAdmin, isSuperAdmin, isTeacher, gradeScope } = useAuth()
   const isAdmin  = isAnyAdmin
   const assignments = activeAssignments
 
@@ -1151,13 +1151,23 @@ export default function Students() {
                       {!isTeacher && <td className="text-sm text-slate-500">{s.section || '—'}</td>}
                       {isAdmin && (
                         <td>
-                          <button onClick={() => setStatusTarget(s)} title="Change enrolment status"
-                            className={clsx(
-                              'px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap hover:ring-2 hover:ring-offset-1 hover:ring-brand-300 transition-all',
-                              statusClasses(s.enrollment_status)
-                            )}>
-                            {statusLabel(s.enrollment_status)}
-                          </button>
+                          {isSuperAdmin ? (
+                            <button onClick={() => setStatusTarget(s)} title="Change enrolment status"
+                              className={clsx(
+                                'px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap hover:ring-2 hover:ring-offset-1 hover:ring-brand-300 transition-all',
+                                statusClasses(s.enrollment_status)
+                              )}>
+                              {statusLabel(s.enrollment_status)}
+                            </button>
+                          ) : (
+                            <span title="Enrolment status is set by a super admin."
+                              className={clsx(
+                                'px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap',
+                                statusClasses(s.enrollment_status)
+                              )}>
+                              {statusLabel(s.enrollment_status)}
+                            </span>
+                          )}
                         </td>
                       )}
                       <td>

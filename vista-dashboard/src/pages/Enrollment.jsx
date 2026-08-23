@@ -12,7 +12,8 @@ import SchoolYearPicker, { isArchivedYear } from '../components/SchoolYearPicker
 import { useAuth } from '../context/AuthContext'
 import { ALL_GRADES } from '../utils/roles'
 import {
-  SELECTABLE_STATUSES, NO_RECORD_ID, OUTCOMES, statusLabel, statusClasses, nextGradeLevel,
+  SELECTABLE_STATUSES, NO_RECORD_ID, OUTCOMES, statusLabel, statusClasses, statusMeta,
+  nextGradeLevel,
 } from '../utils/enrollment'
 import { formatName } from '../utils/nameHelper'
 
@@ -42,6 +43,56 @@ function StatusBadge({ status }) {
  * The second line says how that year ended when it has been closed, and falls
  * back to the status when they did not finish it.
  */
+/**
+ * The grade level the previous year's outcome implies for this one.
+ *
+ * Promoted means one rung up from where they were, retained means the same rung.
+ * A graduate has nowhere to go, and a learner with no earlier verdict has nothing
+ * to derive from — both return null, and the caller falls back.
+ *
+ * Same ladder the promotion wizard's `placementFor()` walks and `GET /previous`
+ * proposes, so the three surfaces cannot disagree about where a learner belongs.
+ */
+const outcomeGrade = (row) => {
+  if (!row.last_outcome || !row.last_grade_level) return null
+  if (row.last_outcome === 'retained') return row.last_grade_level
+  if (row.last_outcome === 'promoted') return nextGradeLevel(row.last_grade_level)
+  return null
+}
+
+/**
+ * A drafted grade level that disagrees with an outcome already on record.
+ *
+ * Two outcomes can bear on one row, and at most one of them does:
+ *
+ * - the row's **own** outcome — this year has been closed, and the verdict was
+ *   reached against the grade level stored on it. Changing that grade level now
+ *   leaves the verdict describing a year the learner is no longer recorded as
+ *   having spent in that grade, and the placement the wizard derived from it does
+ *   not move to match.
+ * - the **previous** year's outcome — that verdict is what put the learner in this
+ *   year's grade level in the first place. Promoted means one rung up from where
+ *   they were, retained means the same rung. Anything else contradicts it. This is
+ *   the same rule the promotion wizard warns on, applied where that placement can
+ *   later be edited by hand.
+ *
+ * Returns `{ expected, kind }`, or null when nothing on record disagrees.
+ */
+const gradeMismatch = (row, draft) => {
+  const g = draft.grade_level
+  if (!g || draft.status === NO_RECORD_ID) return null
+
+  if (row.outcome) {
+    // A graduate has no grade level to be moved to, so there is nothing to check.
+    return row.grade_level && g !== row.grade_level
+      ? { expected: row.grade_level, kind: 'own' }
+      : null
+  }
+
+  const expected = outcomeGrade(row)
+  return expected && g !== expected ? { expected, kind: 'prev' } : null
+}
+
 function LastAttended({ row }) {
   if (!row.last_school_year) {
     return <span className="text-slate-400 italic">— first year</span>
@@ -49,6 +100,12 @@ function LastAttended({ row }) {
   const note = row.last_outcome
     ? statusLabel(row.last_outcome)
     : row.last_status !== 'enrolled' ? statusLabel(row.last_status) : null
+  // Enrolled in that year and no verdict recorded: the year ended without anyone
+  // saying how it went for them. It used to render as a bare "SY 2025-2026" with
+  // no note at all — indistinguishable from a year that had been properly closed.
+  // Only 'enrolled' counts, matching the promotion wizard: a learner who left did
+  // not finish the year, so there is no outcome for them to be missing.
+  const undecided = !row.last_outcome && row.last_status === 'enrolled'
   return (
     <div className="text-slate-500 leading-tight">
       <p className="text-slate-700">
@@ -57,12 +114,18 @@ function LastAttended({ row }) {
       <p className="text-[11px] text-slate-400">
         SY {row.last_school_year}{note ? ` · ${note}` : ''}
       </p>
+      {undecided && (
+        <span title={`SY ${row.last_school_year} ended without a year-end outcome for this learner. Record it in Year-End Promotion.`}
+          className="mt-0.5 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">
+          <AlertTriangle size={9}/> No outcome
+        </span>
+      )}
     </div>
   )
 }
 
 export default function Enrollment() {
-  const { gradeScope } = useAuth()
+  const { gradeScope, isSuperAdmin } = useAuth()
 
   const scopedGrades = useMemo(
     () => (gradeScope?.length ? ALL_GRADES.filter(g => gradeScope.includes(g)) : ALL_GRADES),
@@ -81,6 +144,16 @@ export default function Enrollment() {
   const archived = isArchivedYear(selectedSY)
   const locked   = archived && !unlocked
 
+  // A second, narrower lock, and a different worry from the one above. Editing the
+  // **active** year moves learners the moment it saves — their class lists change
+  // right away — and grade level and section are the two fields that move them.
+  // They sit in a table of selects next to a status column that is edited far more
+  // often, so a mis-click lands on a learner's placement with no undo but another
+  // edit. This is purely about the slip: any admin can lift it, it says so on the
+  // banner, and it is not the archived unlock, which is about rewriting history and
+  // stays super_admin's.
+  const [placementUnlocked, setPlacementUnlocked] = useState(false)
+
   useEffect(() => {
     curriculumApi.getSchoolYears()
       .then(res => {
@@ -97,12 +170,13 @@ export default function Enrollment() {
   const [searchParams, setSearchParams] = useSearchParams()
   const search        = searchParams.get('q') || ''
   const gradeFilter   = searchParams.get('grade') || ''
+  const sectionFilter = searchParams.get('section') || ''
   const statusFilter  = searchParams.get('status') || ''
   const outcomeFilter = searchParams.get('outcome') || ''
   const includeLeft   = searchParams.get('left') === '1'
 
   const params = () => ({
-    q: search, grade: gradeFilter, status: statusFilter,
+    q: search, grade: gradeFilter, section: sectionFilter, status: statusFilter,
     outcome: outcomeFilter, left: includeLeft ? '1' : '',
   })
 
@@ -110,6 +184,8 @@ export default function Enrollment() {
     const p = {}
     if (vals.q) p.q = vals.q
     if (vals.grade) p.grade = vals.grade
+    // A section belongs to one grade level, so it cannot outlive a change of grade.
+    if (vals.section && vals.grade) p.section = vals.section
     if (vals.status) p.status = vals.status
     if (vals.outcome) p.outcome = vals.outcome
     if (vals.left) p.left = vals.left
@@ -137,6 +213,7 @@ export default function Enrollment() {
       const res = await enrollmentApi.roster({
         sy_id: selectedSY.id,
         grade_level: gradeFilter || undefined,
+        section: sectionFilter || undefined,
         status: statusFilter || undefined,
         outcome: outcomeFilter || undefined,
         include_left: includeLeft ? 'true' : undefined,
@@ -151,7 +228,7 @@ export default function Enrollment() {
     } finally {
       setLoading(false)
     }
-  }, [selectedSY, gradeFilter, statusFilter, outcomeFilter, includeLeft, search])
+  }, [selectedSY, gradeFilter, sectionFilter, statusFilter, outcomeFilter, includeLeft, search])
 
   useEffect(() => {
     const t = setTimeout(fetchRoster, 250)
@@ -185,6 +262,7 @@ export default function Enrollment() {
     setSelected(new Set())
     // Unlocking is per year: it must not carry into the next one selected.
     setUnlocked(false)
+    setPlacementUnlocked(false)
     if (statusFilter || outcomeFilter) updateParams({ ...params(), status: '', outcome: '' })
   }, [selectedSY?.id])
 
@@ -195,12 +273,24 @@ export default function Enrollment() {
 
   // ── Draft editing ──────────────────────────────────────────
   //
-  // A draft starts from whatever the row already says: the year's record if it
-  // has one, otherwise the learner's current position, so the admin edits a
-  // sensible starting point rather than an empty form.
+  // A draft starts from whatever the row already says: the year's record if it has
+  // one, else the grade the previous year's outcome implies, else the learner's
+  // current position — so re-enrolling a learner proposes the grade they were
+  // promoted into rather than the one they just finished.
   const draftFor = useCallback((row) => drafts[row.student_id] || {
-    grade_level: row.grade_level || row.current_grade_level,
-    section:     row.section ?? row.current_section ?? '',
+    // The year's own record wins. Failing that, where the **outcome** says they
+    // belong — not where they currently stand. Those differ for exactly the case
+    // this is for: a learner promoted out of Grade 1 whose placement was removed
+    // and who is now coming back. `current_grade_level` is still Grade 1, so the
+    // page proposed the grade they had already finished, quietly undoing the
+    // promotion and tripping its own mismatch warning on an untouched row.
+    grade_level: row.grade_level || outcomeGrade(row) || row.current_grade_level,
+    // Mirror of the API's ROW_SECTION: fall back to the learner's current section
+    // only when this year has no record at all. A record with a NULL section is
+    // deliberately unassigned, and seeding last year's section over it offered a
+    // section belonging to the grade they are leaving — not even in this row's
+    // options, and rejected by `assertSectionsExist` if it ever reached a save.
+    section:     (row.enrollment_id ? row.section : row.current_section) ?? '',
     status:      row.status || 'pending',
   }, [drafts])
 
@@ -209,8 +299,8 @@ export default function Enrollment() {
   const setDraft = (row, patch) => {
     setDrafts(prev => {
       const base = prev[row.student_id] || {
-        grade_level: row.grade_level || row.current_grade_level,
-        section:     row.section ?? row.current_section ?? '',
+        grade_level: row.grade_level || outcomeGrade(row) || row.current_grade_level,
+        section:     (row.enrollment_id ? row.section : row.current_section) ?? '',
         status:      row.status || 'pending',
       }
       const next = { ...base, ...patch }
@@ -232,6 +322,17 @@ export default function Enrollment() {
   const removalCount = Object.entries(drafts)
     .filter(([id, d]) => d.status === NO_RECORD_ID && rows.some(r => r.student_id === id && r.enrollment_id))
     .length
+
+  // Drafted grade levels that disagree with an outcome already on record. Read by
+  // the save-bar count and the confirmation below, so the number in the dialog and
+  // the amber rows in the table cannot say different things.
+  const mismatches = useMemo(
+    () => rows
+      .filter(r => drafts[r.student_id])
+      .map(r => ({ row: r, expected: gradeMismatch(r, drafts[r.student_id])?.expected }))
+      .filter(x => x.expected),
+    [rows, drafts]
+  )
 
   // ── Bulk actions ───────────────────────────────────────────
   //
@@ -288,6 +389,10 @@ export default function Enrollment() {
   // Set when a bulk grade change would collapse a mixed selection; holds the
   // pending grade until the admin confirms it.
   const [pendingBulkGrade, setPendingBulkGrade] = useState(null)
+  // Confirmed on Save rather than blocked: the correction may be exactly what was
+  // intended — records do get entered wrong, which is the whole reason this page
+  // can edit a closed year at all.
+  const [confirmMismatch, setConfirmMismatch] = useState(false)
 
   const bulkSet = (patch) => {
     const t = targets()
@@ -303,12 +408,18 @@ export default function Enrollment() {
   const [carrying, setCarrying] = useState(false)
   const [previousLabel, setPreviousLabel] = useState(null)
 
+  // Only `super_admin` may call this, and `previousLabel` is read by nothing but the
+  // Carry over button, which is hidden from everyone else — so for a scoped admin this
+  // was a request for data they cannot have and would not render. The interceptor in
+  // `api/client.js` toasts every non-401 before the caller's `.catch` runs, so the
+  // silent catch below could not suppress it: the page greeted a scoped admin with
+  // "Access denied" on load. Do not fetch it rather than swallow the error.
   useEffect(() => {
-    if (!selectedSY) { setPreviousLabel(null); return }
+    if (!selectedSY || !isSuperAdmin) { setPreviousLabel(null); return }
     enrollmentApi.previous(selectedSY.id)
       .then(res => setPreviousLabel(res.data.previous?.label || null))
       .catch(() => setPreviousLabel(null))
-  }, [selectedSY])
+  }, [selectedSY, isSuperAdmin])
 
   const carryOver = async () => {
     if (!selectedSY) return
@@ -400,12 +511,17 @@ export default function Enrollment() {
   // ── Render ─────────────────────────────────────────────────
   const noSections = selectedSY && sections.length === 0
   const isActiveYear = !!selectedSY?.is_active
+  // Grade level and section only. Status stays as it was — it is the field this
+  // page is mostly used for, and locking it would make the common case the one
+  // that needs a click first.
+  const placementLocked = isActiveYear && !placementUnlocked
 
-  const hasFilters = !!(search || gradeFilter || statusFilter || outcomeFilter)
+  const hasFilters = !!(search || gradeFilter || sectionFilter || statusFilter || outcomeFilter)
   const activeFilterLabels = [
     statusFilter && `"${statusLabel(statusFilter)}"`,
     outcomeFilter && `"${outcomeFilter === 'none' ? 'No outcome yet' : statusLabel(outcomeFilter)}"`,
     gradeFilter,
+    sectionFilter && (sectionFilter === NO_RECORD_ID ? 'Unassigned' : sectionFilter),
     search && `"${search}"`,
   ].filter(Boolean)
   const clearFilters = () => updateParams({})
@@ -420,7 +536,8 @@ export default function Enrollment() {
           </p>
         </div>
         {/* The wizard is the fast path at year end; this page stays the place
-            for one-off corrections the rest of the year. */}
+            for one-off corrections the rest of the year. Open to every admin —
+            a scoped admin closes out the grade levels they own. */}
         <Link to="/enrollment/promotion" className="btn-primary flex items-center gap-2">
           <GraduationCap size={16}/> Year-End Promotion
         </Link>
@@ -439,6 +556,7 @@ export default function Enrollment() {
           {CHIP_ORDER.filter(id => summary[id] || statusFilter === id).map(id => (
             <button key={id}
               onClick={() => updateParams({ ...params(), status: statusFilter === id ? '' : id })}
+              title={statusMeta(id).description}
               className={clsx(
                 'text-xs px-2.5 py-1 rounded-full font-medium transition-all',
                 statusClasses(id),
@@ -460,24 +578,42 @@ export default function Enrollment() {
             ? 'bg-amber-50 border-amber-200 text-amber-800'
             : 'bg-slate-50 border-slate-200 text-slate-600'
         )}>
-          {locked
+          {locked || placementLocked
             ? <Lock size={14} className="shrink-0 mt-0.5"/>
             : isActiveYear || archived
               ? <AlertTriangle size={14} className="shrink-0 mt-0.5"/>
               : <Info size={14} className="shrink-0 mt-0.5"/>}
           <p className="flex-1">
             {isActiveYear
-              ? <>SY {selectedSY.label} is the <strong>active</strong> school year, so saving here moves learners immediately &mdash; their class lists change right away.</>
+              ? <>
+                  SY {selectedSY.label} is the <strong>active</strong> school year, so saving here moves learners
+                  immediately &mdash; their class lists change right away.{' '}
+                  {placementLocked
+                    ? <>Grade level and section are <strong>locked</strong> so they cannot be changed by accident. Status can still be edited.</>
+                    : <>Grade level and section are <strong>unlocked</strong>. Changing one moves that learner as soon as you save.</>}
+                </>
               : archived
                 ? unlocked
                   ? <>SY {selectedSY.label} is <strong>archived</strong> and you are editing its history. Saving rewrites the record of who attended that year &mdash; it changes nothing about the current one.</>
-                  : <>SY {selectedSY.label} is <strong>archived</strong>. Its records are the history of who attended that year, so they are read-only. Unlock only to correct a record that is wrong.</>
+                  : isSuperAdmin
+                    ? <>SY {selectedSY.label} is <strong>archived</strong>. Its records are the history of who attended that year, so they are read-only. Unlock only to correct a record that is wrong.</>
+                    : <>SY {selectedSY.label} is <strong>archived</strong>. Its records are the history of who attended that year, so they are read-only. Correcting a closed school year is restricted to a super admin.</>
                 : <>SY {selectedSY.label} is not active yet. Saving here only records the plan; learners move when this year is activated in Curriculum Management.</>}
           </p>
-          {locked && (
+          {locked && isSuperAdmin && (
             <button onClick={() => setUnlocked(true)}
               className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-slate-600 font-medium hover:border-slate-400 transition-colors">
               <Unlock size={12}/> Edit historical records
+            </button>
+          )}
+          {/* Not the archived unlock: this one only guards against a slip on the
+              year that is running, so any admin may lift it — and put it back. */}
+          {isActiveYear && (
+            <button onClick={() => setPlacementUnlocked(v => !v)}
+              className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-slate-600 font-medium hover:border-slate-400 transition-colors">
+              {placementLocked
+                ? <><Unlock size={12}/> Unlock grade &amp; section</>
+                : <><Lock size={12}/> Lock grade &amp; section</>}
             </button>
           )}
         </div>
@@ -503,10 +639,23 @@ export default function Enrollment() {
         </div>
 
         <select className="input w-auto min-w-[150px]" value={gradeFilter}
-          onChange={e => updateParams({ ...params(), grade: e.target.value })}>
+          onChange={e => updateParams({ ...params(), grade: e.target.value, section: '' })}>
           <option value="">All Grade Levels</option>
           {scopedGrades.map(g => <option key={g} value={g}>{g}</option>)}
         </select>
+
+        {/* Sections are per grade level, so this only means anything once one is
+            chosen. "Unassigned" is a real answer here rather than an empty state:
+            a learner carried over or rolled into a year arrives without a section,
+            and finding those is most of the work of filling a year in. */}
+        {gradeFilter && (
+          <select className="input w-auto min-w-[150px]" value={sectionFilter}
+            onChange={e => updateParams({ ...params(), section: e.target.value })}>
+            <option value="">All Sections</option>
+            {sectionsFor(gradeFilter).map(n => <option key={n} value={n}>{n}</option>)}
+            <option value={NO_RECORD_ID}>Unassigned</option>
+          </select>
+        )}
 
         {/* Outcome is its own filter, deliberately not a status chip. */}
         <select className="input w-auto min-w-[150px]" value={outcomeFilter}
@@ -522,13 +671,18 @@ export default function Enrollment() {
           ))}
         </select>
 
-        <button onClick={carryOver} disabled={locked || carrying || !previousLabel || !rows.length}
-          className="btn-secondary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          title={locked ? 'This school year is archived — unlock it to edit its records'
-            : previousLabel ? `Prefill from SY ${previousLabel}` : 'No earlier school year to carry over from'}>
-          <RotateCcw size={15}/>
-          {carrying ? 'Carrying over...' : previousLabel ? `Carry over from ${previousLabel}` : 'Carry over'}
-        </button>
+        {/* Prefills every learner without a record in one go; the endpoint
+            behind it is super_admin-only, so the button follows it. */}
+        {isSuperAdmin && (
+          <button onClick={carryOver} disabled={locked || placementLocked || carrying || !previousLabel || !rows.length}
+            className="btn-secondary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={locked ? 'This school year is archived — unlock it to edit its records'
+              : placementLocked ? 'Grade level and section are locked — unlock them in the banner above'
+              : previousLabel ? `Prefill from SY ${previousLabel}` : 'No earlier school year to carry over from'}>
+            <RotateCcw size={15}/>
+            {carrying ? 'Carrying over...' : previousLabel ? `Carry over from ${previousLabel}` : 'Carry over'}
+          </button>
+        )}
 
         {/* Learners who graduated or left are hidden from later years, or every
             future roster would accumulate every ex-student the school ever had.
@@ -545,7 +699,7 @@ export default function Enrollment() {
       </div>
 
       {/* Bulk bar */}
-      {selected.size > 0 && !locked && (
+      {selected.size > 0 && !locked && isSuperAdmin && (
         <div className="flex flex-wrap items-center gap-3 bg-brand-50 border border-brand-200 rounded-xl px-4 py-3 animate-slide-up">
           <span className="text-sm font-semibold text-brand-800">{selected.size} selected</span>
 
@@ -567,13 +721,15 @@ export default function Enrollment() {
             {SELECTABLE_STATUSES.map(o => {
               const noRemove = o.id === NO_RECORD_ID && noRemoveCount > 0
               return (
-                <option key={o.id} value={o.id} disabled={noRemove}>
+                <option key={o.id} value={o.id} disabled={noRemove} title={o.description}>
                   {o.label}{noRemove ? ` — ${noRemoveCount} ${noRemoveWhy}` : ''}
                 </option>
               )
             })}
           </select>
           <select className="input w-auto py-1.5 text-sm" value={bulkGrade}
+            disabled={placementLocked}
+            title={placementLocked ? 'Locked — unlock grade level and section in the banner above.' : undefined}
             onChange={e => {
               const g = e.target.value
               // A mixed batch is confirmed, not applied: it collapses every
@@ -610,7 +766,7 @@ export default function Enrollment() {
             <thead>
               <tr>
                 <th className="w-10">
-                  {!locked && (
+                  {!locked && isSuperAdmin && (
                     <input type="checkbox" className="rounded border-slate-300"
                       checked={selected.size === rows.length && rows.length > 0}
                       onChange={toggleAll}/>
@@ -634,10 +790,11 @@ export default function Enrollment() {
                 // section are about to stop existing — grey them out rather
                 // than letting the admin fill in values nothing will read.
                 const removing = d.status === NO_RECORD_ID
+                const mismatch = dirty ? gradeMismatch(row, d) : null
                 return (
                   <tr key={row.student_id} className={clsx(dirty && 'bg-brand-50/50')}>
                     <td>
-                      {!locked && (
+                      {!locked && isSuperAdmin && (
                         <input type="checkbox" className="rounded border-slate-300"
                           checked={selected.has(row.student_id)}
                           onChange={() => setSelected(prev => {
@@ -653,23 +810,42 @@ export default function Enrollment() {
                     </td>
                     <td className="text-xs whitespace-nowrap"><LastAttended row={row}/></td>
                     <td>
-                      <select className="input py-1.5 text-sm min-w-[110px]" value={removing ? '' : (d.grade_level || '')}
+                      <select className={clsx('input py-1.5 text-sm min-w-[110px]', mismatch && 'border-amber-400 bg-amber-50')}
+                        value={removing ? '' : (d.grade_level || '')}
                         onChange={e => setDraft(row, { grade_level: e.target.value })}
-                        disabled={locked || removing}>
+                        title={placementLocked ? 'Locked — SY is active, so this moves the learner immediately. Unlock it in the banner above.' : undefined}
+                        disabled={locked || removing || placementLocked}>
                         <option value="">—</option>
                         {scopedGrades.map(g => <option key={g} value={g}>{g}</option>)}
                       </select>
+                      {mismatch && (
+                        <p className="mt-1 flex items-start gap-1 text-[11px] text-amber-700 max-w-[190px]">
+                          <AlertTriangle size={11} className="shrink-0 mt-0.5"/>
+                          <span>
+                            {mismatch.kind === 'own'
+                              ? <>This year ended as <strong>{statusLabel(row.outcome)}</strong> from <strong>{mismatch.expected}</strong>.</>
+                              : row.last_outcome === 'retained'
+                                ? <>Retained in SY {row.last_school_year}, so <strong>{mismatch.expected}</strong> is expected.</>
+                                : <>Promoted from {row.last_grade_level}, so <strong>{mismatch.expected}</strong> is expected.</>}
+                          </span>
+                        </p>
+                      )}
                     </td>
                     <td>
                       <select className="input py-1.5 text-sm min-w-[110px]" value={removing ? '' : (d.section || '')}
                         onChange={e => setDraft(row, { section: e.target.value })}
-                        disabled={locked || removing || !secOptions.length}>
+                        title={placementLocked ? 'Locked — SY is active, so this moves the learner immediately. Unlock it in the banner above.' : undefined}
+                        disabled={locked || removing || placementLocked || !secOptions.length}>
                         <option value="">{secOptions.length ? 'Unassigned' : 'No sections'}</option>
                         {secOptions.map(n => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </td>
                     <td>
-                      {dirty ? (
+                      {!isSuperAdmin || locked ? (
+                        <span title={isSuperAdmin ? undefined : 'Enrolment status is set by a super admin. Grade level and section are yours to edit.'}>
+                          <StatusBadge status={dirty ? d.status : statusOf(row)}/>
+                        </span>
+                      ) : dirty ? (
                         <select className="input py-1.5 text-sm min-w-[130px]" value={d.status}
                           onChange={e => setDraft(row, { status: e.target.value })}>
                           {SELECTABLE_STATUSES.map(o => {
@@ -678,14 +854,12 @@ export default function Enrollment() {
                               : row.has_academic_records ? 'has recorded work this year'
                               : null
                             return (
-                              <option key={o.id} value={o.id} disabled={!!why}>
+                              <option key={o.id} value={o.id} disabled={!!why} title={o.description}>
                                 {o.label}{why ? ` — ${why}` : ''}
                               </option>
                             )
                           })}
                         </select>
-                      ) : locked ? (
-                        <StatusBadge status={statusOf(row)}/>
                       ) : (
                         <button onClick={() => setDraft(row, {})} title="Click to change">
                           <StatusBadge status={statusOf(row)}/>
@@ -758,6 +932,48 @@ export default function Enrollment() {
         </div>
       </Modal>
 
+      {/* A grade level that disagrees with an outcome already on record. Confirmed
+          rather than blocked: an outcome is a verdict about a year, and the grade
+          level can simply have been entered wrong — that is what this page is for.
+          What it must not be is silent, because nothing downstream re-derives a
+          placement once the wizard has written it. */}
+      <Modal open={confirmMismatch} onClose={() => setConfirmMismatch(false)}
+        title="Grade level does not match the outcome" size="sm">
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600">
+            {mismatches.length === 1 ? 'One learner is' : `${mismatches.length} learners are`} being
+            saved into a grade level that does not match what their outcome says.
+          </p>
+          <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 max-h-52 overflow-y-auto">
+            {mismatches.slice(0, 8).map(({ row, expected }) => (
+              <div key={row.student_id} className="flex items-center justify-between gap-3 text-sm">
+                <span className="text-slate-600 truncate">{formatName(row)}</span>
+                <span className="text-slate-400 whitespace-nowrap">
+                  <strong className="text-amber-700">{drafts[row.student_id].grade_level}</strong>
+                  {' '}instead of {expected}
+                </span>
+              </div>
+            ))}
+            {mismatches.length > 8 && (
+              <p className="text-xs text-slate-400 pt-1">and {mismatches.length - 8} more</p>
+            )}
+          </div>
+          <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+            <AlertTriangle size={14} className="shrink-0 mt-0.5"/>
+            <p>
+              The outcome itself is not changed &mdash; only Year-End Promotion can do that.
+              Save only if the grade level is the one that was wrong.
+            </p>
+          </div>
+          <div className="flex gap-3 pt-1">
+            <button type="button" onClick={() => setConfirmMismatch(false)}
+              className="btn-secondary flex-1">Go back</button>
+            <button type="button" onClick={() => { setConfirmMismatch(false); save() }}
+              className="btn-primary flex-1 justify-center">Save anyway</button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Sticky save bar */}
       {dirtyCount > 0 && (
         <div className="fixed bottom-0 left-0 lg:left-64 right-0 z-30 bg-white border-t border-slate-200 shadow-lg animate-slide-up">
@@ -769,10 +985,16 @@ export default function Enrollment() {
                   {' '}&middot; {removalCount} record{removalCount === 1 ? '' : 's'} will be removed
                 </span>
               )}
+              {mismatches.length > 0 && (
+                <span className="text-amber-700 font-normal">
+                  {' '}&middot; {mismatches.length} do{mismatches.length === 1 ? 'es' : ''} not match
+                  {mismatches.length === 1 ? ' its' : ' their'} outcome
+                </span>
+              )}
             </span>
             <button onClick={() => { setDrafts({}); setSelected(new Set()) }}
               className="ml-auto btn-secondary text-sm">Discard</button>
-            <button onClick={save} disabled={saving}
+            <button onClick={() => (mismatches.length ? setConfirmMismatch(true) : save())} disabled={saving}
               className="btn-primary flex items-center gap-2 text-sm disabled:opacity-60">
               <Save size={15}/> {saving ? 'Saving...' : 'Save changes'}
             </button>

@@ -14,15 +14,15 @@ const express = require('express')
 const router  = express.Router()
 const Joi     = require('joi')
 const { query, withTransaction } = require('../config/database')
-const { authenticate, authorizeAnyAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
+const { authenticate, authorizeAnyAdmin, authorizeSuperAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
-const { gradeScopeForRole, isScopedAdmin, canManageGrade } = require('../utils/roles')
+const { gradeScopeForRole, isScopedAdmin, isSuperAdmin, canManageGrade } = require('../utils/roles')
 const { assertSectionsExist } = require('../utils/sections')
 const { syStatus, isArchivedYear } = require('../utils/schoolYear')
 const {
   ENROLLMENT_STATUSES, OUTCOMES, PROMOTION_OUTCOMES, MANUAL_STATUS_IDS,
   NO_RECORD_ID, SELECTABLE_STATUS_IDS,
-  MOVES_ON_OUTCOMES, statusLabel, nextGradeLevel, isExitGrade, GRADE_PROGRESSION,
+  MOVES_ON_OUTCOMES, statusLabel, nextGradeLevel, isExitGrade, GRADE_PROGRESSION, clampToManual,
   recommendNumeric, recommendDescriptive,
 } = require('../utils/enrollment')
 const {
@@ -34,6 +34,23 @@ const { loadAssessmentRows } = require('../utils/assessmentConfig')
 router.use(authenticate)
 router.use(authorizeAnyAdmin)
 
+/**
+ * The section a roster row is actually in.
+ *
+ * **Not** `COALESCE(e.section, s.section)`. That fell back to the learner's current
+ * section whenever the year's record left it NULL — but NULL on an existing record is
+ * a fact, not a gap: it means "no section assigned for this year", which is exactly
+ * what every learner the promotion wizard places looks like. Coalescing hid them from
+ * a section filter, and worse, reported them as being in a section belonging to the
+ * grade level they are *leaving* (a Grade 2 placement showing "Makabayan", a Grade 1
+ * section). The fallback is only sound when there is no record at all, where the
+ * learner's current standing is the honest stand-in.
+ *
+ * `grade_level` needs no such care: a record cannot exist without one, so its
+ * COALESCE never actually falls back.
+ */
+const ROW_SECTION = `CASE WHEN e.id IS NOT NULL THEN e.section ELSE s.section END`
+
 // Same ordering the curriculum routes use, so grade lists match across pages.
 // `$COL` is substituted per query because the roster sorts on the enrolment
 // row's grade level, falling back to the student's current one.
@@ -42,14 +59,52 @@ const gradeOrder = (col) => `CASE ${col}
   WHEN 'Grade 3' THEN 3 WHEN 'Grade 4' THEN 4 WHEN 'Grade 5' THEN 5
   WHEN 'Grade 6' THEN 6 ELSE 99 END`
 
-// "This learner has not left the school", judged from their most recent earlier
-// record (`prev`, a LATERAL join defined per query). A learner with no earlier
-// record at all has obviously not left. Written once because the roster query,
-// the summary and the hidden-count all have to agree.
+/**
+ * "This learner has not left the school", judged from their most recent earlier
+ * record (`prev`, a LATERAL join defined per query). Written once because the
+ * roster query, both summaries and the hidden-count all have to agree.
+ *
+ * Four ways to have left, and the last two are about a year **ending** rather
+ * than about anything anyone recorded:
+ *
+ * - `transferred_out` / `dropped` — they were enrolled and then stopped. Counts
+ *   whether or not that year has finished; the fact is already established.
+ * - an `outcome` of `graduated` — they completed the final grade level.
+ * - **not enrolled**: no record at all for a school year that has since closed.
+ *   "Not enrolled" is the *absence* of a record, not a status, and it is a
+ *   different thing from `dropped` — a learner who simply did not come back
+ *   never enrolled to begin with. Without this, `prev` skipping gaps meant
+ *   someone who attended 2024-2025, sat out 2025-2026 and was looked at from
+ *   2026-2027 still read as `enrolled` and stayed on every future roster.
+ * - **`pending` when that year closed** — expected, never confirmed, and the year
+ *   is over. Nobody ever put them in it.
+ *
+ * The principle behind the last two: a year that has **closed** without the
+ * learner attending it means they left. A year still open says nothing yet — it
+ * is a roster not yet filled in, and hiding people from it would remove the very
+ * learners the page exists to enrol (every placement the promotion wizard writes
+ * is `pending` in a year that has not started).
+ *
+ * Two boundaries this must not cross:
+ *
+ * - `prev.status IS NULL` short-circuits first, so a learner with **no earlier
+ *   record at all** is never hidden. They have not failed to return; they are new.
+ * - the gap window starts at `prev.label`, not at the beginning of time. Looking
+ *   at every earlier closed year would brand a learner who joined in 2025-2026 as
+ *   having left, on the strength of having no 2024-2025 record.
+ */
 const LEFT_SQL = `(
   prev.status IS NULL
-  OR (prev.status NOT IN ('transferred_out','dropped')
-      AND prev.outcome IS DISTINCT FROM 'graduated')
+  OR (
+    prev.status NOT IN ('transferred_out','dropped')
+    AND prev.outcome IS DISTINCT FROM 'graduated'
+    AND NOT (prev.status = 'pending' AND prev.closed)
+    AND NOT EXISTS (
+      SELECT 1 FROM school_years gap
+       WHERE gap.label > prev.label AND gap.label < $2
+         AND NOT gap.is_active AND NOT gap.is_upcoming
+    )
+  )
 )`
 
 const loadSchoolYear = async (id) => {
@@ -232,6 +287,29 @@ const assertNoOutcome = async (syId, studentIds) => {
   )
 }
 
+/**
+ * The archived-year gate, shared by the three writers that can reach a closed
+ * year (`PUT /`, `DELETE /`, and the promotion commit's target).
+ *
+ * Two refusals, because there are two different callers. Unlocking a closed year
+ * is a super_admin capability: a scoped admin told to "unlock the school year"
+ * would be pointed at an affordance their page does not offer, so they get a 403
+ * naming who can instead. The 409 stays for the caller who simply did not send
+ * the flag -- a mis-picked year from a dropdown that lists closed years like any
+ * other, which is the risk this gate has always been about.
+ */
+const assertArchivedWritable = (req, sy, allowArchived, conflictMessage) => {
+  if (!isArchivedYear(sy)) return
+  if (!isSuperAdmin(req.user.role)) {
+    throw new AppError(
+      `SY ${sy.label} is archived. Correcting the records of a closed school year is ` +
+      'restricted to a super admin.',
+      403
+    )
+  }
+  if (!allowArchived) throw new AppError(conflictMessage, 409)
+}
+
 const resolveSYId = async (sy_id) => {
   if (sy_id) return sy_id
   const r = await query('SELECT id FROM school_years WHERE is_active=TRUE LIMIT 1')
@@ -268,7 +346,15 @@ router.get('/', async (req, res, next) => {
       conditions.push(`s.grade_level = ANY($${params.length}::text[])`)
     }
     if (grade_level) { params.push(grade_level); conditions.push(`COALESCE(e.grade_level, s.grade_level)=$${params.length}`) }
-    if (section)     { params.push(section);     conditions.push(`COALESCE(e.section, s.section)=$${params.length}`) }
+    // 'none' means *no section*, the same sentinel `status` and `outcome` use below.
+    // `NULLIF` because the column is written both ways: `PUT /` normalises '' to NULL,
+    // but `students.section` can still hold an empty string from older paths, and an
+    // unassigned learner has to be findable however their row happens to spell it.
+    if (section === NO_RECORD_ID) {
+      conditions.push(`NULLIF(${ROW_SECTION}, '') IS NULL`)
+    } else if (section) {
+      params.push(section); conditions.push(`${ROW_SECTION}=$${params.length}`)
+    }
     if (status === 'none') {
       conditions.push('e.id IS NULL')
     } else if (status) {
@@ -296,7 +382,8 @@ router.get('/', async (req, res, next) => {
     // that replaced a useless "Currently") and "have they left the school".
     const PREV_JOIN = `
       LEFT JOIN LATERAL (
-        SELECT pe.grade_level, pe.section, pe.status, pe.outcome, psy.label
+        SELECT pe.grade_level, pe.section, pe.status, pe.outcome, psy.label,
+               (NOT psy.is_active AND NOT psy.is_upcoming) AS closed
           FROM student_enrollments pe
           JOIN school_years psy ON psy.id = pe.school_year_id
          WHERE pe.student_id = s.id AND psy.label < $2
@@ -324,7 +411,7 @@ router.get('/', async (req, res, next) => {
          ${PREV_JOIN}
          ${where}
         ORDER BY ${gradeOrder('COALESCE(e.grade_level, s.grade_level)')},
-                 COALESCE(e.section, s.section) NULLS FIRST, s.surname, s.first_name`,
+                 ${ROW_SECTION} NULLS FIRST, s.surname, s.first_name`,
       params
     )
 
@@ -388,7 +475,7 @@ router.get('/', async (req, res, next) => {
 // The prefill source for "Carry over": the year that ran immediately before
 // this one, with each learner's record from it plus the grade level they would
 // move up into.
-router.get('/previous', async (req, res, next) => {
+router.get('/previous', authorizeSuperAdmin, async (req, res, next) => {
   try {
     const syId = await resolveSYId(req.query.sy_id)
     const target = await loadSchoolYear(syId)
@@ -723,7 +810,10 @@ router.post('/promotion', async (req, res, next) => {
       target_sy_id: Joi.string().uuid().required(),
       decisions: Joi.array().min(1).max(1000).items(Joi.object({
         student_id:       Joi.string().uuid().required(),
-        outcome:          Joi.string().valid(...PROMOTION_OUTCOMES).required(),
+        // `null` clears a decision committed by an earlier run. Still `.required()`,
+        // so the key has to be present: an *absent* outcome stays a validation error
+        // rather than being read as a request to erase a verdict.
+        outcome:          Joi.string().valid(...PROMOTION_OUTCOMES).allow(null).required(),
         remarks:          Joi.string().allow('', null).max(500).optional(),
         next_grade_level: Joi.string().allow(null).optional(),
         next_section:     Joi.string().allow('', null).optional(),
@@ -761,14 +851,10 @@ router.post('/promotion', async (req, res, next) => {
     // grade), and a `graduated` decision deletes the target row outright, erasing
     // the fact the learner attended that year at all -- the same act
     // `DELETE /api/enrollment` already puts behind this flag.
-    if (isArchivedYear(target) && !value.allow_archived) {
-      throw new AppError(
-        `SY ${source.label} hands over to SY ${target.label}, which is archived. ` +
-        'Closing one archived school year into another rewrites records that are already history. ' +
-        'Unlock the wizard to correct them on purpose.',
-        409
-      )
-    }
+    assertArchivedWritable(req, target, value.allow_archived,
+      `SY ${source.label} hands over to SY ${target.label}, which is archived. ` +
+      'Closing one archived school year into another rewrites records that are already history. ' +
+      'Unlock the wizard to correct them on purpose.')
 
     // Only promoted and retained learners carry forward. A learner who
     // graduated gets no record in the next year at all — that is what
@@ -791,7 +877,8 @@ router.post('/promotion', async (req, res, next) => {
     // `status='enrolled'` is the same gate the review applies: an outcome can
     // only be recorded for a learner who actually attended the year.
     const cur = await query(
-      `SELECT s.id, s.full_name, e.grade_level AS source_grade_level
+      `SELECT s.id, s.full_name, e.grade_level AS source_grade_level,
+              e.outcome AS prior_outcome, e.status AS source_status
          FROM students s
          JOIN student_enrollments e ON e.student_id = s.id AND e.school_year_id = $2
         WHERE s.id = ANY($1::uuid[]) AND s.is_active=TRUE AND e.status='enrolled'`,
@@ -811,6 +898,7 @@ router.post('/promotion', async (req, res, next) => {
     // them forward. `isExitGrade` reads the same `ALL_GRADES` ladder the UI does,
     // so adding or retiring a grade level moves this with it.
     const gradeOf = new Map(cur.rows.map(r => [r.id, r.source_grade_level]))
+    const nameOf  = new Map(cur.rows.map(r => [r.id, r.full_name]))
     const earlyGraduates = decisions.filter(
       d => d.outcome === 'graduated' && !isExitGrade(gradeOf.get(d.student_id))
     )
@@ -826,15 +914,47 @@ router.post('/promotion', async (req, res, next) => {
     }
 
     // Scope is checked on the grade level they are leaving AND the one they are
-    // entering: a scoped admin must not be able to promote a learner out of
-    // their own reach, nor reach into someone else's.
+    // entering: a scoped admin must not close out someone else's grade level,
+    // nor place a learner into one.
     if (isScopedAdmin(req.user.role)) {
       const out = cur.rows.filter(r => !canManageGrade(req.user.role, r.source_grade_level))
       if (out.length) throw new AppError(`${out.length} of the selected learners are outside your grade scope.`, 403)
     }
-    for (const d of decisions) if (d.next_grade_level) enforceGradeScope(req, d.next_grade_level)
 
-    const nameOf = new Map(cur.rows.map(r => [r.id, r.full_name]))
+    // ...with one exception, or closing a year would be impossible for the admin
+    // who owns its **last** grade level: promotion out of the top of a scoped
+    // range necessarily lands outside it. Kinder promotes into Grade 1, which
+    // `admin_ece` does not otherwise touch, and Grade 6 graduates into nothing.
+    // So an out-of-scope target is allowed **only where the ladder derives it**
+    // for that learner -- the next grade for a promotion, the same one for a
+    // retention -- and never as a free placement. Anything else still 403s.
+    for (const d of decisions) {
+      if (!d.next_grade_level) continue
+      if (canManageGrade(req.user.role, d.next_grade_level)) continue
+      const from = gradeOf.get(d.student_id)
+      const derived = d.outcome === 'retained' ? from : nextGradeLevel(from)
+      if (d.next_grade_level === derived) continue
+      // Out of scope **and** not what the outcome implies. The bare scope message
+      // reads as a permissions problem, when for a scoped admin the usual cause is
+      // a placement that contradicts the decision beside it -- a retained learner
+      // sent up a grade, which for `admin_ece` lands in Grade 1 and trips this.
+      // Name both, so the fix is obvious rather than looking like missing access.
+      throw new AppError(
+        `${nameOf.get(d.student_id) || 'A learner'} is recorded as ${statusLabel(d.outcome)}, ` +
+        `which means ${derived || 'no placement at all'} — but the placement is ${d.next_grade_level}, ` +
+        'which is outside your grade scope. Correct the outcome or the placement so the two agree.',
+        403
+      )
+    }
+
+    // Clearing a decision removes the placement it created in the target year. That
+    // is the same delete `DELETE /api/enrollment` puts behind `assertNoAcademicRecords`,
+    // and for the same reason: if the learner has already been given work in that year,
+    // dropping the record would leave it hanging off a learner the year no longer says
+    // was ever there. Undoing a verdict must not cost anyone their grades.
+    const clearedIds = decisions.filter(d => d.outcome === null).map(d => d.student_id)
+    await assertNoAcademicRecords(value.target_sy_id, target.label, clearedIds)
+
     await assertSectionsExist(
       value.target_sy_id,
       decisions.filter(d => d.next_grade_level)
@@ -842,8 +962,11 @@ router.post('/promotion', async (req, res, next) => {
       (e) => nameOf.get(e.student_id) || 'Learner'
     )
 
+    const priorOutcome = new Map(cur.rows.map(r => [r.id, r.prior_outcome]))
+    const sourceStatus = new Map(cur.rows.map(r => [r.id, r.source_status]))
+
     const result = await withTransaction(async (client) => {
-      let closed = 0, carried = 0
+      let closed = 0, carried = 0, cleared = 0
       for (const d of decisions) {
         // `status` is deliberately untouched. The learner *was* enrolled that
         // year; the outcome says how it ended. Overwriting one with the other is
@@ -854,7 +977,7 @@ router.post('/promotion', async (req, res, next) => {
             WHERE student_id=$4 AND school_year_id=$5`,
           [d.outcome, d.remarks || null, req.user.id, d.student_id, value.sy_id]
         )
-        closed++
+        if (d.outcome === null) cleared++; else closed++
 
         if (d.next_grade_level) {
           await client.query(
@@ -888,13 +1011,32 @@ router.post('/promotion', async (req, res, next) => {
             [d.student_id]
           )
         }
+
+        // ...and undoing that verdict has to undo its mirror too, or a learner
+        // whose graduation was recorded by mistake stays off every roster with
+        // nothing on record saying why. They go back to what the closing year's
+        // record still says they were during it -- `status` was never touched by
+        // any of this, so it is the honest answer.
+        if (source.is_active && d.outcome === null && priorOutcome.get(d.student_id) === 'graduated') {
+          await client.query(
+            `UPDATE students SET enrollment_status=$1, updated_at=NOW()
+              WHERE id=$2 AND is_active=TRUE`,
+            [clampToManual(sourceStatus.get(d.student_id)), d.student_id]
+          )
+        }
       }
-      return { closed, carried }
+      return { closed, carried, cleared }
     })
 
+    // Built rather than templated, because a run can be any mix of the three and
+    // "closed for 0 learners" would be a lie about a run that only undid a mistake.
+    const parts = []
+    if (result.closed)  parts.push(`SY ${source.label} closed for ${result.closed} learner${result.closed === 1 ? '' : 's'}`)
+    if (result.carried) parts.push(`${result.carried} carried into SY ${target.label} as pending`)
+    if (result.cleared) parts.push(`${result.cleared} decision${result.cleared === 1 ? '' : 's'} cleared`)
+
     res.json({
-      message: `SY ${source.label} closed for ${result.closed} learner${result.closed === 1 ? '' : 's'}. ` +
-               `${result.carried} carried into SY ${target.label} as pending.`,
+      message: `${parts.join('. ')}.`,
       ...result,
       target_school_year: target.label,
     })
@@ -949,13 +1091,9 @@ router.put('/', async (req, res, next) => {
     // the grading-model lock in curriculum.routes.js there is nothing to
     // re-derive here; the risk is a mis-picked year, so an explicit flag is
     // enough to distinguish intent from accident.
-    if (isArchivedYear(schoolYear) && !value.allow_archived) {
-      throw new AppError(
-        `SY ${schoolYear.label} is archived, so its enrolment records are read-only. ` +
-        'Unlock the school year on the Enrollment page to correct historical records.',
-        409
-      )
-    }
+    assertArchivedWritable(req, schoolYear, value.allow_archived,
+      `SY ${schoolYear.label} is archived, so its enrolment records are read-only. ` +
+      'Unlock the school year on the Enrollment page to correct historical records.')
 
     const all = value.entries.map(e => ({ ...e, section: e.section || null }))
 
@@ -966,6 +1104,17 @@ router.put('/', async (req, res, next) => {
     // mirror on `students` is reconciled below, so removal is safe there too.
     const removals = all.filter(e => e.status === NO_RECORD_ID)
     const entries  = all.filter(e => e.status !== NO_RECORD_ID)
+
+    // Removing a record erases the fact the learner attended that year at all,
+    // which is a different act from correcting the status they held in it. The
+    // per-learner status edits below stay open to every admin within their scope.
+    if (removals.length && !isSuperAdmin(req.user.role)) {
+      throw new AppError(
+        'Removing an enrolment record is restricted to a super admin. ' +
+        `${removals.length} of the submitted learners are set to "Not enrolled".`,
+        403
+      )
+    }
 
     const removalIds = removals.map(e => e.student_id)
     await assertNoOutcome(value.sy_id, removalIds)
@@ -992,6 +1141,36 @@ router.put('/', async (req, res, next) => {
     }
 
     const nameOf = new Map(cur.rows.map(r => [r.id, r.full_name]))
+
+    // The status column is super_admin's. A scoped admin still *places* learners
+    // -- grade level and section are the roster they keep -- but whether a
+    // learner is attending the year at all is not theirs to set.
+    //
+    // Enforced by comparing against what is stored, not by dropping the field:
+    // the page posts the whole draft row, so silently overwriting the submitted
+    // status would answer 200 to a save that did not do what it said. A learner
+    // with no record yet has no status to preserve, and a new record may only be
+    // created 'pending' -- what the rollover and Carry over both give anyone who
+    // has not been confirmed for the year.
+    if (isScopedAdmin(req.user.role) && entries.length) {
+      const prior = await query(
+        `SELECT student_id, status FROM student_enrollments
+           WHERE school_year_id=$1 AND student_id = ANY($2::uuid[])`,
+        [value.sy_id, entries.map(e => e.student_id)]
+      )
+      const stored = new Map(prior.rows.map(r => [r.student_id, r.status]))
+      const changed = entries.filter(e => e.status !== (stored.get(e.student_id) || 'pending'))
+      if (changed.length) {
+        const named = changed.slice(0, 3).map(e => nameOf.get(e.student_id) || 'a learner').join(', ')
+        const rest = changed.length > 3 ? ` and ${changed.length - 3} more` : ''
+        throw new AppError(
+          `Setting a learner's enrolment status is restricted to a super admin, so this save was ` +
+          `refused: it would change the status of ${named}${rest}. Grade level and section can still be edited.`,
+          403
+        )
+      }
+    }
+
     await assertSectionsExist(value.sy_id, entries, (e) => nameOf.get(e.student_id) || 'Student')
 
     const saved = await withTransaction(async (client) => {
@@ -1060,9 +1239,13 @@ router.put('/', async (req, res, next) => {
 })
 
 // ── DELETE /api/enrollment ───────────────────────────────────
-// Remove a record entered by mistake. Refused on the active year, where the
-// record is the thing holding the learner in their current class.
-router.delete('/', async (req, res, next) => {
+// Remove a record entered by mistake. super_admin only: this erases the fact the
+// learner attended that year at all, which is a different act from correcting the
+// status they held in it — that stays open to every admin within their scope, both
+// here via PUT and on the Students page. What blocks it beyond the role is what is
+// attached to the record (assertNoOutcome / assertNoAcademicRecords), not the
+// year's status; on the active year the mirror on `students` is reconciled below.
+router.delete('/', authorizeSuperAdmin, async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
       sy_id:      Joi.string().uuid().required(),
@@ -1074,13 +1257,9 @@ router.delete('/', async (req, res, next) => {
     const schoolYear = await loadSchoolYear(value.sy_id)
     // Deleting an archived record erases the fact the learner attended that year
     // at all, so it sits behind the same unlock as editing one.
-    if (isArchivedYear(schoolYear) && !value.allow_archived) {
-      throw new AppError(
-        `SY ${schoolYear.label} is archived, so its enrolment records are read-only. ` +
-        'Unlock the school year on the Enrollment page to correct historical records.',
-        409
-      )
-    }
+    assertArchivedWritable(req, schoolYear, value.allow_archived,
+      `SY ${schoolYear.label} is archived, so its enrolment records are read-only. ` +
+      'Unlock the school year on the Enrollment page to correct historical records.')
 
     const owner = await query(
       `SELECT s.grade_level FROM student_enrollments e

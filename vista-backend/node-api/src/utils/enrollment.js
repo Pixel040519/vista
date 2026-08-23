@@ -46,7 +46,7 @@ const ENROLLMENT_STATUSES = [
   { id: 'transferred_out', label: 'Transferred out', tone: 'slate',
     description: 'Moved to another school.' },
   { id: 'dropped', label: 'Dropped', tone: 'red',
-    description: 'Stopped attending without transferring.' },
+    description: 'Was enrolled, then stopped attending or withdrew before completing the school year.' },
 ];
 
 const ENROLLMENT_STATUS_IDS = ENROLLMENT_STATUSES.map(s => s.id);
@@ -89,8 +89,18 @@ const MANUAL_STATUS_IDS = [...ENROLLMENT_STATUS_IDS];
  * school year. It reads like a status on screen and is selectable like one, so
  * it needs an id; choosing it means **delete this year's record**, not write
  * this string.
+ *
+ * It is also a **reason a learner counts as having left** once that year closes
+ * (`LEFT_SQL` in `enrollment.routes.js`), which is why it carries a description
+ * of its own rather than being an unlabelled fallback in `statusLabel`: the
+ * difference from `dropped` is the whole point, and it is easy to lose.
  */
 const NO_RECORD_ID = 'none';
+
+const NO_RECORD_STATUS = {
+  id: NO_RECORD_ID, label: 'Not enrolled', tone: 'slate',
+  description: 'Never enrolled for this school year — either a new learner who has not enrolled yet, or a previous learner who did not return. Not the same as Dropped, which means they were enrolled and then stopped.',
+};
 
 /** Everything the Enrollment page's status select may offer. */
 const SELECTABLE_STATUS_IDS = [...MANUAL_STATUS_IDS, NO_RECORD_ID];
@@ -198,6 +208,7 @@ const recommendDescriptive = ({ band, isExit }) => {
 
 module.exports = {
   NO_RECORD_ID,
+  NO_RECORD_STATUS,
   SELECTABLE_STATUS_IDS,
   ENROLLMENT_STATUSES,
   ENROLLMENT_STATUS_IDS,

@@ -4,7 +4,7 @@ const QRCode  = require('qrcode')
 const { v4: uuidv4 } = require('uuid')
 const Joi     = require('joi')
 const { query, withTransaction } = require('../config/database')
-const { authenticate, authorizeAnyAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
+const { authenticate, authorizeAnyAdmin, authorizeSuperAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
 const { normaliseName } = require('../utils/nameHelper')
 const { ROLES, gradeScopeForRole, canManageGrade, isScopedAdmin } = require('../utils/roles')
@@ -351,14 +351,20 @@ router.patch('/:id/academic-access', authorizeAnyAdmin, async (req, res, next) =
   } catch (err) { next(err) }
 })
 
-// PATCH /api/students/:id/enrollment-status — admin-only.
+// PATCH /api/students/:id/enrollment-status — **super_admin only**.
 // Confirms a pending learner, or records that one has left. Writes the mirror on
 // `students` AND the active year's `student_enrollments` row together, so the
 // roster and the year-by-year history can never disagree.
 //
+// Same rule as `PUT /api/enrollment`, which refuses a changed status from a scoped
+// admin: placing a learner is theirs, deciding whether the learner is attending at
+// all is not. This is the single-learner path to the same column, so leaving it on
+// `authorizeAnyAdmin` would have made that restriction a speed bump — one page over
+// is not a boundary. Grade scope still applies on top via `assertStudentInScope`.
+//
 // Attendance only. 'graduated' is a year-end outcome earned from results, so it
 // is not on offer here — the promotion wizard is the only thing that sets one.
-router.patch('/:id/enrollment-status', authorizeAnyAdmin, async (req, res, next) => {
+router.patch('/:id/enrollment-status', authorizeSuperAdmin, async (req, res, next) => {
   try {
     const schema = Joi.object({
       status:  Joi.string().valid(...MANUAL_STATUS_IDS).required(),

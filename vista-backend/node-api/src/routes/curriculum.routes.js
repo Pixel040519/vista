@@ -246,6 +246,42 @@ router.get('/school-years', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+/**
+ * Learners who finished a school year with no year-end outcome recorded.
+ *
+ * Only `enrolled` ones, matching the promotion wizard's own rule: someone who
+ * transferred out, dropped, or was never confirmed did not finish the year, so
+ * there is no verdict for them to be missing. Scoped admins count only their own
+ * grade levels, like every other list here.
+ */
+const countUndecidedOutcomes = async (schoolYearId, role, client) => {
+  const run = client ? client.query.bind(client) : query
+  const params = [schoolYearId]
+  let scope = ''
+  if (isScopedAdmin(role)) {
+    params.push(gradeScopeForRole(role))
+    scope = ` AND s.grade_level = ANY($${params.length}::text[])`
+  }
+  const r = await run(
+    `SELECT COUNT(*)::int AS n
+       FROM student_enrollments e
+       JOIN students s ON s.id = e.student_id
+      WHERE e.school_year_id = $1 AND e.status = 'enrolled' AND e.outcome IS NULL
+        AND s.is_active = TRUE${scope}`,
+    params
+  )
+  return r.rows[0].n
+}
+
+/** The year that closes when `incomingId` is activated: whichever is active now. */
+const loadClosingYear = async (incomingId) => {
+  const r = await query(
+    'SELECT id, label FROM school_years WHERE is_active=TRUE AND id <> $1 LIMIT 1',
+    [incomingId]
+  )
+  return r.rows[0] || null
+}
+
 // GET /school-years/:id/enrollment-readiness
 //
 // Feeds the pre-flight panel in the Edit School Year modal: how many learners
@@ -278,12 +314,23 @@ router.get('/school-years/:id/enrollment-readiness', authorizeAnyAdmin, async (r
     const total = rows.rows.reduce((a, r) => a + r.count, 0)
     const without_record = by_status.none || 0
 
+    // The other half of the question. "Is this year ready to receive learners" is
+    // only worth asking alongside "is the year they are leaving finished with" --
+    // activating strands an undecided learner in a closed year that nothing will
+    // reopen on its own, and the wizard is the only thing that can still judge them.
+    const closing = await loadClosingYear(req.params.id)
+    const undecided_outcomes = closing
+      ? await countUndecidedOutcomes(closing.id, req.user.role)
+      : 0
+
     res.json({
       school_year: sy.rows[0],
       total_students: total,
       with_record: total - without_record,
       without_record,
       by_status,
+      closing_school_year: closing,
+      undecided_outcomes,
     })
   } catch (err) { next(err) }
 })
@@ -475,6 +522,14 @@ router.put('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
     // Switching the school year is the moment students move. Anything else is
     // just an edit to the year's own metadata.
     const activating = value.is_active === true && !existing.is_active
+    // Read before the transaction: the first thing it does is clear `is_active`
+    // on every other year, after which there is nothing left to identify the year
+    // being closed. Outcomes are not touched by activation, so the count is the
+    // same either side of it.
+    const closing = activating ? await loadClosingYear(req.params.id) : null
+    const undecidedOutcomes = closing
+      ? await countUndecidedOutcomes(closing.id, req.user.role)
+      : 0
 
     const result = await withTransaction(async (client) => {
       // Enforce single-active across all school years
@@ -491,7 +546,13 @@ router.put('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
       )
       if (!r.rows.length) throw new AppError('School year not found.', 404)
 
-      const rollover = activating ? await rolloverStudents(client, req.params.id) : null
+      const rollover = activating
+        ? {
+            ...(await rolloverStudents(client, req.params.id)),
+            closing_school_year: closing,
+            undecided_outcomes: undecidedOutcomes,
+          }
+        : null
       return { school_year: r.rows[0], rollover }
     })
 

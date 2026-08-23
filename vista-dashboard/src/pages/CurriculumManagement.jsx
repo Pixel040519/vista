@@ -443,8 +443,9 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
       {activating && (
         <div className={clsx(
           'p-3 rounded-xl border text-xs space-y-1.5',
-          readiness?.without_record ? 'bg-amber-50 border-amber-200 text-amber-800'
-                                    : 'bg-slate-50 border-slate-200 text-slate-600'
+          readiness?.without_record || readiness?.undecided_outcomes
+            ? 'bg-amber-50 border-amber-200 text-amber-800'
+            : 'bg-slate-50 border-slate-200 text-slate-600'
         )}>
           <p className="font-semibold flex items-center gap-1.5">
             <Users size={13}/> Switching to SY {sy.label}
@@ -467,6 +468,18 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
                 </p>
               )}
             </>
+          )}
+          {/* The other half: what is being left behind. An undecided learner is
+              stranded in a year that closes the moment this one starts, and only
+              Year-End Promotion can still judge them. */}
+          {readiness?.undecided_outcomes > 0 && readiness.closing_school_year && (
+            <p className="pt-1 border-t border-amber-200/70">
+              <strong>{readiness.undecided_outcomes}</strong> learner
+              {readiness.undecided_outcomes === 1 ? '' : 's'} in SY {readiness.closing_school_year.label} still
+              {readiness.undecided_outcomes === 1 ? ' has' : ' have'} no year-end outcome. That year closes when
+              this one starts, and nothing decides them on its own.{' '}
+              <Link to="/enrollment/promotion" className="underline font-medium">Open Year-End Promotion</Link> first.
+            </p>
           )}
         </div>
       )}
@@ -787,6 +800,16 @@ export default function CurriculumManagement() {
         (roll.pending ? `, ${roll.pending} marked pending.` : '.'),
         { duration: 6000 }
       )
+      // Activation is never blocked, so if it went ahead anyway this is the last
+      // place the admin hears about it -- separate toast, because it is a loose
+      // end to go back to rather than a report of what just happened.
+      if (roll.undecided_outcomes > 0 && roll.closing_school_year) {
+        toast(
+          `${roll.undecided_outcomes} learner${roll.undecided_outcomes === 1 ? '' : 's'} in SY ` +
+          `${roll.closing_school_year.label} still have no year-end outcome. Record them in Year-End Promotion.`,
+          { icon: '⚠️', duration: 9000 }
+        )
+      }
     } else {
       toast.success('School year updated.')
     }

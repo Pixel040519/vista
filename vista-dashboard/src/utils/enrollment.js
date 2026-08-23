@@ -31,7 +31,7 @@ export const ENROLLMENT_STATUSES = [
   { id: 'transferred_out', label: 'Transferred out', tone: 'slate',
     description: 'Moved to another school.' },
   { id: 'dropped', label: 'Dropped', tone: 'red',
-    description: 'Stopped attending without transferring.' },
+    description: 'Was enrolled, then stopped attending or withdrew before completing the school year.' },
 ]
 
 export const ENROLLMENT_STATUS_IDS = ENROLLMENT_STATUSES.map(s => s.id)
@@ -77,14 +77,17 @@ export const WITHDRAWN_STATUS_IDS = ['transferred_out', 'dropped', 'graduated']
 /**
  * "Not enrolled" is not a stored value — it is the absence of a record for that
  * school year. It reads like a status on screen and is selectable like one, so
- * it carries an id; choosing it means **remove this year's record**, which is
- * why it is refused on the active year, where the record is what holds the
- * learner in their current class.
+ * it carries an id; choosing it means **remove this year's record** — restricted
+ * to a super admin, and refused outright once the record carries a year-end
+ * outcome or the learner has work recorded in that year.
+ *
+ * It is also a **reason a learner counts as having left** once that year closes,
+ * which is why the description spells out the difference from `dropped`.
  */
 export const NO_RECORD_ID = 'none'
 export const NO_RECORD = {
   id: NO_RECORD_ID, label: 'Not enrolled', tone: 'slate',
-  description: 'No enrolment record for this school year — the learner is not on its roster at all.',
+  description: 'Never enrolled for this school year — either a new learner who has not enrolled yet, or a previous learner who did not return. Not the same as Dropped, which means they were enrolled and then stopped.',
 }
 
 /** Everything the Enrollment page's status select offers, destructive one last. */

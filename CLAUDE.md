@@ -229,26 +229,104 @@ longer blocks it: removing the **active** year's record sets
 `students.enrollment_status='pending'`, matching what the rollover gives anyone
 without a record.
 
+**Who may do what.** The split is **placement versus status**. A scoped admin owns the
+roster inside their grade scope — which grade level and section a learner sits in — and
+`PUT /api/enrollment` still writes both for them. **`status` is `super_admin`'s**: the
+Enrollment page renders the Status cell as a read-only badge for `admin_ece` /
+`admin_elem`, and the API 403s on any submitted status that differs from what is stored
+(a record that does not exist yet may only be created `pending`). It compares rather
+than quietly substituting, so a refused save says so instead of returning 200.
+
+Three more actions are `super_admin`-only because they rewrite history or run across the
+whole school: **removing a record** ("Not enrolled" / `DELETE /api/enrollment`),
+**unlocking an archived year** (on the Enrollment page and in the wizard alike), and
+**Carry over** (`GET /api/enrollment/previous`). The multi-select and bulk bar are hidden
+from scoped admins too, but that one is a **UI guardrail with no server counterpart** —
+`PUT` always posts an array, so nothing tells a bulk edit from eleven hand edits.
+
+**The Year-End Promotion wizard is open to every admin**, bounded by grade scope: a scoped
+admin closes out the grade levels they own and sees no one else's learners.
+
+Step 2's placement can be overridden by hand, so it can end up contradicting the outcome
+recorded beside it — a **retained** learner placed a grade up reads as a retention on the
+record while behaving as a promotion. The wizard **warns rather than refuses**
+(`placementMismatch()`: amber row, inline note, count banner, and a named list on Confirm),
+because the placement may be a deliberate exception. The API refuses only when that
+placement is *also* out of the caller's grade scope, and its 403 names the contradiction
+rather than just the scope, since that is almost always the real mistake. Its one subtlety
+is that promotion out of the **top** of a scoped range necessarily lands outside it, so an
+out-of-scope target is accepted only where the ladder derives it — `admin_ece` moves Kinder
+into Grade 1, but cannot place a Kinder learner into Grade 4. Note this also means
+`admin_elem` can graduate a Grade 6 learner, and `graduated` is the one outcome that writes
+`students.enrollment_status`. That is a year-end verdict earned from results, not the
+attendance question the status column answers, which is why it is not a contradiction of the
+status rule above — but it is the one path by which a scoped admin still changes that column.
+
+The Students page follows the same rule — `PATCH /api/students/:id/enrollment-status` is
+`authorizeSuperAdmin` and its status badge is only clickable for `super_admin`. It is the
+single-learner path to the same column, so leaving it open would have made the rule a
+speed bump. Reading status stays open to everyone: the badge, the filter and the
+`by_status` breakdown are all unchanged.
+
+**A grade level that disagrees with an outcome is confirmed, not blocked.** The Enrollment
+page checks a drafted grade level against whichever outcome bears on the row — the row's
+own, if that year has been closed, otherwise the previous year's, which is what put the
+learner in this year's grade — and routes Save through a confirmation naming the learners.
+It is the promotion wizard's mismatch rule applied where that placement can later be edited
+by hand. The outcome column itself is never touched by this page; only the wizard writes it.
+
 Editing the **active** year through `PUT /api/enrollment` writes the `students`
-row immediately, because there is no later activation to pick the change up.
+row immediately, because there is no later activation to pick the change up. Which is
+why the Enrollment page opens the active year's **grade level and section read-only**,
+with an unlock toggle in the banner. That is a guard against a slip rather than a
+permission — any admin can lift it, and it covers only the two fields that move a
+learner, never status. It is a **client-side** guard: the API has no equivalent, because
+there is nothing to distinguish an intended placement change from an accidental one.
 Editing an **upcoming** year only records the plan. An **archived** year is
 read-only: `PUT` and `DELETE /api/enrollment` answer 409 unless the request
-carries `allow_archived: true`, which the Enrollment page sends only after an
-admin has explicitly unlocked that year. A closed year's records are the history
+carries `allow_archived: true`, which the Enrollment page sends only after a
+super admin has explicitly unlocked that year — a scoped admin gets a 403 naming
+who can, since pointing them at an unlock button their page does not render
+would be worse than a plain refusal. A closed year's records are the history
 of who actually attended, and the page's dropdown offers closed years like any
 other, so an unmarked write there is far more likely to be a mis-picked year than
 an intended correction. The override exists because a year archives the instant
 the next is activated — exactly when year-end corrections are still arriving — so
 unlike the grading-model freeze this cannot be absolute. `isArchivedYear` lives in
-`utils/schoolYear.js`, mirrored in `components/SchoolYearPicker.jsx`. The
-promotion wizard is **not** gated: it writes `outcome`, not status.
+`utils/schoolYear.js`, mirrored in `components/SchoolYearPicker.jsx`; the three
+writers that can reach a closed year share one helper, `assertArchivedWritable()`.
+The wizard is **not** subject to *this* gate on its closing year: it writes
+`outcome`, not status, and has its own gate on the year learners move into.
 
-A learner who has **left** — `transferred_out`, `dropped`, or an `outcome` of
-`graduated` in their most recent earlier year — drops out of later years' rosters
-entirely, or every future year would accumulate every ex-student the school ever
-had. `GET /api/enrollment?include_left=true` brings them back so a returning
-learner can be re-enrolled, and the rollover leaves their standing alone instead
-of resetting it to `pending`.
+A learner who has **left** drops out of later years' rosters entirely, or every
+future year would accumulate every ex-student the school ever had. Four ways to
+have left, judged from their most recent earlier record:
+
+| | |
+|---|---|
+| `transferred_out` / `dropped` | they were enrolled and then stopped — settled either way, open year or not |
+| `outcome = 'graduated'` | completed the final grade level |
+| **not enrolled** | no record at all for a school year that has since **closed** |
+| **`pending` when that year closed** | expected, never confirmed, and the year is over |
+
+**"Not enrolled" is the absence of a record, not a status** — and it is a different
+fact from `dropped`: a learner who simply did not come back never enrolled to begin
+with. Without it, `prev` skipping gaps meant someone who attended 2024-2025, sat out
+2025-2026 and was looked at from 2026-2027 still read as `enrolled` and stayed on
+every future roster.
+
+The principle behind the last two rows is that a year which has **closed** without
+the learner attending it means they left; a year still open says nothing yet — it is
+a roster not yet filled in, and hiding people from it would remove the very learners
+the page exists to enrol (every placement the wizard writes is `pending` in a year
+that has not started). Two boundaries the rule must not cross: a learner with **no
+earlier record at all** is never hidden (they are new, not absent), and the gap window
+starts at their last attended year rather than at the beginning of time — otherwise
+anyone who joined late would be branded as having left.
+
+`GET /api/enrollment?include_left=true` brings them back so a returning learner can
+be re-enrolled, and the rollover leaves their standing alone instead of resetting it
+to `pending`.
 
 Only `enrollment_status = 'enrolled'` puts a learner on a teacher's class list —
 Attendance, Score Entry, ECE Competency, class-health and the FastAPI rosters all
@@ -276,6 +354,23 @@ already holds and **recommends** an outcome per learner; it never decides.
 Two rules the UI enforces on top: a learner with **no** results gets no
 recommendation at all (a guess from nothing would be worse than none), and
 promoting someone the data says to retain **requires a written reason**.
+
+**The recommendation is never pre-selected as the decision.** It renders in its own
+column and only becomes a decision when the admin picks it or presses "Accept all
+recommendations" — otherwise the advice would arrive already looking like a verdict, and
+a year could be closed without anyone having agreed to one.
+
+**A decision can be taken back.** Blanking a committed decision and saving posts
+`outcome: null`, which clears the verdict and deletes the forward placement — refused if
+the learner already has work in the target year. The wizard remains the only writer of
+`outcome`; it is now also the only eraser of one.
+
+**A partial batch is allowed**, and is the normal case: teachers finish grading at
+different times, so the wizard commits whoever has been decided and leaves the rest
+untouched — no outcome, closing-year record unchanged, and `pending` on their current
+grade if the next year is activated first. The only floor is the API's own `min(1)` on
+`decisions`. Re-running seeds from `decided_outcome` and upserts, so finishing later
+updates the same rows rather than duplicating them.
 
 Only learners whose `status` is `enrolled` are reviewed. Someone who transferred
 out, dropped, or was never confirmed did not finish the year — their status
@@ -334,10 +429,12 @@ Detailed per-feature role behavior lives in the backend/frontend nested `CLAUDE.
 
 Roles stored in `users.role` (enum constraint: `super_admin`, `admin_ece`, `admin_elem`, `teacher`, `parent`). Grade scope is derived from role via `utils/roles.js` on both backend and frontend (`gradeScopeForRole`, `isAnyAdmin`, `isSuperAdmin`, `isScopedAdmin`, `canManageGrade`). No `grade_scope` column on `users` — the JWT carries only the role, and the auth payload (`/login`, `/me`) exposes a computed `grade_scope` array for convenience.
 
-- **super_admin** — school-wide. Full access except Attendance and Score Entry (teacher-only). Manages other admins, school years, all curriculum, all students. ECE Competency is read-only. Only role that can hit `/api/accounts/admins` CRUD and `POST/PUT/DELETE /api/curriculum/school-years`.
+- **super_admin** — school-wide. Full access except Attendance and Score Entry (teacher-only). Manages other admins, school years, all curriculum, all students. ECE Competency is read-only. Only role that can hit `/api/accounts/admins` CRUD, `POST/PUT/DELETE /api/curriculum/school-years`, and the enrolment actions that rewrite history or run across the whole school (setting a learner's enrolment status, record removal, the archived-year unlock, and Carry over). The Year-End Promotion wizard is open to all three admin tiers, bounded by grade scope.
 - **admin_ece** — scoped to Kinder (the only remaining early-childhood level). Can manage teachers, students, subjects, sections, and grading structure for Kinder. Cannot manage school years, cannot manage other admins. Can open ECE Competency (read-only). Elementary routes and data are invisible. Grade routes (`/api/grades/*`, Grades page) are rejected — ECE grade levels track learning via the ECE Competency tool, not the grades table.
 - **admin_elem** — scoped to Grade 1 – Grade 6. Mirror of `admin_ece` for elementary. ECE routes (`/api/ece/*`, `/api/ai/ece-class-health`, ECE Competency page) are rejected.
 - **teacher** — scoped to `activeAssignments` (from `/api/auth/me`, filtered to the active SY). Teacher-facing pages (Students, Attendance, Score Entry, Behavior, ECE Competency) use a "Class" dropdown filtered to assigned sections. Risk Overview, the "In Your Class" card on Student Detail, and TeacherDashboard all draw teacher-scoped numbers from `/api/ai/class-health/all` — a single source of truth for teacher-scoped band numbers.
 - **parent** — limited access; students endpoint filters to linked students via `parent_student`.
+
+Both scoped admins keep the **placement** half of enrolment work within their grade scope — which grade level and section a learner sits in. **Enrolment status is `super_admin`'s**, on both surfaces that write it: the Enrollment page's Status column is read-only and `PUT /api/enrollment` refuses a changed status, and the Students page's badge is read-only with `PATCH /api/students/:id/enrollment-status` gated too. See "Enrollment & school-year rollover".
 
 **Scoped-admin enforcement**: every GET that returns students or student-derived rows filters by `gradeScopeForRole(req.user.role)`. Mutations on grade-scoped rows (students, subjects, sections, grading, guardians, QR, behavior-admin queries) call `enforceGradeScope(req, grade_level)` which throws 403 out-of-scope. Account CRUD: scoped admins see only teachers whose active-SY assignments fall within their scope (or no active-SY assignments yet); historical out-of-scope assignments are preserved on edit/delete.

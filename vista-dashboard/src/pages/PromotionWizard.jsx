@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, ArrowRight, Check, AlertTriangle, Info, ChevronDown, ChevronRight,
-  GraduationCap, Search, Wand2, Loader2, Lock, Unlock,
+  GraduationCap, Search, Wand2, Loader2, Lock, Unlock, ListChecks, Hourglass,
 } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -42,6 +42,42 @@ const placementFor = (s, outcome) => {
   if (outcome === 'retained') return s.retained_grade_level || s.grade_level
   if (outcome === 'promoted') return s.promoted_grade_level || ''
   return ''   // a graduate has no placement at all
+}
+
+/**
+ * Grade levels offered as a placement for one learner.
+ *
+ * Normally the caller's own scope. But a scoped admin closing out their **last**
+ * grade level has to place learners one rung above it — Kinder promotes into
+ * Grade 1, which `admin_ece` does not otherwise touch — so the grade the ladder
+ * derives for *this* learner is added when it falls outside. Never a free choice:
+ * only that one extra level appears, and `POST /promotion` enforces the same rule.
+ */
+const gradeOptionsFor = (scoped, s, outcome) => {
+  const derived = placementFor(s, outcome)
+  return derived && !scoped.includes(derived)
+    ? ALL_GRADES.filter(g => scoped.includes(g) || g === derived)
+    : scoped
+}
+
+/**
+ * A placement that contradicts the decision sitting beside it.
+ *
+ * `placementFor()` is the rule — retained stays put, promoted moves up one — and
+ * step 2 lets the grade level be overridden by hand, so the two can drift apart.
+ * The case that matters is a **retained** learner sent up a grade: the record then
+ * says "retained" while the placement behaves like a promotion, and nothing
+ * downstream would ever flag it. `admin_ece` hits the scope check instead (Grade 1
+ * is outside their range), but for `admin_elem` both grades are in scope, so
+ * Grade 3 retained → placed in Grade 4 commits silently.
+ *
+ * Returns the grade level the outcome implies, or null when the two agree.
+ */
+const placementMismatch = (s, d) => {
+  if (!d || !MOVES_ON_OUTCOMES.includes(d.outcome)) return null
+  const expected = placementFor(s, d.outcome)
+  if (!expected || !d.next_grade_level) return null
+  return d.next_grade_level === expected ? null : expected
 }
 
 const nextYearAfter = (list, source) =>
@@ -137,7 +173,7 @@ function Evidence({ ev, open }) {
 
 export default function PromotionWizard() {
   const navigate = useNavigate()
-  const { gradeScope } = useAuth()
+  const { gradeScope, isSuperAdmin } = useAuth()
   const scopedGrades = useMemo(
     () => (gradeScope?.length ? ALL_GRADES.filter(g => gradeScope.includes(g)) : ALL_GRADES),
     [gradeScope]
@@ -158,6 +194,7 @@ export default function PromotionWizard() {
   const [gradeFilter, setGradeFilter] = useState('')
   const [search, setSearch]           = useState('')
   const [reviewOnly, setReviewOnly]   = useState(false)
+  const [undecidedOnly, setUndecidedOnly] = useState(false)
 
   // ── School years ───────────────────────────────────────────
   useEffect(() => {
@@ -192,11 +229,16 @@ export default function PromotionWizard() {
     try {
       const res = await enrollmentApi.promotionReview(sourceId, targetId || undefined)
       setData(res.data)
-      // Seed every row: a decision already committed wins, then the
-      // recommendation, and rows with neither stay blank for a human to fill.
+      // Seed only from a decision already **committed**. The recommendation is
+      // deliberately not seeded: pre-filling it made the wizard's advice look like
+      // a decision that had been taken, and an admin could page through and commit
+      // a whole year of outcomes without ever having agreed to one. It is advice,
+      // and it stays in its own column where it is read rather than acted on by
+      // default — "Accept all recommendations" is how it becomes a decision, which
+      // is one deliberate click instead of none.
       const seed = {}
       for (const s of res.data.students) {
-        const outcome = s.decided_outcome || s.recommendation || ''
+        const outcome = s.decided_outcome || ''
         seed[s.student_id] = {
           outcome,
           remarks: s.decided_remarks || '',
@@ -256,6 +298,7 @@ export default function PromotionWizard() {
   const visible = students.filter(s => {
     if (gradeFilter && s.grade_level !== gradeFilter) return false
     if (reviewOnly && !s.needs_review) return false
+    if (undecidedOnly && decisions[s.student_id]?.outcome) return false
     if (search) {
       const q = search.toLowerCase()
       if (!s.full_name?.toLowerCase().includes(q) && !s.lrn?.includes(q)) return false
@@ -263,7 +306,22 @@ export default function PromotionWizard() {
     return true
   })
 
+  // Teachers finish grading at different times, so the roster is normally a mix of
+  // learners who can be judged and learners whose results are not in yet. Both are
+  // counted, because they are different problems: `undecided` is what is left to do,
+  // `noData` is what cannot be done yet by anyone.
   const undecided = students.filter(s => !decisions[s.student_id]?.outcome)
+  const decided   = students.filter(s => decisions[s.student_id]?.outcome)
+  // Blank means two different things, and only the row's history tells them apart.
+  // Never decided → nothing to do, leave it for a later run. Decided in an earlier
+  // run and blanked now → an explicit "that was wrong, take it back", which posts
+  // `outcome: null` and clears the verdict. Without this split the second case was
+  // silently indistinguishable from the first: the row was dropped from the payload
+  // and the wizard reloaded showing the very decision the admin had just removed.
+  const cleared = students.filter(s => s.decided_outcome && !decisions[s.student_id]?.outcome)
+  // Blank and never committed: genuinely not part of this run, as opposed to the
+  // cleared rows above, which very much are.
+  const untouched = undecided.filter(s => !s.decided_outcome)
 
   // Overriding a retention recommendation into a promotion is a judgement the
   // data does not support, so it has to be justified in writing.
@@ -275,10 +333,19 @@ export default function PromotionWizard() {
 
   const movers = students.filter(s => MOVES_ON.includes(decisions[s.student_id]?.outcome))
   const unplaced = movers.filter(s => !decisions[s.student_id]?.next_grade_level)
+  // Warned about, not blocked: the placement may genuinely be a deliberate
+  // exception, and the wizard's job is to make sure it was not an accident.
+  const mismatches = movers.filter(s => placementMismatch(s, decisions[s.student_id]))
 
   const goStep2 = () => {
     if (locked) { toast.error(`SY ${target?.label} is archived — unlock this wizard to correct records that are already history.`); return }
-    if (undecided.length) { toast.error(`${undecided.length} learner(s) still need a decision.`); return }
+    // Undecided learners no longer block the way through. Closing a year is not one
+    // sitting: results arrive per teacher, and an admin who can record the learners
+    // who are ready should not be held up by the ones whose grades are not in. The
+    // wizard is resumable by design — `GET /promotion-review` returns
+    // `decided_outcome` and `POST /promotion` upserts — so a partial run is a
+    // checkpoint, not a half-finished write. Only the API's own floor remains.
+    if (!decided.length && !cleared.length) { toast.error('Decide at least one learner before placing them.'); return }
     if (unjustified.length) {
       toast.error(`${unjustified.length} learner(s) were promoted against the recommendation — add a reason first.`)
       setReviewOnly(false); setGradeFilter('')
@@ -299,17 +366,26 @@ export default function PromotionWizard() {
   const commit = async () => {
     setSaving(true)
     try {
-      const payload = students.map(s => {
-        const d = decisions[s.student_id]
-        const moves = MOVES_ON.includes(d.outcome)
-        return {
-          student_id: s.student_id,
-          outcome: d.outcome,
-          remarks: d.remarks?.trim() || undefined,
-          next_grade_level: moves ? d.next_grade_level : undefined,
-          next_section: moves ? (d.next_section || undefined) : undefined,
-        }
-      })
+      // Decided learners only. This used to map every row, which was harmless while
+      // step 1 refused to advance with any blank -- now it is the whole thing: an
+      // undecided row would post `outcome: undefined` against a Joi `.required()`
+      // and 422 the entire batch, failing on a field the admin was never shown.
+      const payload = [
+        ...decided.map(s => {
+          const d = decisions[s.student_id]
+          const moves = MOVES_ON.includes(d.outcome)
+          return {
+            student_id: s.student_id,
+            outcome: d.outcome,
+            remarks: d.remarks?.trim() || undefined,
+            next_grade_level: moves ? d.next_grade_level : undefined,
+            next_section: moves ? (d.next_section || undefined) : undefined,
+          }
+        }),
+        // Explicitly null, never omitted: the API treats an absent `outcome` as a
+        // validation error and only `null` as "erase this verdict".
+        ...cleared.map(s => ({ student_id: s.student_id, outcome: null })),
+      ]
       const res = await enrollmentApi.promote(sourceId, targetId, payload, historical && unlocked)
       toast.success(res.data.message, { duration: 7000 })
       navigate('/enrollment')
@@ -397,11 +473,15 @@ export default function PromotionWizard() {
             {unlocked
               ? <>SY {source?.label} and SY {target?.label} are both <strong>archived</strong>, and you are editing
                   their history. Committing rewrites outcomes and placements that are already on record.</>
-              : <>SY {source?.label} hands over to SY {target?.label}, and both are <strong>archived</strong>.
-                  Closing one closed year into another rewrites records that are already history, so this is
-                  read-only. Unlock only to correct a decision that is wrong.</>}
+              : isSuperAdmin
+                ? <>SY {source?.label} hands over to SY {target?.label}, and both are <strong>archived</strong>.
+                    Closing one closed year into another rewrites records that are already history, so this is
+                    read-only. Unlock only to correct a decision that is wrong.</>
+                : <>SY {source?.label} hands over to SY {target?.label}, and both are <strong>archived</strong>.
+                    Closing one closed year into another rewrites records that are already history, so this is
+                    read-only. Correcting a closed handover is restricted to a super admin.</>}
           </p>
-          {locked && (
+          {locked && isSuperAdmin && (
             <button onClick={() => setUnlocked(true)}
               className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-slate-600 font-medium hover:border-slate-400 transition-colors">
               <Unlock size={12}/> Edit historical records
@@ -416,7 +496,7 @@ export default function PromotionWizard() {
           <p>
             SY {source.label} is still the active year. Recording outcomes here does not move anyone yet &mdash;
             learners keep their current class until SY {target?.label || 'the next year'} is activated in
-            Curriculum Management. Only the three &ldquo;left the school&rdquo; outcomes take effect immediately.
+            Curriculum Management.
           </p>
         </div>
       )}
@@ -448,11 +528,20 @@ export default function PromotionWizard() {
                     reviewOnly ? 'bg-amber-50 border-amber-300 text-amber-800' : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300')}>
                   <AlertTriangle size={14}/> Needs review ({data.summary.needs_review || 0})
                 </button>
+                {/* What is left to do. Stacks with the grade filter and the search
+                    rather than replacing them, so "undecided Grade 3" is one click
+                    plus one select. */}
+                <button onClick={() => setUndecidedOnly(v => !v)}
+                  className={clsx('px-3 py-2 rounded-xl text-sm font-medium border transition-colors flex items-center gap-2',
+                    undecidedOnly ? 'bg-brand-50 border-brand-300 text-brand-800' : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300')}>
+                  <ListChecks size={14}/> Not yet decided ({undecided.length})
+                </button>
                 <button onClick={acceptAll} disabled={locked}
                   className="btn-secondary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
                   <Wand2 size={15}/> Accept all recommendations
                 </button>
               </div>
+
 
               {excludedTotal > 0 && (
                 <div className="flex items-start gap-2 text-xs bg-slate-50 border border-slate-200 text-slate-600 rounded-xl px-3 py-2.5">
@@ -496,6 +585,7 @@ export default function PromotionWizard() {
                       const open = expanded.has(s.student_id)
                       const overridden = s.recommendation && d.outcome && d.outcome !== s.recommendation
                       const needsReason = s.recommendation === 'retained' && d.outcome === 'promoted'
+                      const clearing   = s.decided_outcome && !d.outcome
                       return (
                         <tr key={s.student_id}
                           className={clsx(s.needs_review && 'border-l-2 border-l-amber-400')}>
@@ -549,6 +639,15 @@ export default function PromotionWizard() {
                                 </option>
                               ))}
                             </select>
+                            {clearing && (
+                              <p className="mt-1 flex items-start gap-1 text-[11px] text-amber-700">
+                                <AlertTriangle size={11} className="shrink-0 mt-0.5"/>
+                                <span>
+                                  Saving clears the recorded <strong>{statusLabel(s.decided_outcome)}</strong>
+                                  {' '}and removes their SY {target?.label} placement.
+                                </span>
+                              </p>
+                            )}
                             {(overridden || needsReason) && (
                               <input
                                 className={clsx('input py-1.5 text-xs mt-1.5',
@@ -598,9 +697,24 @@ export default function PromotionWizard() {
                 <Info size={14} className="shrink-0 mt-0.5"/>
                 <p>
                   Where each learner lands in SY {target?.label}. Section is optional &mdash; you can assign it later
-                  from the Enrollment page. Learners who left the school are not listed.
+                  from the Enrollment page.
+                  {untouched.length > 0 && (
+                    <> <strong>{untouched.length}</strong> learner{untouched.length === 1 ? ' has' : 's have'} no
+                    decision yet and {untouched.length === 1 ? 'is' : 'are'} not part of this batch.</>
+                  )}
                 </p>
               </div>
+
+              {mismatches.length > 0 && (
+                <div className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-3 py-2.5">
+                  <AlertTriangle size={14} className="shrink-0 mt-0.5"/>
+                  <p>
+                    <strong>{mismatches.length} learner{mismatches.length === 1 ? '' : 's'}</strong>{' '}
+                    {mismatches.length === 1 ? 'is' : 'are'} in a grade level that does not match their
+                    outcome, highlighted below. You can still save &mdash; just check it is what you meant.
+                  </p>
+                </div>
+              )}
 
               {movers.length === 0 ? (
                 <EmptyState icon={Info} title="Nobody moves on"
@@ -691,8 +805,9 @@ export default function PromotionWizard() {
                               <tbody>
                                 {rows.map(s => {
                                   const d = decisions[s.student_id]
+                                  const mismatch = placementMismatch(s, d)
                                   return (
-                                    <tr key={s.student_id}>
+                                    <tr key={s.student_id} className={clsx(mismatch && 'bg-amber-50/60')}>
                                       <td className="font-medium text-slate-800">{formatName(s)}</td>
                                       <td className="text-xs text-slate-500 whitespace-nowrap">
                                         {s.grade_level}{s.section ? ` — ${s.section}` : ''}
@@ -703,11 +818,21 @@ export default function PromotionWizard() {
                                         </span>
                                       </td>
                                       <td>
-                                        <select className="input py-1.5 text-sm min-w-[120px]"
+                                        <select className={clsx('input py-1.5 text-sm min-w-[120px]', mismatch && 'border-amber-400 bg-amber-50')}
                                           value={d.next_grade_level || ''} disabled={locked}
                                           onChange={e => set(s.student_id, { next_grade_level: e.target.value, next_section: '' })}>
-                                          {scopedGrades.map(g => <option key={g} value={g}>{g}</option>)}
+                                          {gradeOptionsFor(scopedGrades, s, d.outcome).map(g => <option key={g} value={g}>{g}</option>)}
                                         </select>
+                                        {mismatch && (
+                                          <p className="mt-1 flex items-start gap-1 text-[11px] text-amber-700 max-w-[200px]">
+                                            <AlertTriangle size={11} className="shrink-0 mt-0.5"/>
+                                            <span>
+                                              {d.outcome === 'retained'
+                                                ? <>Retained means staying in <strong>{mismatch}</strong>.</>
+                                                : <>Promoted means moving up to <strong>{mismatch}</strong>.</>}
+                                            </span>
+                                          </p>
+                                        )}
                                       </td>
                                       <td>
                                         <select className="input py-1.5 text-sm min-w-[130px]"
@@ -750,11 +875,56 @@ export default function PromotionWizard() {
                 </div>
               </div>
 
+              {cleared.length > 0 && (
+                <div className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-3 py-2.5">
+                  <AlertTriangle size={14} className="shrink-0 mt-0.5"/>
+                  <div className="space-y-1">
+                    <p>
+                      <strong>{cleared.length}</strong> previously recorded decision
+                      {cleared.length === 1 ? '' : 's'} will be <strong>cleared</strong>:
+                    </p>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {cleared.slice(0, 5).map(s => (
+                        <li key={s.student_id}>
+                          {formatName(s)} &mdash; {statusLabel(s.decided_outcome).toLowerCase()} is removed
+                        </li>
+                      ))}
+                      {cleared.length > 5 && <li>and {cleared.length - 5} more</li>}
+                    </ul>
+                    <p>
+                      Their SY {target?.label} placement is deleted too, and they go back to having no
+                      outcome &mdash; ready to be decided again once the results are right.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {untouched.length > 0 && (
+                <div className="flex items-start gap-2 text-xs bg-slate-50 border border-slate-200 text-slate-600 rounded-xl px-3 py-2.5">
+                  <Hourglass size={14} className="shrink-0 mt-0.5"/>
+                  <div className="space-y-1">
+                    <p>
+                      <strong>{untouched.length}</strong> learner{untouched.length === 1 ? '' : 's'} still
+                      {untouched.length === 1 ? ' has' : ' have'} no decision and{' '}
+                      {untouched.length === 1 ? 'is' : 'are'} <strong>not</strong> part of this run. Their
+                      SY {source?.label} records are left exactly as they are.
+                    </p>
+                    <p>
+                      If SY {target?.label} is activated before they are decided, they are marked
+                      <strong> Pending</strong> and keep their current grade level &mdash; they are not lost,
+                      they simply do not move up until you come back and finish them.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {decided.length > 0 && (
               <div className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-3 py-2.5">
                 <AlertTriangle size={14} className="shrink-0 mt-0.5"/>
                 <div className="space-y-1">
                   <p>
-                    This records the outcome on every SY {source?.label} record and creates
+                    This records the outcome on <strong>{decided.length}</strong> SY {source?.label}{' '}
+                    record{decided.length === 1 ? '' : 's'} and creates
                     <strong> {movers.length}</strong> record{movers.length === 1 ? '' : 's'} in SY {target?.label},
                     each marked <strong>Pending</strong>.
                   </p>
@@ -765,6 +935,30 @@ export default function PromotionWizard() {
                   <p>Running this again later updates the same records rather than duplicating them.</p>
                 </div>
               </div>
+              )}
+
+              {mismatches.length > 0 && (
+                <div className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-3 py-2.5">
+                  <AlertTriangle size={14} className="shrink-0 mt-0.5"/>
+                  <div className="space-y-1">
+                    <p>
+                      <strong>{mismatches.length} learner{mismatches.length === 1 ? '' : 's'}</strong>{' '}
+                      {mismatches.length === 1 ? 'is' : 'are'} in a grade level that does not match their outcome:
+                    </p>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {mismatches.slice(0, 5).map(s => (
+                        <li key={s.student_id}>
+                          {formatName(s)} is <strong>{statusLabel(decisions[s.student_id].outcome).toLowerCase()}</strong>,
+                          but goes to <strong>{decisions[s.student_id].next_grade_level}</strong> instead
+                          of <strong>{placementMismatch(s, decisions[s.student_id])}</strong>
+                        </li>
+                      ))}
+                      {mismatches.length > 5 && <li>and {mismatches.length - 5} more</li>}
+                    </ul>
+                    <p>Go back to <strong>Place learners</strong> to change this.</p>
+                  </div>
+                </div>
+              )}
 
               {movers.some(s => !decisions[s.student_id].next_section) && (
                 <div className="flex items-start gap-2 text-xs bg-slate-50 border border-slate-200 text-slate-600 rounded-xl px-3 py-2.5">
@@ -784,7 +978,11 @@ export default function PromotionWizard() {
               <span className="text-sm text-slate-500">
                 {step === 0 && `${students.length - undecided.length} of ${students.length} decided`}
                 {step === 1 && `${movers.length - unplaced.length} of ${movers.length} placed`}
-                {step === 2 && `Ready to close SY ${source?.label}`}
+                {step === 2 && (
+                  !decided.length ? `Ready to clear ${cleared.length} decision${cleared.length === 1 ? '' : 's'}`
+                  : untouched.length > 0 || cleared.length > 0
+                    ? `Ready to record ${decided.length} of ${students.length} learners`
+                    : `Ready to close SY ${source?.label}`)}
               </span>
               {step > 0 && (
                 <button onClick={() => setStep(step - 1)} className="ml-auto btn-secondary text-sm">

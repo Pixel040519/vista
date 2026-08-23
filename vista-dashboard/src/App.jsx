@@ -95,6 +95,9 @@ export default function App() {
               <PrivateRoute roles={ANY_ADMIN}><Enrollment /></PrivateRoute>
             } />
 
+            {/* Open to every admin: a scoped admin closes out their own grade
+                levels. Reach is bounded per request by grade scope, the same way
+                the rest of the enrolment stack does it — not by the route. */}
             <Route path="enrollment/promotion" element={
               <PrivateRoute roles={ANY_ADMIN}><PromotionWizard /></PrivateRoute>
             } />
