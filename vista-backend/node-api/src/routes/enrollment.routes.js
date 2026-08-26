@@ -51,6 +51,23 @@ router.use(authorizeAnyAdmin)
  */
 const ROW_SECTION = `CASE WHEN e.id IS NOT NULL THEN e.section ELSE s.section END`
 
+/**
+ * The grade level a roster row is in **for the year being looked at** — and
+ * therefore which admin owns it.
+ *
+ * `s.grade_level` is the snapshot of the *active* year, so scoping on it answers
+ * the wrong question for every other year. Once a Kinder learner is promoted and
+ * the next year is activated, their snapshot reads Grade 1: the year they spent
+ * in Kinder disappeared from `admin_ece`'s roster and turned up on `admin_elem`'s,
+ * where the learner was never theirs to manage. A year's roster has to be judged
+ * by the grade the learner held *in it*.
+ *
+ * The COALESCE only falls back where there is no record at all — a year nobody
+ * has enrolled the learner into yet, where their current standing is the honest
+ * stand-in for where they would land.
+ */
+const ROW_GRADE = `COALESCE(e.grade_level, s.grade_level)`
+
 // Same ordering the curriculum routes use, so grade lists match across pages.
 // `$COL` is substituted per query because the roster sorts on the enrolment
 // row's grade level, falling back to the student's current one.
@@ -70,28 +87,41 @@ const gradeOrder = (col) => `CASE ${col}
  * - `transferred_out` / `dropped` — they were enrolled and then stopped. Counts
  *   whether or not that year has finished; the fact is already established.
  * - an `outcome` of `graduated` — they completed the final grade level.
- * - **not enrolled**: no record at all for a school year that has since closed.
- *   "Not enrolled" is the *absence* of a record, not a status, and it is a
- *   different thing from `dropped` — a learner who simply did not come back
- *   never enrolled to begin with. Without this, `prev` skipping gaps meant
- *   someone who attended 2024-2025, sat out 2025-2026 and was looked at from
- *   2026-2027 still read as `enrolled` and stayed on every future roster.
+ * - **not enrolled**: no record at all for a school year that has **started** —
+ *   archived or active, `NOT gap.is_upcoming`. "Not enrolled" is the *absence* of a
+ *   record, not a status, and it is a different thing from `dropped` — a learner
+ *   who simply did not come back never enrolled to begin with. Without this, `prev`
+ *   skipping gaps meant someone who attended 2024-2025, sat out 2025-2026 and was
+ *   looked at from 2026-2027 still read as `enrolled` and stayed on every future
+ *   roster.
  * - **`pending` when that year closed** — expected, never confirmed, and the year
  *   is over. Nobody ever put them in it.
  *
- * The principle behind the last two: a year that has **closed** without the
- * learner attending it means they left. A year still open says nothing yet — it
- * is a roster not yet filled in, and hiding people from it would remove the very
- * learners the page exists to enrol (every placement the promotion wizard writes
- * is `pending` in a year that has not started).
+ * The principle behind the last two: a year the learner did not attend means they
+ * left, and the test for that is whether the year has **begun**, not whether it has
+ * finished. The active year has begun — a learner with no record in the year the
+ * school is actually running is not attending it, so planning next year's roster
+ * around them would carry forward someone who is already gone. Only an **upcoming**
+ * year says nothing yet: it is a roster not yet filled in, and hiding people from it
+ * would remove the very learners the page exists to enrol (every placement the
+ * promotion wizard writes is `pending` in a year that has not started).
  *
- * Two boundaries this must not cross:
+ * Note this cannot hide anyone from the **active** year's own roster: the window
+ * ends before the year on screen, so the active year is only ever consulted while
+ * looking at a *later* one.
+ *
+ * Three boundaries this must not cross:
  *
  * - `prev.status IS NULL` short-circuits first, so a learner with **no earlier
  *   record at all** is never hidden. They have not failed to return; they are new.
  * - the gap window starts at `prev.label`, not at the beginning of time. Looking
  *   at every earlier closed year would brand a learner who joined in 2025-2026 as
  *   having left, on the strength of having no 2024-2025 record.
+ * - the window ends **before** the year on screen (`< $2`), never at it. Judging a
+ *   year by its own emptiness would empty its roster: opening a closed year is how
+ *   an admin reviews and corrects who was in it, and the learners with no record
+ *   are exactly the ones that work is about. "Has left" is a verdict about the
+ *   years *behind* the one being looked at.
  */
 const LEFT_SQL = `(
   prev.status IS NULL
@@ -102,7 +132,7 @@ const LEFT_SQL = `(
     AND NOT EXISTS (
       SELECT 1 FROM school_years gap
        WHERE gap.label > prev.label AND gap.label < $2
-         AND NOT gap.is_active AND NOT gap.is_upcoming
+         AND NOT gap.is_upcoming
     )
   )
 )`
@@ -343,9 +373,9 @@ router.get('/', async (req, res, next) => {
 
     if (isScopedAdmin(req.user.role)) {
       params.push(gradeScopeForRole(req.user.role))
-      conditions.push(`s.grade_level = ANY($${params.length}::text[])`)
+      conditions.push(`${ROW_GRADE} = ANY($${params.length}::text[])`)
     }
-    if (grade_level) { params.push(grade_level); conditions.push(`COALESCE(e.grade_level, s.grade_level)=$${params.length}`) }
+    if (grade_level) { params.push(grade_level); conditions.push(`${ROW_GRADE}=$${params.length}`) }
     // 'none' means *no section*, the same sentinel `status` and `outcome` use below.
     // `NULLIF` because the column is written both ways: `PUT /` normalises '' to NULL,
     // but `students.section` can still hold an empty string from older paths, and an
@@ -372,6 +402,12 @@ router.get('/', async (req, res, next) => {
 
     // A learner with a record for this year is always shown — someone put them
     // here deliberately, even if they left in an earlier year.
+    //
+    // Also returned per row, negated, as `has_left`: the rows the toggle reveals,
+    // the count on it and the rows the table greys out are then one set by
+    // construction. The client cannot derive it — two of the four ways to have
+    // left are about a year *closing* without the learner in it, which needs the
+    // gap check inside LEFT_SQL rather than anything visible on the row.
     const notLeft = `(e.id IS NOT NULL OR ${LEFT_SQL})`
     if (!includeLeft) conditions.push(notLeft)
 
@@ -404,13 +440,14 @@ router.get('/', async (req, res, next) => {
               prev.label AS last_school_year, prev.grade_level AS last_grade_level,
               prev.section AS last_section, prev.status AS last_status,
               prev.outcome AS last_outcome,
+              NOT ${notLeft} AS has_left,
               (${ACADEMIC_SQL('$1', 's.id')}) > 0 AS has_academic_records
          FROM students s
          LEFT JOIN student_enrollments e ON e.student_id=s.id AND e.school_year_id=$1
          LEFT JOIN users u ON u.id = e.decided_by
          ${PREV_JOIN}
          ${where}
-        ORDER BY ${gradeOrder('COALESCE(e.grade_level, s.grade_level)')},
+        ORDER BY ${gradeOrder(ROW_GRADE)},
                  ${ROW_SECTION} NULLS FIRST, s.surname, s.first_name`,
       params
     )
@@ -423,7 +460,7 @@ router.get('/', async (req, res, next) => {
     const scopeConditions = ['s.is_active=TRUE']
     if (isScopedAdmin(req.user.role)) {
       scopeParams.push(gradeScopeForRole(req.user.role))
-      scopeConditions.push(`s.grade_level = ANY($${scopeParams.length}::text[])`)
+      scopeConditions.push(`${ROW_GRADE} = ANY($${scopeParams.length}::text[])`)
     }
     const scopeWhere = `WHERE ${scopeConditions.join(' AND ')}`
 
@@ -488,9 +525,12 @@ router.get('/previous', authorizeSuperAdmin, async (req, res, next) => {
 
     const params = [prev.rows[0].id]
     const conditions = ['s.is_active=TRUE']
+    // The grade level they held in *that* year, not their current snapshot —
+    // this reads a past year's records, where the two part company as soon as a
+    // newer year is activated.
     if (isScopedAdmin(req.user.role)) {
       params.push(gradeScopeForRole(req.user.role))
-      conditions.push(`s.grade_level = ANY($${params.length}::text[])`)
+      conditions.push(`e.grade_level = ANY($${params.length}::text[])`)
     }
 
     const rows = await query(
@@ -505,9 +545,23 @@ router.get('/previous', authorizeSuperAdmin, async (req, res, next) => {
       previous: prev.rows[0],
       students: rows.rows.map(r => ({
         ...r,
-        // null once the learner finishes the top grade level — they graduate
-        // rather than moving up, and the client offers that instead.
-        proposed_grade_level: nextGradeLevel(r.grade_level),
+        // Where the previous year's **outcome** puts them — the same
+        // `placementForOutcome` rule the promotion wizard walks, so Carry over
+        // and the wizard cannot propose different grades for the same learner.
+        //
+        // **No outcome means no move.** This used to advance a grade for
+        // everyone, so a learner whose year had not been closed yet was
+        // prefilled one rung up — a promotion nobody had decided, and one that
+        // became fact the moment the year was activated and the rollover copied
+        // it onto `students`. Nothing on record says they finished the grade, so
+        // the honest proposal is the grade they are already in; closing the year
+        // in the wizard is what moves them.
+        //
+        // Still null once a promoted learner finishes the top grade level — they
+        // graduate rather than moving up, and the client offers that instead.
+        proposed_grade_level: r.outcome
+          ? placementForOutcome(r.outcome, r.grade_level)
+          : r.grade_level,
       })),
     })
   } catch (err) { next(err) }
@@ -568,9 +622,15 @@ router.get('/promotion-review', async (req, res, next) => {
     // resumable rather than destructive.
     const params = [syId]
     const conditions = ['s.is_active=TRUE']
+    // Scoped on the grade level the learner held in the **closing** year, which
+    // is what `POST /promotion` checks when the decisions come back. Scoping the
+    // review on `students.grade_level` instead meant that once the next year was
+    // activated the wizard changed hands mid-close: the Kinder cohort vanished
+    // from `admin_ece`'s review and appeared in `admin_elem`'s, even though the
+    // commit would still have refused them.
     if (isScopedAdmin(req.user.role)) {
       params.push(gradeScopeForRole(req.user.role))
-      conditions.push(`s.grade_level = ANY($${params.length}::text[])`)
+      conditions.push(`e.grade_level = ANY($${params.length}::text[])`)
     }
 
     // Only learners who were actually enrolled get a year-end outcome. Someone
@@ -1128,9 +1188,19 @@ router.put('/', async (req, res, next) => {
     for (const e of entries) enforceGradeScope(req, e.grade_level)
 
     const ids = [...new Set(all.map(e => e.student_id))]
+    // The source grade is the one the learner holds **in the year being edited**,
+    // which is `students.grade_level` only for the active year. Reading the
+    // snapshot instead handed every past year to whoever owns the learner *now*:
+    // after a Kinder cohort is promoted and the next year activated, `admin_elem`
+    // could edit their Kinder records and `admin_ece` — the admin who actually
+    // kept that roster — could not. Falls back to the snapshot where the year has
+    // no record yet, which is the only case where nothing else says where they sit.
     const cur = await query(
-      'SELECT id, grade_level, full_name FROM students WHERE id = ANY($1::uuid[]) AND is_active=TRUE',
-      [ids]
+      `SELECT s.id, s.full_name, ${ROW_GRADE} AS grade_level
+         FROM students s
+         LEFT JOIN student_enrollments e ON e.student_id = s.id AND e.school_year_id = $2
+        WHERE s.id = ANY($1::uuid[]) AND s.is_active=TRUE`,
+      [ids, value.sy_id]
     )
     if (cur.rows.length !== ids.length) throw new AppError('One or more students no longer exist.', 404)
     if (isScopedAdmin(req.user.role)) {
@@ -1261,8 +1331,11 @@ router.delete('/', authorizeSuperAdmin, async (req, res, next) => {
       `SY ${schoolYear.label} is archived, so its enrolment records are read-only. ` +
       'Unlock the school year on the Enrollment page to correct historical records.')
 
+    // The record's own grade level, not the learner's current snapshot: this
+    // deletes a past year's row, and the two diverge the moment a newer year is
+    // activated.
     const owner = await query(
-      `SELECT s.grade_level FROM student_enrollments e
+      `SELECT e.grade_level FROM student_enrollments e
          JOIN students s ON s.id = e.student_id
         WHERE e.student_id=$1 AND e.school_year_id=$2`,
       [value.student_id, value.sy_id]

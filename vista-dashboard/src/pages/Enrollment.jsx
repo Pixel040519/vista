@@ -93,6 +93,36 @@ const gradeMismatch = (row, draft) => {
   return expected && g !== expected ? { expected, kind: 'prev' } : null
 }
 
+/**
+ * A learner being moved to a different grade level on the **active** school year,
+ * with nothing on record that explains it.
+ *
+ * `gradeMismatch` above only fires when there is an outcome to disagree with. A
+ * learner nobody has judged yet — no verdict this year, none last year — has
+ * nothing to check against, so the most consequential edit on this page was also
+ * the one that passed in silence: on the active year a save writes
+ * `students.grade_level` immediately, so the learner changes class lists, rosters
+ * and score-entry sheets the moment the request returns. There is no later
+ * activation to review it and no undo but another edit.
+ *
+ * Deliberately narrow, so the warning stays worth reading:
+ *
+ * - **active year only** — an upcoming year records a plan and an archived one is
+ *   already behind its own unlock.
+ * - **grade level only** — section is a smaller move within the same grade.
+ * - **only when `gradeMismatch` is silent**, so a row never argues both ways.
+ * - compared against the grade the year already has them in, falling back to their
+ *   current standing when the year has no record yet — the same order `draftFor`
+ *   seeds from, so an untouched row can never trip it.
+ *
+ * Returns `{ from }`, or null when nothing is moving.
+ */
+const activeMove = (row, draft, isActiveYear) => {
+  if (!isActiveYear || !draft.grade_level || draft.status === NO_RECORD_ID) return null
+  const from = row.grade_level || row.current_grade_level
+  return from && draft.grade_level !== from ? { from } : null
+}
+
 function LastAttended({ row }) {
   if (!row.last_school_year) {
     return <span className="text-slate-400 italic">— first year</span>
@@ -143,6 +173,10 @@ export default function Enrollment() {
   const [unlocked, setUnlocked] = useState(false)
   const archived = isArchivedYear(selectedSY)
   const locked   = archived && !unlocked
+  // Declared here rather than down in the render body: the `moves` memo below
+  // reads it, and a `const` used above its declaration is a temporal dead zone —
+  // a runtime crash the build does not catch.
+  const isActiveYear = !!selectedSY?.is_active
 
   // A second, narrower lock, and a different worry from the one above. Editing the
   // **active** year moves learners the moment it saves — their class lists change
@@ -334,6 +368,19 @@ export default function Enrollment() {
     [rows, drafts]
   )
 
+  // Grade levels being changed on the **active** year with no outcome to check
+  // them against — the edit that moves a learner immediately and that nothing
+  // else on the page had anything to say about. Same shape and the same three
+  // consumers as `mismatches` (row note, save bar, confirmation), and the two are
+  // mutually exclusive per row so a learner is never counted in both.
+  const moves = useMemo(
+    () => rows
+      .filter(r => drafts[r.student_id] && !gradeMismatch(r, drafts[r.student_id]))
+      .map(r => ({ row: r, from: activeMove(r, drafts[r.student_id], isActiveYear)?.from }))
+      .filter(x => x.from),
+    [rows, drafts, isActiveYear]
+  )
+
   // ── Bulk actions ───────────────────────────────────────────
   //
   // The two selects hold what was applied rather than snapping back to their
@@ -389,10 +436,11 @@ export default function Enrollment() {
   // Set when a bulk grade change would collapse a mixed selection; holds the
   // pending grade until the admin confirms it.
   const [pendingBulkGrade, setPendingBulkGrade] = useState(null)
-  // Confirmed on Save rather than blocked: the correction may be exactly what was
-  // intended — records do get entered wrong, which is the whole reason this page
-  // can edit a closed year at all.
-  const [confirmMismatch, setConfirmMismatch] = useState(false)
+  // One gate on Save for both grade-level warnings (`mismatches` and `moves`).
+  // Confirmed rather than blocked: the change may be exactly what was intended —
+  // records do get entered wrong, which is the whole reason this page can edit a
+  // closed year at all — so the job is to make sure it was not a slip.
+  const [confirmSave, setConfirmSave] = useState(false)
 
   const bulkSet = (patch) => {
     const t = targets()
@@ -447,10 +495,13 @@ export default function Enrollment() {
         if (['transferred_out', 'dropped'].includes(from.status)) continue
         if (from.outcome === 'graduated') continue
 
-        // Retained means they repeat, so the grade does not advance.
-        const grade = from.outcome === 'retained'
-          ? from.grade_level
-          : (from.proposed_grade_level || nextGradeLevel(from.grade_level) || from.grade_level)
+        // Where last year's outcome puts them, decided by `GET /previous` so the
+        // rule lives in one place: promoted advances a rung, retained repeats
+        // the same one, and **no outcome at all leaves them where they were**.
+        // Carrying a learner over is not a verdict on their year — advancing a
+        // grade with nothing on record saying they finished it invented a
+        // promotion, which the rollover then made real.
+        const grade = from.proposed_grade_level || from.grade_level
         const keepSection = from.section && validSections.has(`${grade}|${from.section}`) ? from.section : ''
 
         next[row.student_id] = {
@@ -510,7 +561,6 @@ export default function Enrollment() {
 
   // ── Render ─────────────────────────────────────────────────
   const noSections = selectedSY && sections.length === 0
-  const isActiveYear = !!selectedSY?.is_active
   // Grade level and section only. Status stays as it was — it is the field this
   // page is mostly used for, and locking it would make the common case the one
   // that needs a click first.
@@ -791,8 +841,17 @@ export default function Enrollment() {
                 // than letting the admin fill in values nothing will read.
                 const removing = d.status === NO_RECORD_ID
                 const mismatch = dirty ? gradeMismatch(row, d) : null
+                // Only when the mismatch is silent — one row never argues both ways.
+                const move = dirty && !mismatch ? activeMove(row, d, isActiveYear) : null
                 return (
-                  <tr key={row.student_id} className={clsx(dirty && 'bg-brand-50/50')}>
+                  <tr key={row.student_id}
+                    // A learner who has left is only on screen because the toggle
+                    // is on, and they read exactly like everyone else — so the
+                    // roster looked like it had grown. Tint them grey: history,
+                    // not an error. An edit still wins the row, because tinting a
+                    // learner being re-enrolled as gone would contradict the draft.
+                    className={clsx(dirty ? 'bg-brand-50/50' : row.has_left && 'bg-slate-100/70')}
+                    title={row.has_left ? 'Has left the school — shown because "Show learners who left" is on.' : undefined}>
                     <td>
                       {!locked && isSuperAdmin && (
                         <input type="checkbox" className="rounded border-slate-300"
@@ -805,12 +864,14 @@ export default function Enrollment() {
                       )}
                     </td>
                     <td>
-                      <p className="font-medium text-slate-800">{formatName(row)}</p>
+                      <p className={clsx('font-medium', row.has_left && !dirty ? 'text-slate-500' : 'text-slate-800')}>
+                        {formatName(row)}
+                      </p>
                       <p className="text-xs text-slate-400 font-mono">{row.lrn}</p>
                     </td>
                     <td className="text-xs whitespace-nowrap"><LastAttended row={row}/></td>
                     <td>
-                      <select className={clsx('input py-1.5 text-sm min-w-[110px]', mismatch && 'border-amber-400 bg-amber-50')}
+                      <select className={clsx('input py-1.5 text-sm min-w-[110px]', (mismatch || move) && 'border-amber-400 bg-amber-50')}
                         value={removing ? '' : (d.grade_level || '')}
                         onChange={e => setDraft(row, { grade_level: e.target.value })}
                         title={placementLocked ? 'Locked — SY is active, so this moves the learner immediately. Unlock it in the banner above.' : undefined}
@@ -827,6 +888,15 @@ export default function Enrollment() {
                               : row.last_outcome === 'retained'
                                 ? <>Retained in SY {row.last_school_year}, so <strong>{mismatch.expected}</strong> is expected.</>
                                 : <>Promoted from {row.last_grade_level}, so <strong>{mismatch.expected}</strong> is expected.</>}
+                          </span>
+                        </p>
+                      )}
+                      {move && (
+                        <p className="mt-1 flex items-start gap-1 text-[11px] text-amber-700 max-w-[190px]">
+                          <AlertTriangle size={11} className="shrink-0 mt-0.5"/>
+                          <span>
+                            Moves out of <strong>{move.from}</strong> as soon as this
+                            saves &mdash; SY {selectedSY?.label} is running.
                           </span>
                         </p>
                       )}
@@ -932,43 +1002,88 @@ export default function Enrollment() {
         </div>
       </Modal>
 
-      {/* A grade level that disagrees with an outcome already on record. Confirmed
-          rather than blocked: an outcome is a verdict about a year, and the grade
-          level can simply have been entered wrong — that is what this page is for.
-          What it must not be is silent, because nothing downstream re-derives a
-          placement once the wizard has written it. */}
-      <Modal open={confirmMismatch} onClose={() => setConfirmMismatch(false)}
-        title="Grade level does not match the outcome" size="sm">
+      {/* Two ways a drafted grade level is worth a second look, in one dialog
+          because a batch can contain both and chaining two modals to save once
+          would be worse than the mistake either prevents.
+
+          A **mismatch** disagrees with an outcome already on record: confirmed
+          rather than blocked, because an outcome is a verdict about a year and the
+          grade level can simply have been entered wrong — that is what this page is
+          for. What it must not be is silent, since nothing downstream re-derives a
+          placement once the wizard has written one.
+
+          A **move** has no outcome to disagree with, and is about *when* rather
+          than what: on the active year a save writes `students.grade_level` at
+          once, so the learner leaves their class lists immediately. Both sections
+          name the learners, because a count alone does not tell an admin whether
+          the row they slipped on is in the batch. */}
+      <Modal open={confirmSave} onClose={() => setConfirmSave(false)}
+        title={mismatches.length ? 'Check these grade levels' : 'Move learners now?'} size="sm">
         <div className="space-y-4">
-          <p className="text-sm text-slate-600">
-            {mismatches.length === 1 ? 'One learner is' : `${mismatches.length} learners are`} being
-            saved into a grade level that does not match what their outcome says.
-          </p>
-          <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 max-h-52 overflow-y-auto">
-            {mismatches.slice(0, 8).map(({ row, expected }) => (
-              <div key={row.student_id} className="flex items-center justify-between gap-3 text-sm">
-                <span className="text-slate-600 truncate">{formatName(row)}</span>
-                <span className="text-slate-400 whitespace-nowrap">
-                  <strong className="text-amber-700">{drafts[row.student_id].grade_level}</strong>
-                  {' '}instead of {expected}
-                </span>
+          {mismatches.length > 0 && (
+            <>
+              <p className="text-sm text-slate-600">
+                {mismatches.length === 1 ? 'One learner is' : `${mismatches.length} learners are`} being
+                saved into a grade level that does not match what their outcome says.
+              </p>
+              <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 max-h-52 overflow-y-auto">
+                {mismatches.slice(0, 8).map(({ row, expected }) => (
+                  <div key={row.student_id} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="text-slate-600 truncate">{formatName(row)}</span>
+                    <span className="text-slate-400 whitespace-nowrap">
+                      <strong className="text-amber-700">{drafts[row.student_id].grade_level}</strong>
+                      {' '}instead of {expected}
+                    </span>
+                  </div>
+                ))}
+                {mismatches.length > 8 && (
+                  <p className="text-xs text-slate-400 pt-1">and {mismatches.length - 8} more</p>
+                )}
               </div>
-            ))}
-            {mismatches.length > 8 && (
-              <p className="text-xs text-slate-400 pt-1">and {mismatches.length - 8} more</p>
-            )}
-          </div>
-          <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
-            <AlertTriangle size={14} className="shrink-0 mt-0.5"/>
-            <p>
-              The outcome itself is not changed &mdash; only Year-End Promotion can do that.
-              Save only if the grade level is the one that was wrong.
-            </p>
-          </div>
+              <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                <AlertTriangle size={14} className="shrink-0 mt-0.5"/>
+                <p>
+                  The outcome itself is not changed &mdash; only Year-End Promotion can do that.
+                  Save only if the grade level is the one that was wrong.
+                </p>
+              </div>
+            </>
+          )}
+
+          {moves.length > 0 && (
+            <>
+              <p className="text-sm text-slate-600">
+                {moves.length === 1 ? 'One learner changes' : `${moves.length} learners change`} grade
+                level in SY {selectedSY?.label}, which is the school year currently running.
+              </p>
+              <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 max-h-52 overflow-y-auto">
+                {moves.slice(0, 8).map(({ row, from }) => (
+                  <div key={row.student_id} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="text-slate-600 truncate">{formatName(row)}</span>
+                    <span className="text-slate-400 whitespace-nowrap">
+                      {from} &rarr;{' '}
+                      <strong className="text-amber-700">{drafts[row.student_id].grade_level}</strong>
+                    </span>
+                  </div>
+                ))}
+                {moves.length > 8 && (
+                  <p className="text-xs text-slate-400 pt-1">and {moves.length - 8} more</p>
+                )}
+              </div>
+              <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                <AlertTriangle size={14} className="shrink-0 mt-0.5"/>
+                <p>
+                  They move as soon as this saves &mdash; class lists, attendance and score
+                  entry all follow immediately. To move learners at the end of a year, use
+                  Year-End Promotion instead.
+                </p>
+              </div>
+            </>
+          )}
           <div className="flex gap-3 pt-1">
-            <button type="button" onClick={() => setConfirmMismatch(false)}
+            <button type="button" onClick={() => setConfirmSave(false)}
               className="btn-secondary flex-1">Go back</button>
-            <button type="button" onClick={() => { setConfirmMismatch(false); save() }}
+            <button type="button" onClick={() => { setConfirmSave(false); save() }}
               className="btn-primary flex-1 justify-center">Save anyway</button>
           </div>
         </div>
@@ -991,10 +1106,15 @@ export default function Enrollment() {
                   {mismatches.length === 1 ? ' its' : ' their'} outcome
                 </span>
               )}
+              {moves.length > 0 && (
+                <span className="text-amber-700 font-normal">
+                  {' '}&middot; {moves.length} change{moves.length === 1 ? 's' : ''} grade level now
+                </span>
+              )}
             </span>
             <button onClick={() => { setDrafts({}); setSelected(new Set()) }}
               className="ml-auto btn-secondary text-sm">Discard</button>
-            <button onClick={() => (mismatches.length ? setConfirmMismatch(true) : save())} disabled={saving}
+            <button onClick={() => (mismatches.length + moves.length ? setConfirmSave(true) : save())} disabled={saving}
               className="btn-primary flex items-center gap-2 text-sm disabled:opacity-60">
               <Save size={15}/> {saving ? 'Saving...' : 'Save changes'}
             </button>

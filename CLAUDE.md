@@ -237,6 +237,20 @@ Enrollment page renders the Status cell as a read-only badge for `admin_ece` /
 (a record that does not exist yet may only be created `pending`). It compares rather
 than quietly substituting, so a refused save says so instead of returning 200.
 
+**Grade scope on a school year's roster is judged by the grade level the learner held
+*in that year*, not by `students.grade_level`.** The snapshot only describes the active
+year, so scoping on it hands every other year to whoever owns the learner *now*: once a
+Kinder cohort is promoted and the next year activated, their Kinder records left
+`admin_ece` — the admin who actually kept that roster — and turned up under `admin_elem`,
+who may not manage Kinder at all. `ROW_GRADE` (`COALESCE(e.grade_level, s.grade_level)`)
+is the predicate for the roster, its summaries and `PUT`; the promotion review and
+`DELETE` read `e.grade_level` outright, since both always have a record. The COALESCE
+falls back only where the year has no record yet, which is the one case where nothing but
+the snapshot says where the learner would land. Writing an archived year is still
+`super_admin`-only on top of this — visibility and the archived-year gate are separate
+questions. `GET /enrollment/student/:id` stays on the snapshot on purpose: it is one
+learner's whole history, owned by whoever owns the learner today.
+
 Three more actions are `super_admin`-only because they rewrite history or run across the
 whole school: **removing a record** ("Not enrolled" / `DELETE /api/enrollment`),
 **unlocking an archived year** (on the Enrollment page and in the wizard alike), and
@@ -275,6 +289,16 @@ learner in this year's grade — and routes Save through a confirmation naming t
 It is the promotion wizard's mismatch rule applied where that placement can later be edited
 by hand. The outcome column itself is never touched by this page; only the wizard writes it.
 
+**A learner with no outcome at all gets the same treatment on the active year**, since that
+check has nothing to compare against for them — and on the year that is running, a grade
+level change is the edit that costs the most: the save moves them out of their class lists
+at once (see the paragraph below). So the page names those rows too, on Save and in the
+row, and both groups share **one** confirmation — a batch can contain each, and two dialogs
+in front of one save would be worse than either mistake. It is the second guard on the
+same worry as the read-only placement fields: the lock stops the mis-click, and the warning
+names who moves once an admin has lifted it. Both confirm rather than refuse — moving a
+learner mid-year is legitimate, it just should not happen unnoticed.
+
 Editing the **active** year through `PUT /api/enrollment` writes the `students`
 row immediately, because there is no later activation to pick the change up. Which is
 why the Enrollment page opens the active year's **grade level and section read-only**,
@@ -306,7 +330,7 @@ have left, judged from their most recent earlier record:
 |---|---|
 | `transferred_out` / `dropped` | they were enrolled and then stopped — settled either way, open year or not |
 | `outcome = 'graduated'` | completed the final grade level |
-| **not enrolled** | no record at all for a school year that has since **closed** |
+| **not enrolled** | no record at all for a school year that has **started** — archived or active |
 | **`pending` when that year closed** | expected, never confirmed, and the year is over |
 
 **"Not enrolled" is the absence of a record, not a status** — and it is a different
@@ -315,14 +339,29 @@ with. Without it, `prev` skipping gaps meant someone who attended 2024-2025, sat
 2025-2026 and was looked at from 2026-2027 still read as `enrolled` and stayed on
 every future roster.
 
-The principle behind the last two rows is that a year which has **closed** without
-the learner attending it means they left; a year still open says nothing yet — it is
-a roster not yet filled in, and hiding people from it would remove the very learners
-the page exists to enrol (every placement the wizard writes is `pending` in a year
-that has not started). Two boundaries the rule must not cross: a learner with **no
-earlier record at all** is never hidden (they are new, not absent), and the gap window
-starts at their last attended year rather than at the beginning of time — otherwise
-anyone who joined late would be branded as having left.
+The principle behind the last two rows is that a year the learner did not attend means
+they left — and the test for that is whether the year has **begun**, not whether it has
+finished. The **active** year has begun: someone with no record in the year the school is
+actually running is not attending it, so an upcoming year's roster must not carry them
+forward. Only an **upcoming** year says nothing yet — it is a roster not yet filled in,
+and hiding people from it would remove the very learners the page exists to enrol (every
+placement the wizard writes is `pending` in a year that has not started). In SQL that is
+simply `NOT gap.is_upcoming`.
+
+This never empties the active year's own roster, because the window ends *before* the
+year on screen — the active year is only ever consulted while looking at a later one. It
+also does not bite in the normal sequence: a learner the wizard has placed has a record
+in the upcoming year, and one it has not yet reached still has their record in the active
+year. What it catches is exactly the learner who is absent from the year now running.
+
+Three boundaries the rule must not cross: a learner with **no earlier record at all**
+is never hidden (they are new, not absent); the gap window starts at their last
+attended year rather than at the beginning of time, or anyone who joined late would be
+branded as having left; and it ends **before** the year on screen, never at it. That
+last one is why opening an archived year still lists the learners with no record for
+it — reviewing and correcting who was in a closed year is what opening it is for, and
+those rows are exactly the work. "Has left" is a verdict about the years *behind* the
+one being looked at.
 
 `GET /api/enrollment?include_left=true` brings them back so a returning learner can
 be re-enrolled, and the rollover leaves their standing alone instead of resetting it
