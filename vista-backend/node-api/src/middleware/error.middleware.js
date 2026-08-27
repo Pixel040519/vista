@@ -19,16 +19,23 @@ const errorHandler = (err, req, res, next) => {
   const statusCode = err.statusCode || 500;
   res.status(statusCode).json({
     error: err.message || 'Internal Server Error',
+    // `meta` is for the cases where the message alone leaves the client with
+    // nowhere to go -- an LRN clash against an archived learner needs to hand
+    // back that learner's id so the UI can offer to restore them. Opt-in per
+    // throw site, so nothing leaks by default.
+    ...(err.meta || {}),
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 };
 
 // Custom error class
 class AppError extends Error {
-  constructor(message, statusCode) {
+  constructor(message, statusCode, meta) {
     super(message);
     this.statusCode = statusCode;
     this.name = 'AppError';
+    // Extra fields merged into the JSON body by `errorHandler` above.
+    if (meta) this.meta = meta;
   }
 }
 

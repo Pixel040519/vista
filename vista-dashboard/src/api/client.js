@@ -81,7 +81,10 @@ export const studentApi = {
   bulk:           (students) => api.post('/students/bulk', { students }),
   checkLrns:      (lrns)    => api.post('/students/check-lrns', { lrns }),
   update:         (id, d)  => api.put(`/students/${id}`, d),
-  remove:         (id)     => api.delete(`/students/${id}`),
+  // Archiving takes a learner off the active roll; restoring puts them back. The
+  // record, its grades and its history survive either way — there is no delete.
+  setArchived:    (id, archived, reason) =>
+    api.patch(`/students/${id}/archive`, { archived, ...(reason ? { reason } : {}) }),
   generateQR:     (id, m)  => api.post(`/students/${id}/generate-qr`, { expiresInMinutes: m }),
   searchParents:  (q)       => api.get('/students/parents/search', { params: { q } }),
   addGuardian:    (id, d)   => api.post(`/students/${id}/guardians`, d),
@@ -200,7 +203,6 @@ export const scoreApi = {
 export const enrollmentApi = {
   // params: { sy_id, grade_level, section, status, outcome, include_left, q }
   roster:   (params)     => api.get('/enrollment', { params }),
-  previous: (sy_id)      => api.get('/enrollment/previous', { params: { sy_id } }),
   history:  (studentId)  => api.get(`/enrollment/student/${studentId}`),
   // `allow_archived` is the Enrollment page saying the admin unlocked a closed
   // year on purpose; without it the API refuses to rewrite one.

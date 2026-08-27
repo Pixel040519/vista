@@ -7,7 +7,7 @@ const { query, withTransaction } = require('../config/database')
 const { authenticate, authorizeAnyAdmin, authorizeSuperAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
 const { normaliseName } = require('../utils/nameHelper')
-const { ROLES, gradeScopeForRole, canManageGrade, isScopedAdmin } = require('../utils/roles')
+const { ROLES, gradeScopeForRole, canManageGrade, isScopedAdmin, isAnyAdmin } = require('../utils/roles')
 const { assertSectionsExist } = require('../utils/sections')
 const { MANUAL_STATUS_IDS, clampToManual, statusLabel } = require('../utils/enrollment')
 
@@ -33,9 +33,17 @@ const enrollForActiveYear = async (client, syId, student) =>
 // Throws 403 if the targeted student's grade_level is outside the caller's scope.
 // Super_admin, teachers, and parents are untouched (teachers/parents are scoped
 // elsewhere; this helper enforces the ECE/Elem admin split on student rows).
-const assertStudentInScope = async (req, studentId) => {
+//
+// `includeArchived` exists because the default lookup filters `is_active=TRUE`,
+// which is exactly the set the archive endpoints are there to act on: restoring a
+// learner would 404 on the scope check before it ever reached the handler. Pass it
+// wherever the target may legitimately be off the roll.
+const assertStudentInScope = async (req, studentId, { includeArchived = false } = {}) => {
   if (!isScopedAdmin(req.user.role)) return
-  const r = await query('SELECT grade_level FROM students WHERE id=$1 AND is_active=TRUE', [studentId])
+  const r = await query(
+    `SELECT grade_level FROM students WHERE id=$1${includeArchived ? '' : ' AND is_active=TRUE'}`,
+    [studentId]
+  )
   if (!r.rows.length) throw new AppError('Student not found.', 404)
   if (!canManageGrade(req.user.role, r.rows[0].grade_level)) {
     throw new AppError('Student is outside your grade scope.', 403)
@@ -115,7 +123,13 @@ const updateGuardianSchema = Joi.object({
 })
 
 // ── Helper: get student with guardians ───────────────────────
-const getStudentWithGuardians = async (id) => {
+//
+// `includeArchived` is for admins opening a learner from the Archived tab. An
+// archived record keeps its grades, attendance and behaviour logs, so the detail
+// page has to stay reachable — otherwise archiving a graduate would make the very
+// history the archive exists to preserve unviewable. Teachers and parents never
+// pass it: an archived learner is off the roll and off their lists.
+const getStudentWithGuardians = async (id, { includeArchived = false } = {}) => {
   const result = await query(
     `SELECT s.*,
        COALESCE(json_agg(json_build_object(
@@ -134,7 +148,7 @@ const getStudentWithGuardians = async (id) => {
        ) ORDER BY ps.is_emergency_contact DESC, ps.created_at ASC) FILTER (WHERE ps.id IS NOT NULL), '[]') AS guardians
      FROM students s
      LEFT JOIN parent_student ps ON ps.student_id=s.id
-     WHERE s.id=$1 AND s.is_active=TRUE
+     WHERE s.id=$1${includeArchived ? '' : ' AND s.is_active=TRUE'}
      GROUP BY s.id`,
     [id]
   )
@@ -224,8 +238,18 @@ router.get('/', async (req, res, next) => {
   try {
     const { grade_level, section, search, enrollment_status, page=1, limit=20 } = req.query
     const offset = (page-1)*limit
-    const conditions = ['s.is_active=TRUE']
     const params = []
+
+    // Active / Archived is its own axis, not a status. An archived learner still
+    // carries whatever enrolment status they had when they came off the roll — a
+    // graduate reads "Graduated" in the Archived tab — so the two filters stack
+    // rather than competing for one dropdown.
+    //
+    // Only admins may look at the archive: teachers and parents are pinned to the
+    // active roll alongside the `enrolled` clause below, which is the same rule
+    // stated twice about the same people.
+    const archived = isAnyAdmin(req.user.role) ? (req.query.archived || 'false') : 'false'
+    const conditions = []
 
     if (grade_level) { params.push(grade_level); conditions.push(`s.grade_level=$${params.length}`) }
     if (section)     { params.push(section);      conditions.push(`s.section=$${params.length}`) }
@@ -250,22 +274,41 @@ router.get('/', async (req, res, next) => {
 
     const join  = req.user.role === 'parent' ? 'INNER JOIN parent_student ps ON ps.student_id=s.id' : ''
 
-    // Snapshot the filters before the status filter is applied -- the breakdown
-    // below has to count every status, including the ones filtered out.
+    // Snapshot before *either* of the two view filters is applied. `archived_count`
+    // has to survive being on the Archived tab and `by_status` has to survive a
+    // status being selected, so each is counted over the shared filters plus only
+    // the other one's clause.
+    const sharedConditions = [...conditions]
+    const sharedParams     = [...params]
+
+    if (archived === 'true')     conditions.push('s.is_active=FALSE')
+    else if (archived !== 'all') conditions.push('s.is_active=TRUE')
+
+    // Status breakdown respects the tab: "9 enrolled" on the Active tab means
+    // nine learners on the roll, not nine including archived graduates.
     const unstatusedConditions = [...conditions]
     const unstatusedParams     = [...params]
 
     if (enrollment_status) { params.push(enrollment_status); conditions.push(`s.enrollment_status=$${params.length}`) }
 
-    const where = `WHERE ${conditions.join(' AND ')}`
+    // `archived=all` can leave an admin with no filters at all, and `WHERE` with
+    // nothing after it is a syntax error — before this the hardcoded
+    // `s.is_active=TRUE` guaranteed there was always at least one clause.
+    const clause = (arr) => arr.length ? `WHERE ${arr.join(' AND ')}` : ''
+
+    const where = clause(conditions)
     params.push(limit, offset)
 
     const [rows, count] = await Promise.all([
       query(
         `SELECT s.id, s.lrn, s.surname, s.first_name, s.middle_name, s.full_name,
                 s.date_of_birth, s.gender, s.grade_level, s.section, s.enrollment_status,
-                s.profile_photo_url, s.home_address, s.created_at
-         FROM students s ${join} ${where}
+                s.profile_photo_url, s.home_address, s.created_at,
+                s.is_active, s.archived_at, s.archived_reason,
+                arch.full_name AS archived_by_name
+         FROM students s ${join}
+         LEFT JOIN users arch ON arch.id = s.archived_by
+         ${where}
          ORDER BY s.surname, s.first_name
          LIMIT $${params.length-1} OFFSET $${params.length}`, params),
       query(`SELECT COUNT(*) FROM students s ${join} ${where}`, params.slice(0,-2))
@@ -274,15 +317,27 @@ router.get('/', async (req, res, next) => {
     // Status breakdown over the same filters *except* the status filter itself,
     // so the header can report "N enrolled / M pending" and the status tabs keep
     // showing their counts while one of them is selected.
-    const byStatus = await query(
-      `SELECT s.enrollment_status, COUNT(*)::int AS count
-       FROM students s ${join} WHERE ${unstatusedConditions.join(' AND ')} GROUP BY 1`,
-      unstatusedParams
-    )
+    const [byStatus, archivedCount] = await Promise.all([
+      query(
+        `SELECT s.enrollment_status, COUNT(*)::int AS count
+         FROM students s ${join} ${clause(unstatusedConditions)} GROUP BY 1`,
+        unstatusedParams
+      ),
+      // The number on the Archived tab, counted over the shared filters only, so
+      // the tab keeps its count while it is the tab you are standing on.
+      isAnyAdmin(req.user.role)
+        ? query(
+            `SELECT COUNT(*)::int AS n FROM students s ${join}
+             ${clause([...sharedConditions, 's.is_active=FALSE'])}`,
+            sharedParams
+          )
+        : Promise.resolve({ rows: [{ n: 0 }] }),
+    ])
 
     res.json({
       students: rows.rows,
       by_status: Object.fromEntries(byStatus.rows.map(r => [r.enrollment_status, r.count])),
+      archived_count: archivedCount.rows[0].n,
       pagination: { total: parseInt(count.rows[0].count), page: parseInt(page), limit: parseInt(limit), totalPages: Math.ceil(count.rows[0].count/limit) }
     })
   } catch (err) { next(err) }
@@ -291,7 +346,12 @@ router.get('/', async (req, res, next) => {
 // GET /api/students/:id
 router.get('/:id', async (req, res, next) => {
   try {
-    const student = await getStudentWithGuardians(req.params.id)
+    // Admins can open an archived learner — that is the whole point of an archive
+    // rather than a deletion, and the Archived tab links straight here. Teachers
+    // and parents still get a 404: an archived learner is off their lists.
+    const student = await getStudentWithGuardians(req.params.id, {
+      includeArchived: isAnyAdmin(req.user.role),
+    })
     if (!student) throw new AppError('Student not found.', 404)
 
     if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, student.grade_level)) {
@@ -414,8 +474,23 @@ router.post('/', authorizeAnyAdmin, async (req, res, next) => {
     const { guardians=[], ...data } = value
     const { surname, first_name, middle_name } = normaliseName(data)
 
-    const dup = await query('SELECT id FROM students WHERE lrn=$1', [data.lrn])
-    if (dup.rows.length) throw new AppError('A student with this LRN already exists.', 409)
+    // `students_lrn_key` is UNIQUE across the whole table, archived rows included,
+    // so this check is right to ignore `is_active` — but a bare "already exists"
+    // was a dead end when the holder was archived and therefore invisible
+    // everywhere. Name that case and hand back the id so the client can offer to
+    // restore the record instead of asking for an LRN that cannot be freed.
+    const dup = await query(
+      'SELECT id, full_name, is_active FROM students WHERE lrn=$1', [data.lrn]
+    )
+    if (dup.rows.length) {
+      const held = dup.rows[0]
+      if (held.is_active) throw new AppError('A student with this LRN already exists.', 409)
+      throw new AppError(
+        `This LRN belongs to ${held.full_name}, whose record is archived. Restore that record instead of adding a new one.`,
+        409,
+        { archived_student_id: held.id, archived_student_name: held.full_name }
+      )
+    }
 
     const activeSY = await requireActiveSYId()
 
@@ -436,18 +511,29 @@ router.post('/', authorizeAnyAdmin, async (req, res, next) => {
 })
 
 // POST /api/students/check-lrns — admin-only. Given { lrns: [...] } returns
-// { existing: [...] } for LRNs that already belong to an active student.
-// Used by the batch-upload preview so duplicates surface before submit.
+// { existing: [...] } for LRNs already taken, and { archived: [...] } for the
+// subset held by archived learners. Used by the batch-upload preview so clashes
+// surface before submit.
+//
+// It used to filter `is_active = TRUE`, which made the preview disagree with the
+// thing it previews: `POST /bulk` matches on `lrn = ANY(...)` with no such filter,
+// because `students_lrn_key` is UNIQUE across the whole table. An LRN held by an
+// archived learner therefore passed the preview and then failed the upload. The
+// `archived` split is what the preview needs to say something useful about it —
+// those rows are restorable, not duplicates to be renumbered.
 router.post('/check-lrns', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const lrns = Array.isArray(req.body?.lrns) ? req.body.lrns : []
     const clean = [...new Set(lrns.map(x => String(x).trim()).filter(x => /^\d{12}$/.test(x)))]
-    if (!clean.length) return res.json({ existing: [] })
+    if (!clean.length) return res.json({ existing: [], archived: [] })
     const r = await query(
-      'SELECT lrn FROM students WHERE lrn = ANY($1::text[]) AND is_active = TRUE',
+      'SELECT lrn, is_active FROM students WHERE lrn = ANY($1::text[])',
       [clean]
     )
-    res.json({ existing: r.rows.map(row => row.lrn) })
+    res.json({
+      existing: r.rows.map(row => row.lrn),
+      archived: r.rows.filter(row => !row.is_active).map(row => row.lrn),
+    })
   } catch (err) { next(err) }
 })
 
@@ -490,12 +576,20 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
     }
 
     const existing = await query(
-      'SELECT lrn FROM students WHERE lrn = ANY($1::text[])',
+      'SELECT lrn, is_active FROM students WHERE lrn = ANY($1::text[])',
       [rows.map(r => r.lrn)]
     )
     if (existing.rows.length) {
+      // Split the message the same way `check-lrns` splits its response: an
+      // archived holder is restorable, so telling an admin it "already exists"
+      // sends them looking for a learner no list shows.
+      const archived = existing.rows.filter(r => !r.is_active).map(r => r.lrn)
+      const live     = existing.rows.filter(r =>  r.is_active).map(r => r.lrn)
       throw new AppError(
-        `These LRNs already exist: ${existing.rows.map(r => r.lrn).join(', ')}`,
+        [
+          live.length     && `These LRNs already exist: ${live.join(', ')}`,
+          archived.length && `These belong to archived students and can be restored instead: ${archived.join(', ')}`,
+        ].filter(Boolean).join('. '),
         409
       )
     }
@@ -539,13 +633,24 @@ router.put('/:id', authorizeAnyAdmin, async (req, res, next) => {
     const normed = normaliseName(value)
     const sets=[]; const params=[]
 
-    // Check duplicate LRN excluding this student
+    // Check duplicate LRN excluding this student. No `is_active` filter: the
+    // UNIQUE constraint does not have one either, so filtering here only meant
+    // the clash surfaced as a raw 23505 "Record already exists." from the error
+    // handler instead of a message naming who holds it.
     if (normed.lrn) {
       const dup = await query(
-        'SELECT id FROM students WHERE lrn=$1 AND id<>$2 AND is_active=TRUE',
+        'SELECT full_name, is_active FROM students WHERE lrn=$1 AND id<>$2',
         [normed.lrn, req.params.id]
       )
-      if (dup.rows.length) throw new AppError('A student with this LRN already exists.', 409)
+      if (dup.rows.length) {
+        const held = dup.rows[0]
+        throw new AppError(
+          held.is_active
+            ? 'A student with this LRN already exists.'
+            : `This LRN belongs to ${held.full_name}, whose record is archived.`,
+          409
+        )
+      }
     }
 
     for (const f of ['lrn','surname','first_name','middle_name','date_of_birth','gender','grade_level','section','profile_photo_url','home_address']) {
@@ -591,14 +696,70 @@ router.put('/:id', authorizeAnyAdmin, async (req, res, next) => {
 })
 
 // DELETE /api/students/:id
+// ── PATCH /api/students/:id/archive ──────────────────────────
+//
+// Archive a learner, or restore one. `is_active=FALSE` means **off the roll**:
+// the record, its grades, attendance and behaviour logs all stay, and every
+// roster in the system stops listing them because they all already filter
+// `s.is_active = TRUE`.
+//
+// This used to be `DELETE /:id`, which set the same flag and then stranded the
+// record — nothing lifted `is_active=TRUE` on the roster, `GET /:id` 404'd, and
+// the LRN stayed taken by a row nobody could reach. The flag was never the
+// problem; the missing way back was.
+//
+// The three stamped columns are what makes it an archive rather than a
+// disappearance, and `archived_by` carries a second meaning: NULL means the
+// system filed this row when a school year was activated, not an admin.
+const archiveSchema = Joi.object({
+  archived: Joi.boolean().required(),
+  reason:   Joi.string().trim().max(500).optional().allow(''),
+})
+
+const setArchived = async (req, res) => {
+  const { error, value } = archiveSchema.validate(req.body ?? {}, { stripUnknown: true })
+  if (error) throw new AppError(error.details[0].message, 422)
+
+  // The target is archived exactly half the time, so the scope check cannot
+  // filter on `is_active` the way every other one here does.
+  await assertStudentInScope(req, req.params.id, { includeArchived: true })
+
+  const r = value.archived
+    ? await query(
+        `UPDATE students
+            SET is_active=FALSE, archived_at=NOW(), archived_by=$2, archived_reason=$3,
+                updated_at=NOW()
+          WHERE id=$1 RETURNING full_name`,
+        [req.params.id, req.user.id, value.reason || null]
+      )
+    : await query(
+        // Restoring clears all three: a row back on the roll must not keep
+        // claiming it was archived, or the next archive reads as the first one.
+        `UPDATE students
+            SET is_active=TRUE, archived_at=NULL, archived_by=NULL, archived_reason=NULL,
+                updated_at=NOW()
+          WHERE id=$1 RETURNING full_name`,
+        [req.params.id]
+      )
+
+  if (!r.rows.length) throw new AppError('Student not found.', 404)
+  res.json({
+    message: value.archived
+      ? `${r.rows[0].full_name} archived.`
+      : `${r.rows[0].full_name} restored to the active roll.`,
+  })
+}
+
+router.patch('/:id/archive', authorizeAnyAdmin, async (req, res, next) => {
+  try { await setArchived(req, res) } catch (err) { next(err) }
+})
+
+// Kept as an alias so nothing calling the old endpoint breaks. It archives —
+// there has never been a hard delete here, only a flag with no way back.
 router.delete('/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
-    await assertStudentInScope(req, req.params.id)
-    const r = await query(
-      'UPDATE students SET is_active=FALSE, updated_at=NOW() WHERE id=$1 RETURNING full_name', [req.params.id]
-    )
-    if (!r.rows.length) throw new AppError('Student not found.', 404)
-    res.json({ message: `${r.rows[0].full_name} removed successfully.` })
+    req.body = { archived: true, reason: req.body?.reason }
+    await setArchived(req, res)
   } catch (err) { next(err) }
 })
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ClipboardCheck, Heart, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock, CalendarDays } from 'lucide-react'
+import { ArrowLeft, BookOpen, ClipboardCheck, Heart, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock, CalendarDays, Archive, ArchiveRestore } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi, eceApi, curriculumApi, enrollmentApi } from '../api/client'
 import { resolveGradingPolicy } from '../utils/grading'
@@ -38,6 +38,7 @@ export default function StudentDetail() {
   const { user, isAnyAdmin } = useAuth()
   const isTeacher = user?.role === 'teacher'
   const [student, setStudent]   = useState(null)
+  const [restoring, setRestoring] = useState(false)
   const [grades, setGrades]     = useState([])
   const [attendance, setAttendance] = useState([])
   const [behavior, setBehavior] = useState([])
@@ -131,6 +132,20 @@ export default function StudentDetail() {
   }, [id])
 
   const fetchAI = async () => {
+    // An archived learner is off the roll, and every AI endpoint here computes a
+    // **live** signal — risk, class health, predictions — from rosters that
+    // deliberately exclude them. There is nothing to compute, so asking produces a
+    // 404 and a toast on a page that has already loaded the student. Say so instead
+    // of firing the request. The recorded tabs (Grades, Attendance, Behaviour,
+    // Competencies, Enrolment History) are unaffected: those are history, which the
+    // archive exists to keep.
+    if (student?.is_active === false) {
+      const msg = 'This learner is archived, so live insights are not computed. Restore them to see these.'
+      setEceHealthError(msg)
+      setClassHealthError(msg)
+      return
+    }
+
     // ECE learners: call the ECE-specific endpoint (Competency + Attendance +
     // Behavior) for both roles. Skip grade-based predictions / FastAPI risk.
     if (isECE) {
@@ -266,6 +281,22 @@ export default function StudentDetail() {
     }
   }
 
+  // Restoring from here rather than only from the Students page: an admin who
+  // followed a link into an archived learner is already looking at the record they
+  // want back, and sending them to another page to press the same button is a
+  // detour, not a safeguard.
+  const handleRestore = async () => {
+    setRestoring(true)
+    try {
+      const res = await studentApi.setArchived(id, false)
+      toast.success(res.data.message)
+      const fresh = await studentApi.get(id)
+      setStudent(fresh.data.student)
+    } catch (e) {
+      toast.error(e?.response?.data?.error || 'Failed to restore.')
+    } finally { setRestoring(false) }
+  }
+
   const handleToggleAcademicAccess = async () => {
     if (!student) return
     const currentlySuspended = !!student.academic_access_suspended
@@ -368,6 +399,33 @@ export default function StudentDetail() {
 
   return (
     <div className="space-y-5 animate-fade-in">
+      {/* An archived learner is reachable here on purpose — the archive keeps the
+          record, and this page is where the record lives. But every tab below
+          reads history that stops at the archive date, so say so once at the top
+          rather than letting the page look live. */}
+      {student.is_active === false && (
+        <div className="flex items-start gap-2.5 text-sm rounded-xl px-3.5 py-3 border bg-slate-100 border-slate-300 text-slate-700">
+          <Archive size={16} className="shrink-0 mt-0.5"/>
+          <div className="flex-1">
+            <p>
+              <strong>{formatName(student)}</strong> is archived — off the active roll, so they
+              appear on no class list, dashboard or risk report. Everything below is their
+              record as it stood.
+            </p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {student.archived_reason || 'No reason recorded'}
+              {student.archived_at && ` · ${format(new Date(student.archived_at), 'd MMM yyyy')}`}
+            </p>
+          </div>
+          {isAnyAdmin && (
+            <button onClick={handleRestore} disabled={restoring}
+              className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-slate-600 text-xs font-medium hover:border-slate-400 transition-colors disabled:opacity-50">
+              <ArchiveRestore size={13}/> {restoring ? 'Restoring...' : 'Restore'}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Back + header */}
       <div className="flex items-start gap-4">
         <button onClick={() => navigate(-1)} className="p-2 rounded-xl hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors mt-0.5">

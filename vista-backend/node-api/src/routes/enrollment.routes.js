@@ -19,6 +19,9 @@ const { AppError } = require('../middleware/error.middleware')
 const { gradeScopeForRole, isScopedAdmin, isSuperAdmin, canManageGrade } = require('../utils/roles')
 const { assertSectionsExist } = require('../utils/sections')
 const { syStatus, isArchivedYear } = require('../utils/schoolYear')
+// One definition of "was this learner part of this school year", shared with the
+// activation in `curriculum.routes.js` so the roster and the roll cannot disagree.
+const { PREV_JOIN, LEFT_SQL, COMPLETED_SQL, NOT_LEFT, NOT_COMPLETED } = require('../utils/rosterSql')
 const {
   ENROLLMENT_STATUSES, OUTCOMES, PROMOTION_OUTCOMES, MANUAL_STATUS_IDS,
   NO_RECORD_ID, SELECTABLE_STATUS_IDS,
@@ -76,67 +79,6 @@ const gradeOrder = (col) => `CASE ${col}
   WHEN 'Grade 3' THEN 3 WHEN 'Grade 4' THEN 4 WHEN 'Grade 5' THEN 5
   WHEN 'Grade 6' THEN 6 ELSE 99 END`
 
-/**
- * "This learner has not left the school", judged from their most recent earlier
- * record (`prev`, a LATERAL join defined per query). Written once because the
- * roster query, both summaries and the hidden-count all have to agree.
- *
- * Four ways to have left, and the last two are about a year **ending** rather
- * than about anything anyone recorded:
- *
- * - `transferred_out` / `dropped` — they were enrolled and then stopped. Counts
- *   whether or not that year has finished; the fact is already established.
- * - an `outcome` of `graduated` — they completed the final grade level.
- * - **not enrolled**: no record at all for a school year that has **started** —
- *   archived or active, `NOT gap.is_upcoming`. "Not enrolled" is the *absence* of a
- *   record, not a status, and it is a different thing from `dropped` — a learner
- *   who simply did not come back never enrolled to begin with. Without this, `prev`
- *   skipping gaps meant someone who attended 2024-2025, sat out 2025-2026 and was
- *   looked at from 2026-2027 still read as `enrolled` and stayed on every future
- *   roster.
- * - **`pending` when that year closed** — expected, never confirmed, and the year
- *   is over. Nobody ever put them in it.
- *
- * The principle behind the last two: a year the learner did not attend means they
- * left, and the test for that is whether the year has **begun**, not whether it has
- * finished. The active year has begun — a learner with no record in the year the
- * school is actually running is not attending it, so planning next year's roster
- * around them would carry forward someone who is already gone. Only an **upcoming**
- * year says nothing yet: it is a roster not yet filled in, and hiding people from it
- * would remove the very learners the page exists to enrol (every placement the
- * promotion wizard writes is `pending` in a year that has not started).
- *
- * Note this cannot hide anyone from the **active** year's own roster: the window
- * ends before the year on screen, so the active year is only ever consulted while
- * looking at a *later* one.
- *
- * Three boundaries this must not cross:
- *
- * - `prev.status IS NULL` short-circuits first, so a learner with **no earlier
- *   record at all** is never hidden. They have not failed to return; they are new.
- * - the gap window starts at `prev.label`, not at the beginning of time. Looking
- *   at every earlier closed year would brand a learner who joined in 2025-2026 as
- *   having left, on the strength of having no 2024-2025 record.
- * - the window ends **before** the year on screen (`< $2`), never at it. Judging a
- *   year by its own emptiness would empty its roster: opening a closed year is how
- *   an admin reviews and corrects who was in it, and the learners with no record
- *   are exactly the ones that work is about. "Has left" is a verdict about the
- *   years *behind* the one being looked at.
- */
-const LEFT_SQL = `(
-  prev.status IS NULL
-  OR (
-    prev.status NOT IN ('transferred_out','dropped')
-    AND prev.outcome IS DISTINCT FROM 'graduated'
-    AND NOT (prev.status = 'pending' AND prev.closed)
-    AND NOT EXISTS (
-      SELECT 1 FROM school_years gap
-       WHERE gap.label > prev.label AND gap.label < $2
-         AND NOT gap.is_upcoming
-    )
-  )
-)`
-
 const loadSchoolYear = async (id) => {
   const r = await query(
     'SELECT id, label, is_active, is_upcoming, start_date, end_date FROM school_years WHERE id=$1',
@@ -148,7 +90,7 @@ const loadSchoolYear = async (id) => {
 
 /**
  * The school year immediately after this one — the only year a closing year can
- * hand learners over to. Same ordering as `GET /previous` reads backwards.
+ * hand learners over to, taken as the next `school_years` row by label.
  *
  * This is derived, never chosen. The wizard used to default its target to the
  * earliest *upcoming* year regardless of the source, so re-running it on an
@@ -359,6 +301,10 @@ const resolveSYId = async (sy_id) => {
 // "Has left" is judged from their most recent *earlier* record — see `prev`
 // below — and `?include_left=true` brings them back so a returning learner can
 // still be re-enrolled.
+//
+// A **graduate** is excluded on a separate rule (`COMPLETED_SQL`) that
+// `include_left` does not lift. They did not leave, they finished, and there is
+// nothing in a later year to re-enrol them into.
 router.get('/', async (req, res, next) => {
   try {
     const { grade_level, section, status, outcome, q } = req.query
@@ -369,7 +315,27 @@ router.get('/', async (req, res, next) => {
     // $1 = school year id, $2 = its label (the LATERAL compares labels, since
     // that is the only ordering `school_years` has).
     const params = [syId, schoolYear.label]
-    const conditions = ['s.is_active=TRUE']
+    // ON_ROLL_OR_RECORDED: **a record for the year on screen always wins.**
+    //
+    // **`students.is_active` is not a filter here at all**, and that is the point.
+    //
+    // It is a single global flag meaning "not on the school's roll *today*". This
+    // page asks a per-year question — was this learner part of SY X — and the
+    // archive cannot answer it: it carries no year, and it is set automatically by
+    // whichever activation happened to run last. Using it to filter a per-year
+    // roster made the flag overrule the very records it was derived from.
+    //
+    // The damage was worst exactly where the page is most useful. A learner an
+    // admin declares "Not enrolled" for a year has no record for it, so the next
+    // activation archives them with the reason "No enrolment record — SY 2025-2026"
+    // — and then that flag hid them from SY 2025-2026, the one year whose roster
+    // explains their state and where an admin would go to correct it.
+    //
+    // `notLeft` and `notCompleted` below already answer the per-year question
+    // properly, from the learner's most recent record *earlier* than the year on
+    // screen. They are the whole filter. Archived learners are **marked**, via
+    // `is_archived` / `archived_reason` on the row, not hidden.
+    const conditions = []
 
     if (isScopedAdmin(req.user.role)) {
       params.push(gradeScopeForRole(req.user.role))
@@ -405,28 +371,25 @@ router.get('/', async (req, res, next) => {
     //
     // Also returned per row, negated, as `has_left`: the rows the toggle reveals,
     // the count on it and the rows the table greys out are then one set by
-    // construction. The client cannot derive it — two of the four ways to have
+    // construction. The client cannot derive it — two of the three ways to have
     // left are about a year *closing* without the learner in it, which needs the
     // gap check inside LEFT_SQL rather than anything visible on the row.
-    const notLeft = `(e.id IS NOT NULL OR ${LEFT_SQL})`
+    const notLeft = NOT_LEFT
     if (!includeLeft) conditions.push(notLeft)
 
-    const where = `WHERE ${conditions.join(' AND ')}`
+    // Graduates are filtered out whatever `include_left` says — see COMPLETED_SQL.
+    // Same `e.id IS NOT NULL` escape: a record for this year always wins.
+    const notCompleted = NOT_COMPLETED
+    conditions.push(notCompleted)
+
+    // A closed year with no filters leaves nothing to constrain on, and `WHERE`
+    // with nothing after it is a syntax error.
+    const clause = (arr) => arr.length ? `WHERE ${arr.join(' AND ')}` : ''
+    const where = clause(conditions)
 
     // `prev` is the learner's most recent record from a *earlier* school year,
     // skipping gaps. It answers both "where did they last attend" (the column
     // that replaced a useless "Currently") and "have they left the school".
-    const PREV_JOIN = `
-      LEFT JOIN LATERAL (
-        SELECT pe.grade_level, pe.section, pe.status, pe.outcome, psy.label,
-               (NOT psy.is_active AND NOT psy.is_upcoming) AS closed
-          FROM student_enrollments pe
-          JOIN school_years psy ON psy.id = pe.school_year_id
-         WHERE pe.student_id = s.id AND psy.label < $2
-         ORDER BY psy.label DESC
-         LIMIT 1
-      ) prev ON TRUE`
-
     // `current_*` is where the learner stands right now; `grade_level`/`section`
     // are what this school year's record says. They differ whenever the admin
     // has enrolled ahead into a year that is not active yet.
@@ -441,6 +404,12 @@ router.get('/', async (req, res, next) => {
               prev.section AS last_section, prev.status AS last_status,
               prev.outcome AS last_outcome,
               NOT ${notLeft} AS has_left,
+              -- Only ever true for a learner the rule above kept because they have
+              -- a record for this year. The row has to say so: otherwise a closed
+              -- year lists someone who is on no class list anywhere, with nothing
+              -- explaining the difference between them and the learner beside them.
+              NOT s.is_active AS is_archived,
+              s.archived_reason,
               (${ACADEMIC_SQL('$1', 's.id')}) > 0 AS has_academic_records
          FROM students s
          LEFT JOIN student_enrollments e ON e.student_id=s.id AND e.school_year_id=$1
@@ -457,12 +426,12 @@ router.get('/', async (req, res, next) => {
     // of them is selected. It respects the has-left rule so the chips add up to
     // what is on screen.
     const scopeParams = [syId, schoolYear.label]
-    const scopeConditions = ['s.is_active=TRUE']
+    const scopeConditions = []
     if (isScopedAdmin(req.user.role)) {
       scopeParams.push(gradeScopeForRole(req.user.role))
       scopeConditions.push(`${ROW_GRADE} = ANY($${scopeParams.length}::text[])`)
     }
-    const scopeWhere = `WHERE ${scopeConditions.join(' AND ')}`
+    const scopeWhere = clause(scopeConditions)
 
     const [summaryRows, outcomeRows, leftRow] = await Promise.all([
       query(
@@ -470,7 +439,7 @@ router.get('/', async (req, res, next) => {
            FROM students s
            LEFT JOIN student_enrollments e ON e.student_id=s.id AND e.school_year_id=$1
            ${PREV_JOIN}
-          ${scopeWhere} AND ${notLeft}
+          ${clause([...scopeConditions, notCompleted, notLeft])}
           GROUP BY 1`,
         scopeParams
       ),
@@ -483,13 +452,15 @@ router.get('/', async (req, res, next) => {
           GROUP BY 1`,
         scopeParams
       ),
-      // How many the has-left rule is hiding, so the toggle can say so.
+      // How many the has-left rule is hiding, so the toggle can say so. Graduates
+      // are not among them — the toggle cannot reveal one, so counting them here
+      // would promise rows that never arrive.
       query(
         `SELECT COUNT(*)::int AS n
            FROM students s
            LEFT JOIN student_enrollments e ON e.student_id=s.id AND e.school_year_id=$1
            ${PREV_JOIN}
-          ${scopeWhere} AND NOT ${notLeft}`,
+          ${clause([...scopeConditions, notCompleted, `NOT ${notLeft}`])}`,
         scopeParams
       ),
     ])
@@ -507,71 +478,21 @@ router.get('/', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-// ── GET /api/enrollment/previous?sy_id= ──────────────────────
-//
-// The prefill source for "Carry over": the year that ran immediately before
-// this one, with each learner's record from it plus the grade level they would
-// move up into.
-router.get('/previous', authorizeSuperAdmin, async (req, res, next) => {
-  try {
-    const syId = await resolveSYId(req.query.sy_id)
-    const target = await loadSchoolYear(syId)
-
-    const prev = await query(
-      'SELECT id, label FROM school_years WHERE label < $1 ORDER BY label DESC LIMIT 1',
-      [target.label]
-    )
-    if (!prev.rows.length) return res.json({ previous: null, students: [] })
-
-    const params = [prev.rows[0].id]
-    const conditions = ['s.is_active=TRUE']
-    // The grade level they held in *that* year, not their current snapshot —
-    // this reads a past year's records, where the two part company as soon as a
-    // newer year is activated.
-    if (isScopedAdmin(req.user.role)) {
-      params.push(gradeScopeForRole(req.user.role))
-      conditions.push(`e.grade_level = ANY($${params.length}::text[])`)
-    }
-
-    const rows = await query(
-      `SELECT e.student_id, e.grade_level, e.section, e.status, e.outcome
-         FROM student_enrollments e
-         JOIN students s ON s.id = e.student_id
-        WHERE e.school_year_id=$1 AND ${conditions.join(' AND ')}`,
-      params
-    )
-
-    res.json({
-      previous: prev.rows[0],
-      students: rows.rows.map(r => ({
-        ...r,
-        // Where the previous year's **outcome** puts them — the same
-        // `placementForOutcome` rule the promotion wizard walks, so Carry over
-        // and the wizard cannot propose different grades for the same learner.
-        //
-        // **No outcome means no move.** This used to advance a grade for
-        // everyone, so a learner whose year had not been closed yet was
-        // prefilled one rung up — a promotion nobody had decided, and one that
-        // became fact the moment the year was activated and the rollover copied
-        // it onto `students`. Nothing on record says they finished the grade, so
-        // the honest proposal is the grade they are already in; closing the year
-        // in the wizard is what moves them.
-        //
-        // Still null once a promoted learner finishes the top grade level — they
-        // graduate rather than moving up, and the client offers that instead.
-        proposed_grade_level: r.outcome
-          ? placementForOutcome(r.outcome, r.grade_level)
-          : r.grade_level,
-      })),
-    })
-  } catch (err) { next(err) }
-})
-
 // ── GET /api/enrollment/student/:id ──────────────────────────
 // One learner's year-by-year history, newest first.
+//
+// **Archived learners included**, and this lookup must not filter `is_active`.
+// Preserving the record is the entire point of archiving rather than deleting, and
+// this endpoint is that record — so refusing it for an archived learner denied the
+// history precisely when it is the only thing left to look at. Student Detail calls
+// it on mount, so the 404 also surfaced as a "Student not found" toast on a page
+// that had already loaded the student.
+//
+// Scope is still enforced, on `students.grade_level`: for an archived learner that
+// is the last grade they held, which is the right owner either way.
 router.get('/student/:id', async (req, res, next) => {
   try {
-    const st = await query('SELECT grade_level FROM students WHERE id=$1 AND is_active=TRUE', [req.params.id])
+    const st = await query('SELECT grade_level FROM students WHERE id=$1', [req.params.id])
     if (!st.rows.length) throw new AppError('Student not found.', 404)
     if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, st.rows[0].grade_level)) {
       throw new AppError('Student is outside your grade scope.', 403)
@@ -1220,8 +1141,8 @@ router.put('/', async (req, res, next) => {
     // the page posts the whole draft row, so silently overwriting the submitted
     // status would answer 200 to a save that did not do what it said. A learner
     // with no record yet has no status to preserve, and a new record may only be
-    // created 'pending' -- what the rollover and Carry over both give anyone who
-    // has not been confirmed for the year.
+    // created 'pending' -- what the rollover gives anyone who has not been
+    // confirmed for the year.
     if (isScopedAdmin(req.user.role) && entries.length) {
       const prior = await query(
         `SELECT student_id, status FROM student_enrollments

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
-  Search, Plus, Filter, ChevronRight, Pencil, Trash2,
+  Search, Plus, Filter, ChevronRight, Pencil, Trash2, Archive, ArchiveRestore,
   UserPlus, X, Users, ShieldCheck, Phone, Mail, Eye, EyeOff, Upload
 } from 'lucide-react'
 import { studentApi, curriculumApi } from '../api/client'
@@ -737,14 +737,31 @@ function GuardianManager({ studentId, guardians, onRefresh }) {
   )
 }
 
-// ── Delete Confirm ────────────────────────────────────────────
-function DeleteConfirm({ student, onConfirm, onClose }) {
-  const [deleting, setDeleting] = useState(false)
-  const handle = async () => { setDeleting(true); try { await onConfirm() } finally { setDeleting(false) } }
+// ── Archive / Restore Confirm ─────────────────────────────────
+//
+// One component for both directions, because they are the same act read
+// backwards and splitting them duplicated the identity header and the button
+// plumbing. This was "Delete Confirm", which named something the API never did:
+// `is_active=FALSE` has always been a flag, not a deletion — what was missing was
+// the way back, not the tombstone.
+//
+// The amber note stays, but says what actually happens rather than "deactivate":
+// the learner leaves class lists, dashboards and risk scoring (every roster
+// filters `is_active`), and the record itself is untouched.
+function ArchiveConfirm({ student, archiving, onConfirm, onClose }) {
+  const [busy, setBusy]     = useState(false)
+  const [reason, setReason] = useState('')
+  const handle = async () => {
+    setBusy(true)
+    try { await onConfirm(reason.trim() || undefined) } finally { setBusy(false) }
+  }
   return (
     <div className="space-y-4">
       <div className="p-4 bg-slate-50 rounded-xl flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center font-bold text-red-600">
+        <div className={clsx(
+          'w-10 h-10 rounded-full flex items-center justify-center font-bold',
+          archiving ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
+        )}>
           {nameInitial(student)}
         </div>
         <div>
@@ -752,13 +769,52 @@ function DeleteConfirm({ student, onConfirm, onClose }) {
           <p className="text-xs text-slate-500 font-mono">LRN: {student.lrn}</p>
         </div>
       </div>
-      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
-        ⚠️ This will deactivate the student's record. Grades, attendance, and behavior logs are preserved.
-      </div>
+
+      {archiving ? (
+        <>
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800 space-y-1.5">
+            <p>
+              <strong>{formatName(student)}</strong> comes off the active roll and moves to
+              the <strong>Archived</strong> tab. They drop off class lists, attendance,
+              score entry and the dashboards.
+            </p>
+            <p className="text-xs">
+              Nothing is deleted — grades, attendance and behaviour logs stay attached, and
+              you can restore them from the Archived tab at any time.
+            </p>
+          </div>
+          {/* If the learner simply left, enrolment status already says so and says it
+              better. Point there rather than letting the archive absorb a fact that
+              belongs in the record. */}
+          <p className="text-xs text-slate-500">
+            If they transferred out or dropped mid-year, set their <strong>enrolment
+            status</strong> instead — that records what happened and keeps them on the
+            roll until the year ends.
+          </p>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">
+              Reason <span className="font-normal text-slate-400">(optional)</span>
+            </label>
+            <input className="input" value={reason} maxLength={500}
+              placeholder="e.g. Duplicate record, moved abroad..."
+              onChange={e => setReason(e.target.value)}/>
+          </div>
+        </>
+      ) : (
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-sm text-emerald-800">
+          <strong>{formatName(student)}</strong> returns to the active roll with their record
+          intact. Set their enrolment status and school year afterwards so they appear on the
+          right class list.
+        </div>
+      )}
+
       <div className="flex gap-3">
         <button onClick={onClose} className="btn-secondary flex-1">Cancel</button>
-        <button onClick={handle} disabled={deleting} className="btn-danger flex-1 justify-center">
-          {deleting ? 'Removing...' : 'Remove Student'}
+        <button onClick={handle} disabled={busy}
+          className={clsx('flex-1 justify-center', archiving ? 'btn-danger' : 'btn-primary')}>
+          {busy
+            ? (archiving ? 'Archiving...' : 'Restoring...')
+            : (archiving ? 'Archive Student' : 'Restore Student')}
         </button>
       </div>
     </div>
@@ -887,23 +943,29 @@ export default function Students() {
   const gradeFilter   = searchParams.get('grade')   || ''
   const sectionFilter = searchParams.get('section') || ''
   const statusFilter  = searchParams.get('status')  || ''
+  // Active / Archived is its own axis, not a status — an archived learner still
+  // carries the status they had when they came off the roll — so it gets its own
+  // param and its own control, and the two stack.
+  const showArchived  = searchParams.get('archived') === '1'
   // Teacher: combined section key
   const teacherSection = searchParams.get('ts') || ''
 
-  const base = () => ({ q: search, grade: gradeFilter, section: sectionFilter, status: statusFilter, ts: teacherSection })
+  const base = () => ({ q: search, grade: gradeFilter, section: sectionFilter, status: statusFilter, ts: teacherSection, archived: showArchived })
   const setSearch        = (v) => updateParams({ ...base(), q: v })
   const setGradeFilter   = (v) => updateParams({ ...base(), grade: v, section: '' })
   const setSectionFilter = (v) => updateParams({ ...base(), section: v })
   const setStatusFilter  = (v) => updateParams({ ...base(), status: v })
+  const setShowArchived  = (v) => updateParams({ ...base(), archived: v })
   const setTeacherSection = (v) => updateParams({ q: search, grade: '', section: '', status: '', ts: v })
 
   const updateParams = (vals) => {
     const p = {}
-    if (vals.q)       p.q       = vals.q
-    if (vals.grade)   p.grade   = vals.grade
-    if (vals.section) p.section = vals.section
-    if (vals.status)  p.status  = vals.status
-    if (vals.ts)      p.ts      = vals.ts
+    if (vals.q)        p.q        = vals.q
+    if (vals.grade)    p.grade    = vals.grade
+    if (vals.section)  p.section  = vals.section
+    if (vals.status)   p.status   = vals.status
+    if (vals.ts)       p.ts       = vals.ts
+    if (vals.archived) p.archived = '1'
     setSearchParams(p, { replace: true })
   }
 
@@ -920,6 +982,7 @@ export default function Students() {
 
   const [students, setStudents]     = useState([])
   const [byStatus, setByStatus]     = useState({})
+  const [archivedCount, setArchivedCount] = useState(0)
   const [pagination, setPagination] = useState({ total:0, page:1, totalPages:1 })
   const [loading, setLoading]       = useState(true)
   const [filterSections, setFilterSections] = useState([])
@@ -928,7 +991,8 @@ export default function Students() {
   const [showBatch, setShowBatch]         = useState(false)
   const [editTarget, setEditTarget]       = useState(null)
   const [editGuardians, setEditGuardians] = useState(null)
-  const [deleteTarget, setDeleteTarget]   = useState(null)
+  // `{ student, archiving }` — one target for both directions of the same act.
+  const [archiveTarget, setArchiveTarget] = useState(null)
   const [statusTarget, setStatusTarget]   = useState(null)
 
   // Load sections for the filter bar when grade changes (admin only)
@@ -949,17 +1013,32 @@ export default function Students() {
         grade_level: activeGrade || undefined,
         section: activeSection || undefined,
         enrollment_status: statusFilter || undefined,
+        archived: showArchived ? 'true' : undefined,
         page, limit: 20
       })
       setStudents(res.data.students)
       setByStatus(res.data.by_status || {})
+      setArchivedCount(res.data.archived_count || 0)
       setPagination(res.data.pagination)
     } catch {} finally { setLoading(false) }
-  }, [search, activeGrade, activeSection, statusFilter, isTeacher, teacherSection])
+  }, [search, activeGrade, activeSection, statusFilter, showArchived, isTeacher, teacherSection])
 
   useEffect(() => {
     const t = setTimeout(() => fetchStudents(1), 300)
     return () => clearTimeout(t)
+  }, [fetchStudents])
+
+  // Grade level, section and status are the **active school year's** snapshot, and
+  // three things outside this page rewrite them: activating a school year
+  // (`rolloverStudents`), saving the active year on the Enrollment page, and the
+  // promotion wizard. None of them is reachable from here, so a tab left open on
+  // this page shows what was true when it loaded — which reads as the change not
+  // having taken effect. Re-read on focus, the same pattern TeacherDashboard uses
+  // for score-entry progress. `fetchStudents` already carries the current filters.
+  useEffect(() => {
+    const onFocus = () => fetchStudents(1)
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
   }, [fetchStudents])
 
   const refreshGuardians = async () => {
@@ -992,10 +1071,19 @@ export default function Students() {
     }
   }
 
-  const handleDelete = async () => {
-    const res = await studentApi.remove(deleteTarget.id)
-    toast.success(res.data.message)
-    setDeleteTarget(null); fetchStudents()
+  const handleArchive = async (reason) => {
+    const { student, archiving } = archiveTarget
+    try {
+      const res = await studentApi.setArchived(student.id, archiving, reason)
+      toast.success(res.data.message)
+      setArchiveTarget(null)
+      // Both directions move the row out of the tab you are standing on, so the
+      // page it was on can now be short — go back to page 1 rather than landing
+      // on an empty last page.
+      fetchStudents()
+    } catch (e) {
+      toast.error(e?.response?.data?.error || 'Failed to update the archive.')
+    }
   }
 
   return (
@@ -1007,12 +1095,17 @@ export default function Students() {
           <p className="page-subtitle">
             {isTeacher
               ? `${pagination.total} students`
-              : [
-                  `${byStatus.enrolled || 0} enrolled`,
-                  byStatus.pending && `${byStatus.pending} pending`,
-                  (byStatus.transferred_out || byStatus.dropped || byStatus.graduated) &&
-                    `${(byStatus.transferred_out || 0) + (byStatus.dropped || 0) + (byStatus.graduated || 0)} left`,
-                ].filter(Boolean).join(' · ')}
+              : showArchived
+                // The archive is not a roster, so an enrolled/pending breakdown of it
+                // would describe standings nobody is holding any more.
+                ? `${pagination.total} archived ${pagination.total === 1 ? 'student' : 'students'} · off the active roll, records intact`
+                : [
+                    `${byStatus.enrolled || 0} enrolled`,
+                    byStatus.pending && `${byStatus.pending} pending`,
+                    (byStatus.transferred_out || byStatus.dropped || byStatus.graduated) &&
+                      `${(byStatus.transferred_out || 0) + (byStatus.dropped || 0) + (byStatus.graduated || 0)} left`,
+                    archivedCount && `${archivedCount} archived`,
+                  ].filter(Boolean).join(' · ')}
           </p>
         </div>
         {isAdmin && (
@@ -1026,6 +1119,37 @@ export default function Students() {
           </div>
         )}
       </div>
+
+      {/* Active / Archived — admin only. Its own control rather than an option in
+          the status select, because an archived learner still carries a status and
+          merging the two axes would make each unable to filter the other. */}
+      {isAdmin && (
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-fit">
+          {[
+            { archived: false, label: 'Active',   count: null },
+            { archived: true,  label: 'Archived', count: archivedCount },
+          ].map(t => (
+            <button key={t.label} onClick={() => setShowArchived(t.archived)}
+              className={clsx(
+                'flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-all',
+                showArchived === t.archived
+                  ? 'bg-white text-slate-800 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              )}>
+              {t.archived && <Archive size={14}/>}
+              {t.label}
+              {/* Only the Archived tab carries a number: "Active 9" would restate
+                  the count already sitting under the page title. */}
+              {t.count > 0 && (
+                <span className={clsx('text-xs px-1.5 py-0.5 rounded-full',
+                  showArchived === t.archived ? 'bg-slate-100 text-slate-600' : 'bg-slate-200 text-slate-500')}>
+                  {t.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Filters */}
       <div className="card p-4 flex flex-col sm:flex-row gap-3 flex-wrap">
@@ -1102,10 +1226,18 @@ export default function Students() {
       {/* Table */}
       <div className="card overflow-hidden">
         {loading ? <LoadingSpinner/> : students.length === 0 ? (
-          <EmptyState icon={Users} title="No students found"
-            description="Try adjusting your search or filters."
-            action={isAdmin && <button onClick={() => setShowCreate(true)} className="btn-primary">Add First Student</button>}
-          />
+          // An empty archive is a good state, not a failed search — offering
+          // "Add First Student" there would answer a question nobody asked.
+          showArchived ? (
+            <EmptyState icon={Archive} title="Nothing archived"
+              description="Learners you archive appear here, along with anyone the school year activation takes off the roll."
+            />
+          ) : (
+            <EmptyState icon={Users} title="No students found"
+              description="Try adjusting your search or filters."
+              action={isAdmin && <button onClick={() => setShowCreate(true)} className="btn-primary">Add First Student</button>}
+            />
+          )
         ) : (
           <>
             <div className="overflow-x-auto">
@@ -1116,7 +1248,7 @@ export default function Students() {
                     <th>LRN</th>
                     {!isTeacher && <th>Grade Level</th>}
                     {!isTeacher && <th>Section</th>}
-                    {isAdmin && <th className="whitespace-nowrap">Status</th>}
+                    {isAdmin && <th className="whitespace-nowrap">{showArchived ? 'Archived' : 'Status'}</th>}
                     <th>Gender</th>
                     {isAdmin && <th className="text-right pr-4">Actions</th>}
                     <th></th>
@@ -1124,7 +1256,7 @@ export default function Students() {
                 </thead>
                 <tbody>
                   {students.map(s => (
-                    <tr key={s.id}>
+                    <tr key={s.id} className={clsx(showArchived && 'bg-slate-50/70')}>
                       <td>
                         <div className="flex items-center gap-3">
                           <div className="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center flex-shrink-0">
@@ -1151,7 +1283,24 @@ export default function Students() {
                       {!isTeacher && <td className="text-sm text-slate-500">{s.section || '—'}</td>}
                       {isAdmin && (
                         <td>
-                          {isSuperAdmin ? (
+                          {showArchived ? (
+                            // The archive's own facts replace the status badge here.
+                            // A learner off the roll is not "Pending" in any useful
+                            // sense, and the question the tab raises is why they left.
+                            <div className="space-y-0.5">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-200 text-slate-600 whitespace-nowrap">
+                                <Archive size={11}/> Archived
+                              </span>
+                              <p className="text-[11px] text-slate-500 leading-tight">
+                                {s.archived_reason || 'No reason recorded'}
+                              </p>
+                              <p className="text-[11px] text-slate-400 leading-tight">
+                                {s.archived_at
+                                  ? `${format(new Date(s.archived_at), 'd MMM yyyy')} · ${s.archived_by_name || 'automatic'}`
+                                  : 'Date unknown'}
+                              </p>
+                            </div>
+                          ) : isSuperAdmin ? (
                             <button onClick={() => setStatusTarget(s)} title="Change enrolment status"
                               className={clsx(
                                 'px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap hover:ring-2 hover:ring-offset-1 hover:ring-brand-300 transition-all',
@@ -1177,26 +1326,41 @@ export default function Students() {
                       </td>
                       {isAdmin && (
                         <td>
+                          {/* An archived row gets one action, not four. Editing a
+                              learner or their guardians while they are off the roll
+                              invites changes nobody will see; restoring first is the
+                              honest order. */}
                           <div className="flex items-center gap-1 justify-start">
-                            <button onClick={() => setEditTarget(s)} title="Edit student info"
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors">
-                              <Pencil size={15}/>
-                            </button>
-                            <button
-                              title="Manage guardians"
-                              onClick={async () => {
-                                try {
-                                  const res = await studentApi.get(s.id)
-                                  setEditGuardians({ student: res.data.student })
-                                } catch {}
-                              }}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
-                              <UserPlus size={15}/>
-                            </button>
-                            <button onClick={() => setDeleteTarget(s)} title="Remove student"
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
-                              <Trash2 size={15}/>
-                            </button>
+                            {showArchived ? (
+                              <button onClick={() => setArchiveTarget({ student: s, archiving: false })}
+                                title="Restore to the active roll"
+                                className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition-colors whitespace-nowrap">
+                                <ArchiveRestore size={14}/> Restore
+                              </button>
+                            ) : (
+                              <>
+                                <button onClick={() => setEditTarget(s)} title="Edit student info"
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors">
+                                  <Pencil size={15}/>
+                                </button>
+                                <button
+                                  title="Manage guardians"
+                                  onClick={async () => {
+                                    try {
+                                      const res = await studentApi.get(s.id)
+                                      setEditGuardians({ student: res.data.student })
+                                    } catch {}
+                                  }}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
+                                  <UserPlus size={15}/>
+                                </button>
+                                <button onClick={() => setArchiveTarget({ student: s, archiving: true })}
+                                  title="Archive student — takes them off the active roll, keeps the record"
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors">
+                                  <Archive size={15}/>
+                                </button>
+                              </>
+                            )}
                           </div>
                         </td>
                       )}
@@ -1281,8 +1445,15 @@ export default function Students() {
         )}
       </Modal>
 
-      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Remove Student">
-        {deleteTarget && <DeleteConfirm student={deleteTarget} onConfirm={handleDelete} onClose={() => setDeleteTarget(null)}/>}
+      <Modal open={!!archiveTarget} onClose={() => setArchiveTarget(null)}
+        title={archiveTarget?.archiving === false ? 'Restore Student' : 'Archive Student'}>
+        {archiveTarget && (
+          <ArchiveConfirm
+            student={archiveTarget.student}
+            archiving={archiveTarget.archiving}
+            onConfirm={handleArchive}
+            onClose={() => setArchiveTarget(null)}/>
+        )}
       </Modal>
     </div>
   )

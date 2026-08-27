@@ -250,11 +250,18 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
     try {
       const res = await studentApi.checkLrns(candidateLrns)
       const existing = new Set(res.data?.existing || [])
+      // An LRN held by an *archived* learner is still taken — `students_lrn_key`
+      // is UNIQUE across the whole table — but the answer is to restore that
+      // record, not to renumber the row. Saying "already exists" sent admins
+      // hunting for a learner no list shows.
+      const archived = new Set(res.data?.archived || [])
       if (!existing.size) return
       setRowErrors(prev => parsed.map((p, i) => {
         const errs = [...(prev[i] || [])]
-        if (existing.has(p.lrn) && !errs.some(e => e.startsWith('LRN already exists'))) {
-          errs.push('LRN already exists in the database')
+        if (existing.has(p.lrn) && !errs.some(e => e.startsWith('LRN already exists') || e.startsWith('LRN belongs to'))) {
+          errs.push(archived.has(p.lrn)
+            ? 'LRN belongs to an archived student — restore them from Students → Archived instead'
+            : 'LRN already exists in the database')
         }
         return errs
       }))

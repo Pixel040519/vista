@@ -392,6 +392,31 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
     return () => { cancelled = true }
   }, [activating, sy.id])
 
+  // Only the effects worth stopping for. Adopting a record and marking the rest
+  // pending is what activating a school year *is* — reporting it back is telling
+  // the admin what they just asked for, and it pushed the three consequential
+  // rows below the fold. What is left is the part that is easy not to see coming:
+  // learners coming back onto the roll, learners coming off it, and a closing year
+  // still missing verdicts. Each is a number, a short label, and one link to go
+  // and deal with it.
+  const closingLabel = readiness?.closing_school_year?.label
+  const effects = !readiness ? [] : [
+    readiness.will_restore > 0 && {
+      n: readiness.will_restore,
+      // Reopening an earlier year brings every automatically-archived learner back,
+      // not only those with a record for it — say which, or the number looks wrong
+      // against the roster the admin is about to see.
+      label: readiness.rewinding
+        ? 'restored — reopening an earlier year archives nobody'
+        : 'restored to the active roll' },
+    readiness.will_archive > 0 && closingLabel && {
+      n: readiness.will_archive, label: `archived — left or finished SY ${closingLabel}`,
+      to: '/students?archived=1', cta: 'View', warn: true },
+    readiness.undecided_outcomes > 0 && closingLabel && {
+      n: readiness.undecided_outcomes, label: `left in SY ${closingLabel} with no outcome`,
+      to: '/enrollment/promotion', cta: 'Decide', warn: true },
+  ].filter(Boolean)
+
   const handleSave = async e => {
     e.preventDefault()
     const err = validateSY(form.label, form.start_date, form.end_date)
@@ -439,46 +464,43 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
         </select>
       </div>
 
-      {/* Pre-flight: what activating this year will do to the students */}
+      {/* Pre-flight: what activating this year will do to the students. A ledger,
+          not prose — five paragraphs of explanation buried the numbers an admin is
+          actually deciding on, and each one restated context they already have. */}
       {activating && (
         <div className={clsx(
-          'p-3 rounded-xl border text-xs space-y-1.5',
-          readiness?.without_record || readiness?.undecided_outcomes
+          'p-3 rounded-xl border text-xs',
+          effects.some(e => e.warn)
             ? 'bg-amber-50 border-amber-200 text-amber-800'
             : 'bg-slate-50 border-slate-200 text-slate-600'
         )}>
-          <p className="font-semibold flex items-center gap-1.5">
-            <Users size={13}/> Switching to SY {sy.label}
+          <p className="font-semibold flex items-center gap-1.5 mb-2">
+            <Users size={13}/> Activating SY {sy.label}:
           </p>
           {!readiness ? (
             <p>Checking enrolment records&hellip;</p>
           ) : readiness.total_students === 0 ? (
             <p>There are no students on the books yet, so nothing moves.</p>
+          ) : effects.length === 0 ? (
+            <p>Nothing comes off the roll, and the closing year has no missing outcomes.</p>
           ) : (
-            <>
-              <p>
-                <strong>{readiness.with_record}</strong> of {readiness.total_students} learners have an
-                enrolment record for this school year and will move to the grade level and section it names.
-              </p>
-              {readiness.without_record > 0 && (
-                <p>
-                  The other <strong>{readiness.without_record}</strong> will be marked <strong>Pending</strong> and
-                  hidden from class lists until you enrol them.{' '}
-                  <Link to="/enrollment" className="underline font-medium">Open Enrollment</Link> to set them up first.
-                </p>
-              )}
-            </>
+            <ul className="space-y-1">
+              {effects.map(e => (
+                <li key={e.label} className="flex items-baseline gap-2">
+                  <span className="font-semibold tabular-nums text-right w-7 shrink-0">{e.n}</span>
+                  <span className="flex-1">{e.label}</span>
+                  {e.to && (
+                    <Link to={e.to} className="underline font-medium shrink-0">{e.cta}</Link>
+                  )}
+                </li>
+              ))}
+            </ul>
           )}
-          {/* The other half: what is being left behind. An undecided learner is
-              stranded in a year that closes the moment this one starts, and only
-              Year-End Promotion can still judge them. */}
-          {readiness?.undecided_outcomes > 0 && readiness.closing_school_year && (
-            <p className="pt-1 border-t border-amber-200/70">
-              <strong>{readiness.undecided_outcomes}</strong> learner
-              {readiness.undecided_outcomes === 1 ? '' : 's'} in SY {readiness.closing_school_year.label} still
-              {readiness.undecided_outcomes === 1 ? ' has' : ' have'} no year-end outcome. That year closes when
-              this one starts, and nothing decides them on its own.{' '}
-              <Link to="/enrollment/promotion" className="underline font-medium">Open Year-End Promotion</Link> first.
+          {/* Nothing here is destructive, and saying so once at the bottom beats
+              repeating it inside the archived row. */}
+          {readiness?.will_archive > 0 && (
+            <p className="mt-2 pt-2 border-t border-amber-200/70 text-[11px]">
+              Archiving deletes nothing — restore anyone from Students → Archived.
             </p>
           )}
         </div>
@@ -797,7 +819,9 @@ export default function CurriculumManagement() {
     if (roll) {
       toast.success(
         `School year switched. ${roll.adopted} learner${roll.adopted === 1 ? '' : 's'} moved into their enrolled class` +
-        (roll.pending ? `, ${roll.pending} marked pending.` : '.'),
+        (roll.pending  ? `, ${roll.pending} marked pending`  : '') +
+        (roll.restored ? `, ${roll.restored} restored`        : '') +
+        (roll.archived ? `, ${roll.archived} archived.`       : '.'),
         { duration: 6000 }
       )
       // Activation is never blocked, so if it went ahead anyway this is the last

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import {
   Users, Search, Save, RotateCcw, AlertTriangle, Info, X, GraduationCap, Eye, EyeOff,
-  Lock, Unlock,
+  Lock, Unlock, Archive,
 } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -311,22 +311,38 @@ export default function Enrollment() {
   // one, else the grade the previous year's outcome implies, else the learner's
   // current position — so re-enrolling a learner proposes the grade they were
   // promoted into rather than the one they just finished.
-  const draftFor = useCallback((row) => drafts[row.student_id] || {
+  const draftFor = useCallback((row) => {
+    const existing = drafts[row.student_id]
+    if (existing) return existing
+
     // The year's own record wins. Failing that, where the **outcome** says they
     // belong — not where they currently stand. Those differ for exactly the case
     // this is for: a learner promoted out of Grade 1 whose placement was removed
     // and who is now coming back. `current_grade_level` is still Grade 1, so the
     // page proposed the grade they had already finished, quietly undoing the
     // promotion and tripping its own mismatch warning on an untouched row.
-    grade_level: row.grade_level || outcomeGrade(row) || row.current_grade_level,
+    const grade_level = row.grade_level || outcomeGrade(row) || row.current_grade_level
+
     // Mirror of the API's ROW_SECTION: fall back to the learner's current section
     // only when this year has no record at all. A record with a NULL section is
     // deliberately unassigned, and seeding last year's section over it offered a
     // section belonging to the grade they are leaving — not even in this row's
     // options, and rejected by `assertSectionsExist` if it ever reached a save.
-    section:     (row.enrollment_id ? row.section : row.current_section) ?? '',
-    status:      row.status || 'pending',
-  }, [drafts])
+    //
+    // The fallback is checked against the **seeded** grade level for the same
+    // reason: it is where the learner stands *now*, and the seed may already have
+    // moved them a rung up, so "Mabuhay" as a Grade 1 section is not a Grade 2
+    // one. Filling an upcoming year in bulk — select the "Not enrolled" rows, set
+    // their status to Pending, save — walks exactly that path, and an unchecked
+    // section made the whole batch fail on a value nobody typed.
+    const section = row.enrollment_id
+      ? row.section
+      : (row.current_section && sectionsFor(grade_level).includes(row.current_section)
+          ? row.current_section
+          : null)
+
+    return { grade_level, section: section ?? '', status: row.status || 'pending' }
+  }, [drafts, sectionsFor])
 
   const isDirty = (row) => !!drafts[row.student_id]
 
@@ -452,81 +468,6 @@ export default function Enrollment() {
     setSelected(prev => prev.size === rows.length ? new Set() : new Set(rows.map(r => r.student_id)))
   }
 
-  // ── Carry over from the previous year ──────────────────────
-  const [carrying, setCarrying] = useState(false)
-  const [previousLabel, setPreviousLabel] = useState(null)
-
-  // Only `super_admin` may call this, and `previousLabel` is read by nothing but the
-  // Carry over button, which is hidden from everyone else — so for a scoped admin this
-  // was a request for data they cannot have and would not render. The interceptor in
-  // `api/client.js` toasts every non-401 before the caller's `.catch` runs, so the
-  // silent catch below could not suppress it: the page greeted a scoped admin with
-  // "Access denied" on load. Do not fetch it rather than swallow the error.
-  useEffect(() => {
-    if (!selectedSY || !isSuperAdmin) { setPreviousLabel(null); return }
-    enrollmentApi.previous(selectedSY.id)
-      .then(res => setPreviousLabel(res.data.previous?.label || null))
-      .catch(() => setPreviousLabel(null))
-  }, [selectedSY, isSuperAdmin])
-
-  const carryOver = async () => {
-    if (!selectedSY) return
-    setCarrying(true)
-    try {
-      const res = await enrollmentApi.previous(selectedSY.id)
-      const prior = new Map((res.data.students || []).map(s => [s.student_id, s]))
-      if (!prior.size) {
-        toast.error(`No enrolment records exist for SY ${res.data.previous?.label || 'the previous year'}.`)
-        return
-      }
-
-      const validSections = new Set(sections.map(s => `${s.grade_level}|${s.name}`))
-      let filled = 0
-      const next = { ...drafts }
-
-      for (const row of rows) {
-        // Never overwrite a record that already exists for this year.
-        if (row.status) continue
-        const from = prior.get(row.student_id)
-        if (!from) continue
-
-        // A learner who left last year does not roll forward. Leaving is a
-        // status ('transferred_out'/'dropped'); graduating is an outcome.
-        if (['transferred_out', 'dropped'].includes(from.status)) continue
-        if (from.outcome === 'graduated') continue
-
-        // Where last year's outcome puts them, decided by `GET /previous` so the
-        // rule lives in one place: promoted advances a rung, retained repeats
-        // the same one, and **no outcome at all leaves them where they were**.
-        // Carrying a learner over is not a verdict on their year — advancing a
-        // grade with nothing on record saying they finished it invented a
-        // promotion, which the rollover then made real.
-        const grade = from.proposed_grade_level || from.grade_level
-        const keepSection = from.section && validSections.has(`${grade}|${from.section}`) ? from.section : ''
-
-        next[row.student_id] = {
-          grade_level: grade,
-          section: keepSection,
-          // Always pending: carrying a learner over says where they belong, not
-          // that they have enrolled. Graduation is the wizard's to record.
-          status: 'pending',
-        }
-        filled++
-      }
-
-      setDrafts(next)
-      toast.success(
-        filled
-          ? `${filled} learner${filled === 1 ? '' : 's'} prefilled from SY ${res.data.previous.label}. Review, then Save.`
-          : 'Nothing to carry over — every learner already has a record for this year.'
-      )
-    } catch (e) {
-      toast.error(e?.response?.data?.error || 'Failed to carry over.')
-    } finally {
-      setCarrying(false)
-    }
-  }
-
   // ── Save ───────────────────────────────────────────────────
   const save = async () => {
     if (!dirtyCount || !selectedSY) return
@@ -560,6 +501,19 @@ export default function Enrollment() {
   }
 
   // ── Render ─────────────────────────────────────────────────
+  // Sections belong to a grade level, so "this year has sections" is the wrong
+  // question — a single `Grade 1 / Sample` row used to silence this warning while
+  // every other grade's dropdown sat empty with nothing saying why. Ask it per
+  // grade level, over the grades the roster actually contains.
+  const gradesMissingSections = useMemo(() => {
+    if (!selectedSY || !rows.length) return []
+    const defined = new Set(sections.map(sec => sec.grade_level))
+    const needed = new Set(
+      rows.map(r => r.grade_level || r.current_grade_level).filter(Boolean)
+    )
+    return ALL_GRADES.filter(g => needed.has(g) && !defined.has(g))
+  }, [selectedSY, rows, sections])
+
   const noSections = selectedSY && sections.length === 0
   // Grade level and section only. Status stays as it was — it is the field this
   // page is mostly used for, and locking it would make the common case the one
@@ -669,11 +623,17 @@ export default function Enrollment() {
         </div>
       )}
 
-      {noSections && (
+      {(noSections || gradesMissingSections.length > 0) && (
         <div className="flex items-start gap-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-3 py-2.5">
           <AlertTriangle size={14} className="shrink-0 mt-0.5"/>
           <p>
-            SY {selectedSY.label} has no sections defined, so learners can only be enrolled without one.{' '}
+            {noSections
+              ? <>SY {selectedSY.label} has no sections defined, so learners can only be enrolled without one.</>
+              : <>
+                  SY {selectedSY.label} has no sections for <strong>{gradesMissingSections.join(', ')}</strong>,
+                  so learners in {gradesMissingSections.length === 1 ? 'that grade' : 'those grades'} can only be
+                  enrolled without one.
+                </>}{' '}
             <Link to="/curriculum" className="underline font-medium">Add sections in Curriculum Management</Link>.
           </p>
         </div>
@@ -720,19 +680,6 @@ export default function Enrollment() {
             </option>
           ))}
         </select>
-
-        {/* Prefills every learner without a record in one go; the endpoint
-            behind it is super_admin-only, so the button follows it. */}
-        {isSuperAdmin && (
-          <button onClick={carryOver} disabled={locked || placementLocked || carrying || !previousLabel || !rows.length}
-            className="btn-secondary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            title={locked ? 'This school year is archived — unlock it to edit its records'
-              : placementLocked ? 'Grade level and section are locked — unlock them in the banner above'
-              : previousLabel ? `Prefill from SY ${previousLabel}` : 'No earlier school year to carry over from'}>
-            <RotateCcw size={15}/>
-            {carrying ? 'Carrying over...' : previousLabel ? `Carry over from ${previousLabel}` : 'Carry over'}
-          </button>
-        )}
 
         {/* Learners who graduated or left are hidden from later years, or every
             future roster would accumulate every ex-student the school ever had.
@@ -864,9 +811,23 @@ export default function Enrollment() {
                       )}
                     </td>
                     <td>
-                      <p className={clsx('font-medium', row.has_left && !dirty ? 'text-slate-500' : 'text-slate-800')}>
-                        {formatName(row)}
-                      </p>
+                      <div className="flex items-center gap-1.5">
+                        <p className={clsx('font-medium', row.has_left && !dirty ? 'text-slate-500' : 'text-slate-800')}>
+                          {formatName(row)}
+                        </p>
+                        {/* Off the school's roll entirely. Worth saying on a closed
+                            year, where the row is otherwise indistinguishable from a
+                            learner still studying here — they are listed because they
+                            have a record for *this* year, not because they are current. */}
+                        {row.is_archived && (
+                          <span title={row.archived_reason
+                                 ? `Archived — ${row.archived_reason}. Restore from Students → Archived.`
+                                 : 'Archived — no longer on the active roll. Restore from Students → Archived.'}
+                            className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-600 font-medium whitespace-nowrap">
+                            <Archive size={9}/> Archived
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-slate-400 font-mono">{row.lrn}</p>
                     </td>
                     <td className="text-xs whitespace-nowrap"><LastAttended row={row}/></td>
@@ -906,7 +867,14 @@ export default function Enrollment() {
                         onChange={e => setDraft(row, { section: e.target.value })}
                         title={placementLocked ? 'Locked — SY is active, so this moves the learner immediately. Unlock it in the banner above.' : undefined}
                         disabled={locked || removing || placementLocked || !secOptions.length}>
-                        <option value="">{secOptions.length ? 'Unassigned' : 'No sections'}</option>
+                        {/* A disabled, empty select is indistinguishable from a
+                            locked one. Name the grade level it has nothing for so
+                            the row says what is missing, not just that it is. */}
+                        <option value="">
+                          {secOptions.length
+                            ? 'Unassigned'
+                            : d.grade_level ? `No ${d.grade_level} sections` : 'No sections'}
+                        </option>
                         {secOptions.map(n => <option key={n} value={n}>{n}</option>)}
                       </select>
                     </td>

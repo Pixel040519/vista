@@ -68,7 +68,7 @@ PostgreSQL database `vista_db`. Schema: `vista-backend/database/vistaDB_query.sq
 
 Key tables:
 - `users` — admin/teacher/parent accounts. Name fields are `surname`/`first_name`/`middle_name` (no `full_name`, no `home_address` on users). `photo_path` (TEXT, relative path under `/uploads/profile/`) is the parent's avatar shown to the guard on the SecurePass scan result; uploaded via `POST /api/profile/me/photo`.
-- `students` — student profiles with LRN, grade_level, section, QR code for SecurePass. `grade_level`/`section`/`enrollment_status` are the **denormalised snapshot of the active school year** — every roster query reads them directly; the year-by-year record lives in `student_enrollments`, and the two are reconciled by the rollover when a year is activated. `enrollment_status` (`'pending'` | `'enrolled'` | `'transferred_out'` | `'dropped'` | `'graduated'`) gates who appears on a teacher's class list: only `'enrolled'` does. `is_active` is a separate thing — a soft-delete tombstone, not an enrolment state. `qr_generated_by` (UUID, FK `users.id`) is stamped by `POST /api/students/:id/generate-qr` so the guard scan flow can identify the parent who pressed Generate and skip the guardian picker. `qr_fetcher_type` (`'self'` | `'auth'` | NULL) + `qr_fetcher_id` bind the active QR to a chosen fetcher: `'self'` → `users.id` of the parent themself, `'auth'` → `authorized_pickup_persons.id`, NULL → legacy/admin-generated path that falls back to the full authorized list. **Expiry policy depends on `qr_fetcher_type`**: `'self'` and NULL/admin QRs use time-based expiry (20 min parents, 30 min admins) AND one-time use; `'auth'` QRs are **single-use only with no time expiry** (the authorized fetcher has no account access to refresh, so a timer would strand them at the gate). Either way, a successful `/verify` clears `qr_code`, `qr_expires_at`, `qr_fetcher_type`, and `qr_fetcher_id`.
+- `students` — student profiles with LRN, grade_level, section, QR code for SecurePass. `grade_level`/`section`/`enrollment_status` are the **denormalised snapshot of the active school year** — every roster query reads them directly; the year-by-year record lives in `student_enrollments`, and the two are reconciled by the rollover when a year is activated. `enrollment_status` (`'pending'` | `'enrolled'` | `'transferred_out'` | `'dropped'` | `'graduated'`) gates who appears on a teacher's class list: only `'enrolled'` does. `is_active` is a separate axis — **on the roll vs archived**, not an enrolment state. `FALSE` means the learner has been taken off the active roll: the record, its grades, attendance and behaviour logs all survive, but every roster query in Node and FastAPI filters `s.is_active = TRUE`, so they leave class lists, dashboards and risk scoring. `archived_at` / `archived_by` / `archived_reason` say when, by whom and why — **`archived_by IS NULL` means the system archived them** when a school year was activated, rather than an admin. See "Archiving a learner" below. `qr_generated_by` (UUID, FK `users.id`) is stamped by `POST /api/students/:id/generate-qr` so the guard scan flow can identify the parent who pressed Generate and skip the guardian picker. `qr_fetcher_type` (`'self'` | `'auth'` | NULL) + `qr_fetcher_id` bind the active QR to a chosen fetcher: `'self'` → `users.id` of the parent themself, `'auth'` → `authorized_pickup_persons.id`, NULL → legacy/admin-generated path that falls back to the full authorized list. **Expiry policy depends on `qr_fetcher_type`**: `'self'` and NULL/admin QRs use time-based expiry (20 min parents, 30 min admins) AND one-time use; `'auth'` QRs are **single-use only with no time expiry** (the authorized fetcher has no account access to refresh, so a timer would strand them at the gate). Either way, a successful `/verify` clears `qr_code`, `qr_expires_at`, `qr_fetcher_type`, and `qr_fetcher_id`.
 - `student_enrollments` — one row per `(student_id, school_year_id)`, carrying **two independent facts**. `status` (`'pending'` | `'enrolled'` | `'transferred_out'` | `'dropped'`) answers *is this learner attending this school year* and is owned by the Enrollment page. `outcome` (`'promoted'` | `'retained'` | `'graduated'`, NULL until the year is closed) answers *how did the year end for them* and is owned by the Year-End Promotion wizard. They are orthogonal — a learner is enrolled in 2025-2026 **and** promoted at the end of it — so writing one must never overwrite the other. `remarks` and `outcome_remarks` split the same way. `decided_by`/`decided_at` record who made the call.
 - `parent_student` — many-to-many guardian↔student link.
 - `authorized_pickup_persons` — non-account fetchers (yaya, lola, driver, relative) a parent has authorized to pick up a specific child. Unlike `parent_student` rows these have **no portal account** — they're scoped to `(parent_id, student_id)`, hold their own `surname`/`first_name`/`middle_name`/`relationship`/`photo_path`, and are managed exclusively by the owning parent through `/api/pickup-persons` from the vista_parent app. The Pickup QR tab lets the parent pick one of these as the fetcher before generating the QR; the chosen row's `id` lands in `students.qr_fetcher_id` and the `vista_guard` scan result renders the photo verbatim.
@@ -251,12 +251,21 @@ the snapshot says where the learner would land. Writing an archived year is stil
 questions. `GET /enrollment/student/:id` stays on the snapshot on purpose: it is one
 learner's whole history, owned by whoever owns the learner today.
 
-Three more actions are `super_admin`-only because they rewrite history or run across the
-whole school: **removing a record** ("Not enrolled" / `DELETE /api/enrollment`),
-**unlocking an archived year** (on the Enrollment page and in the wizard alike), and
-**Carry over** (`GET /api/enrollment/previous`). The multi-select and bulk bar are hidden
+Two more actions are `super_admin`-only because they rewrite history: **removing a
+record** ("Not enrolled" / `DELETE /api/enrollment`) and **unlocking an archived year**
+(on the Enrollment page and in the wizard alike). The multi-select and bulk bar are hidden
 from scoped admins too, but that one is a **UI guardrail with no server counterpart** —
 `PUT` always posts an array, so nothing tells a bulk edit from eleven hand edits.
+
+There used to be a third, **Carry over** (`GET /api/enrollment/previous`), which prefilled
+every learner without a record for the year from the preceding one. It was removed once
+the promotion wizard and the page's own draft seeding had absorbed it: the wizard writes
+the forward `pending` record for everyone it decides, so all Carry over could still reach
+were the learners nobody judged — and for those it proposed the grade they were already
+in, which is what `rolloverStudents()` does at activation anyway. Filling an upcoming year
+by hand is the "Not enrolled" status chip plus the bulk bar, and `draftFor` seeds each row
+from the same outcome ladder, so the grades come out identical. Do not reintroduce it: it
+was a fourth surface for one placement rule, and the two had already drifted apart once.
 
 **The Year-End Promotion wizard is open to every admin**, bounded by grade scope: a scoped
 admin closes out the grade levels they own and sees no one else's learners.
@@ -323,15 +332,30 @@ The wizard is **not** subject to *this* gate on its closing year: it writes
 `outcome`, not status, and has its own gate on the year learners move into.
 
 A learner who has **left** drops out of later years' rosters entirely, or every
-future year would accumulate every ex-student the school ever had. Four ways to
+future year would accumulate every ex-student the school ever had. Three ways to
 have left, judged from their most recent earlier record:
 
 | | |
 |---|---|
 | `transferred_out` / `dropped` | they were enrolled and then stopped — settled either way, open year or not |
-| `outcome = 'graduated'` | completed the final grade level |
 | **not enrolled** | no record at all for a school year that has **started** — archived or active |
 | **`pending` when that year closed** | expected, never confirmed, and the year is over |
+
+**Graduating is not one of them.** `outcome = 'graduated'` drops a learner out of later
+years too, but on its own rule (`COMPLETED_SQL`) and with a different strength. Two
+reasons it is not folded in with the three above. A graduate did not leave, they
+*finished* — the opposite of transferring out or not coming back — and grouping them
+together put them under a toggle reading "Show learners who left", greyed like a dropout
+and counted on the same badge. And the exclusion is **not toggleable**: `include_left`
+exists so a returning learner can be found and re-enrolled, and there is nothing to
+re-enrol a graduate into, so lifting it on them would offer the whole alumni roll as
+candidates for every future year. A graduate is filtered out of later years whatever the
+flag says.
+
+It reaches only the years *after* the one they graduated in: `prev` is the most recent
+**earlier** record, so the graduation year itself still lists them with their outcome
+badge. Undoing a mistaken graduation is the promotion wizard's job — blank the decision,
+which posts `outcome: null` — not a matter of finding the row on a later year's roster.
 
 **"Not enrolled" is the absence of a record, not a status** — and it is a different
 fact from `dropped`: a learner who simply did not come back never enrolled to begin
@@ -367,17 +391,103 @@ one being looked at.
 be re-enrolled, and the rollover leaves their standing alone instead of resetting it
 to `pending`.
 
-Only `enrollment_status = 'enrolled'` puts a learner on a teacher's class list —
-Attendance, Score Entry, ECE Competency, class-health and the FastAPI rosters all
-filter on it, as does `GET /api/students` for the `teacher` and `parent` roles.
-Admins always see everyone, with a status filter. **SecurePass is deliberately
-exempt**: a gate scan is a physical-safety flow and must not fail because a
-record is mid-update.
+**`students.is_active` is not part of this at all**, and that is the fix rather than an
+oversight. It is one global flag meaning "not on the school's roll *today*". The roster asks
+a per-year question — was this learner part of SY X — and the archive cannot answer it: it
+carries no year, and it is set automatically by whichever activation last ran. Filtering on
+it let the flag overrule the very records it was derived from.
 
-Vocabulary and the grade ladder live in `vista-backend/node-api/src/utils/enrollment.js`,
-mirrored in `vista-dashboard/src/utils/enrollment.js` (same convention as
-`utils/roles.js`). `nextGradeLevel()` is derived from `ALL_GRADES`, so retiring a
-grade level cannot leave a stale ladder behind.
+The damage landed exactly where the page is most useful. A learner declared **"Not
+enrolled"** for a year has no record for it, so the next activation archives them with the
+reason *"No enrolment record — SY 2025-2026"* — and that flag then hid them from SY
+2025-2026, the one year whose roster explains their state and where an admin would go to
+correct it. Archived learners are **marked**, via `is_archived` / `archived_reason` on the
+row, never hidden.
+
+`LEFT_SQL` and `COMPLETED_SQL` are the whole filter, and they already ask the per-year
+question properly — from the learner's most recent record *earlier* than the year on
+screen, with `e.id IS NOT NULL` overriding both, so a record for the year always wins. The
+two results that matter sit either side of one year:
+
+| | SY 2025-2026 | SY 2026-2027 |
+|---|---|---|
+| dropped in 2025-2026 | listed, `dropped` | absent — they had gone |
+| graduated in 2025-2026 | listed, `graduated` | absent |
+| declared "Not enrolled" in 2025-2026 | listed, **Not enrolled** | absent |
+| enrolled in 2025-2026, no 2026-2027 record | listed, `enrolled` | listed, **Not enrolled** |
+
+The last row is the distinction the whole rule turns on: a learner who was present and then
+has a gap is a gap to fill in, while one who had already left stays gone. Neither is decided
+by whether they happen to be archived now.
+
+### Archiving a learner
+
+`students.is_active = FALSE` means **archived** — off the active roll, record intact. It is
+a third axis alongside status and outcome, and it answers a different question: not *are
+they attending this year* or *how did their year end*, but **are they still one of this
+school's learners at all**. It carries no year, which is why the Enrollment roster above
+does not filter on it.
+
+The Students page owns it: an **Active / Archived** tab pair, Archive on an active row and
+Restore on an archived one. There is no delete anywhere — the old "Remove student" set this
+same flag, and the bug was never the flag but the missing way back (`GET /students` had no
+parameter to lift it, `GET /students/:id` 404'd, and `students_lrn_key` kept the LRN, so the
+learner could be neither found nor re-added). All three are fixed, and every LRN clash
+against an archived row now names the holder and points at Restore.
+
+**Activation reconciles the roll in both directions**, in one transaction:
+
+1. `restoreReturningStudents()` — un-archive whoever belongs to the incoming year
+2. `rolloverStudents()` — backfill record sections, adopt the snapshot, mark the rest pending
+3. `archiveDepartedStudents()` — archive whoever the closing year finished with
+
+Restore runs first because the adopt statement is gated on `s.is_active = TRUE`; a learner
+still archived would come back holding a stale grade level. Archive runs last so it can
+overrule the `pending` the rollover just wrote for someone who is not coming back.
+
+**Who is restored is `BELONGS_TO_YEAR`** — the Enrollment roster's own predicate from
+`utils/rosterSql.js`, evaluated as of the incoming year, so the two cannot drift. That
+shared definition is the fix for the sharpest bug here: the restore used to take a
+direction flag and bring back *every* system archive when reopening an earlier year, which
+resurrected learners who had left in a year **before** the one being reopened. Reopening SY
+2026-2027 revived someone who dropped out in SY 2025-2026 — a learner that same year's
+roster correctly refuses to list. Now the archive reason never has to be interpreted; the
+records decide.
+
+**Direction still governs the archive.** `closing` is only "whichever year was active before
+this click", so reopening an *earlier* year makes it a **later** one, and judging who has
+left by it is backwards — a learner who graduated in 2025-2026 did not leave before
+2024-2025, they were sitting in it. When `closing.label > incoming.label` the activation is
+**rewinding** and archives nobody.
+
+`archiveDepartedStudents()` takes off the roll every learner whose record in the **closing**
+year was `dropped` or `transferred_out`, carried an `outcome` of `graduated`, or **did not
+exist at all**, leaving `archived_by` NULL so the UI can tell a system archive from an
+admin's. Two guards, both load-bearing: a learner with a record in the **incoming** year is
+never archived (the promotion wizard writes exactly such a row for everyone it places, so
+without this activation would empty the roster the wizard had just filled), and the
+**no-record** branch is skipped when the closing year holds no `student_enrollments` rows at
+all (enrolment history starts at the year active when `2026_08_21_student_enrollments.sql`
+ran, and on an earlier year that branch matches the whole school).
+
+**Manual archives are never lifted** (`archived_by IS NOT NULL`) in either direction: a
+duplicate record is a judgement about the record, not about which year is running.
+
+**An archived learner's record stays readable, and no single-learner lookup may filter
+`is_active`.** Preserving the record is the whole point of archiving rather than deleting,
+so `GET /api/students/:id` (admins), `GET /api/enrollment/student/:id` and
+`GET /api/ece/student-records` all serve them — the last two had the filter and 404'd, which
+on Student Detail also surfaced as a "Student not found" toast on a page that had already
+loaded the student. Grades, attendance and behaviour never filtered it. What is *not* served
+is the **live** analytics — risk, class health, predictions — computed from rosters that
+deliberately exclude archived learners: there is nothing to compute, so Student Detail skips
+those requests and says so rather than firing calls that 404. The rule is history yes,
+live signals no.
+
+`DEPARTED_FROM` is the archive predicate, shared with the pre-flight
+`GET /school-years/:id/enrollment-readiness` returns as `will_archive` / `will_restore`, so
+the numbers the Edit School Year modal shows before the click are the sets activation
+actually writes.
 
 ### Year-end promotion
 
@@ -468,7 +578,7 @@ Detailed per-feature role behavior lives in the backend/frontend nested `CLAUDE.
 
 Roles stored in `users.role` (enum constraint: `super_admin`, `admin_ece`, `admin_elem`, `teacher`, `parent`). Grade scope is derived from role via `utils/roles.js` on both backend and frontend (`gradeScopeForRole`, `isAnyAdmin`, `isSuperAdmin`, `isScopedAdmin`, `canManageGrade`). No `grade_scope` column on `users` — the JWT carries only the role, and the auth payload (`/login`, `/me`) exposes a computed `grade_scope` array for convenience.
 
-- **super_admin** — school-wide. Full access except Attendance and Score Entry (teacher-only). Manages other admins, school years, all curriculum, all students. ECE Competency is read-only. Only role that can hit `/api/accounts/admins` CRUD, `POST/PUT/DELETE /api/curriculum/school-years`, and the enrolment actions that rewrite history or run across the whole school (setting a learner's enrolment status, record removal, the archived-year unlock, and Carry over). The Year-End Promotion wizard is open to all three admin tiers, bounded by grade scope.
+- **super_admin** — school-wide. Full access except Attendance and Score Entry (teacher-only). Manages other admins, school years, all curriculum, all students. ECE Competency is read-only. Only role that can hit `/api/accounts/admins` CRUD, `POST/PUT/DELETE /api/curriculum/school-years`, and the enrolment actions that rewrite history or run across the whole school (setting a learner's enrolment status, record removal, and the archived-year unlock). The Year-End Promotion wizard is open to all three admin tiers, bounded by grade scope.
 - **admin_ece** — scoped to Kinder (the only remaining early-childhood level). Can manage teachers, students, subjects, sections, and grading structure for Kinder. Cannot manage school years, cannot manage other admins. Can open ECE Competency (read-only). Elementary routes and data are invisible. Grade routes (`/api/grades/*`, Grades page) are rejected — ECE grade levels track learning via the ECE Competency tool, not the grades table.
 - **admin_elem** — scoped to Grade 1 – Grade 6. Mirror of `admin_ece` for elementary. ECE routes (`/api/ece/*`, `/api/ai/ece-class-health`, ECE Competency page) are rejected.
 - **teacher** — scoped to `activeAssignments` (from `/api/auth/me`, filtered to the active SY). Teacher-facing pages (Students, Attendance, Score Entry, Behavior, ECE Competency) use a "Class" dropdown filtered to assigned sections. Risk Overview, the "In Your Class" card on Student Detail, and TeacherDashboard all draw teacher-scoped numbers from `/api/ai/class-health/all` — a single source of truth for teacher-scoped band numbers.

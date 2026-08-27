@@ -399,9 +399,13 @@ router.get('/student-records', enforceParentLinked, async (req, res, next) => {
       if (await rejectIfAcademicSuspended(res, studentId)) return
     }
 
+    // No `is_active` filter: these are recorded ratings, the same class of thing as
+    // enrolment history, and an archived learner's Competencies tab is often the
+    // only place their work can still be read. Archiving preserves the record —
+    // refusing to serve it would make the archive a deletion with extra steps.
     const studentRes = await query(
       `SELECT id, full_name, grade_level, section, gender
-         FROM students WHERE id=$1 AND is_active=TRUE`,
+         FROM students WHERE id=$1`,
       [studentId]
     )
     if (!studentRes.rows.length) throw new AppError('Student not found.', 404)

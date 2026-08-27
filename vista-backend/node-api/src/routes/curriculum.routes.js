@@ -8,6 +8,8 @@ const { loadSection, sectionUsage, describeUsage, renameSectionEverywhere } = re
 const { gradeScopeForRole, canManageGrade, isScopedAdmin, isSuperAdmin } = require('../utils/roles')
 const { RATING_SCALES, resolveAssessment } = require('../utils/grading')
 const { loadAssessmentRows } = require('../utils/assessmentConfig')
+// The same predicate the Enrollment roster filters on — see `utils/rosterSql.js`.
+const { PREV_JOIN, BELONGS_TO_YEAR } = require('../utils/rosterSql')
 
 // Look up a row's grade_level from one of the curriculum tables and enforce scope.
 const assertCurriculumRowInScope = async (req, table, id) => {
@@ -202,6 +204,48 @@ router.delete('/assessment-config/:grade_level', authorizeAnyAdmin, async (req, 
 // UPDATE used to re-implement `mirrorStatus()` in SQL, which was a second copy
 // of a rule that had to stay in step with the JS one.)
 const rolloverStudents = async (client, schoolYearId) => {
+  // Before adopting, fill in a section the record never got but the learner
+  // plainly has.
+  //
+  // The adopt statement below copies `e.section` straight onto the snapshot, NULL
+  // included — and a NULL there is very often an omission rather than a decision.
+  // The promotion wizard places learners with no section, and nothing forces one
+  // to be assigned afterwards, so the record can say NULL while `students.section`
+  // still holds where the learner actually sits. Adopting over it destroyed the
+  // only surviving evidence, which is what re-activating an earlier school year
+  // exposed: the round trip wiped the section off every learner whose record for
+  // that year had none.
+  //
+  // Backfilling the **record** rather than special-casing the adopt is what keeps
+  // the two surfaces honest. The Enrollment page reads `e.section` directly
+  // (`ROW_SECTION`), so preserving the snapshot alone would have left the Students
+  // page showing a section the Enrollment page called Unassigned.
+  //
+  // The `sections` check is the whole safety of it. A snapshot section belongs to
+  // the grade level the learner is *leaving*, so carrying it into a promotion would
+  // put a Grade 1 section on a Grade 2 learner — a value not even in that row's own
+  // options, and one `assertSectionsExist` would reject. It is kept only where the
+  // name is a real section for the adopted grade level in this school year, which
+  // is exactly the case where nothing has actually changed: re-activating a year
+  // the learner already spent in that grade and section.
+  await client.query(
+    `UPDATE student_enrollments e
+        SET section = s.section, updated_at = NOW()
+       FROM students s
+      WHERE s.id = e.student_id
+        AND e.school_year_id = $1
+        AND e.section IS NULL
+        AND s.section IS NOT NULL
+        AND s.is_active = TRUE
+        AND EXISTS (
+              SELECT 1 FROM sections sec
+               WHERE sec.school_year_id = $1
+                 AND sec.grade_level = e.grade_level
+                 AND sec.name = s.section
+        )`,
+    [schoolYearId]
+  )
+
   const adopted = await client.query(
     `UPDATE students s
         SET grade_level = e.grade_level,
@@ -217,9 +261,32 @@ const rolloverStudents = async (client, schoolYearId) => {
   // Learners who have left keep their standing. Marking a graduate or a
   // transferred-out learner 'pending' would quietly put them back on the
   // school's books every time a year is activated.
+  //
+  // The **grade level** is kept on purpose — it is where the learner left off, and
+  // seeing it is how an admin knows where to enrol them. The **section** is not:
+  // a section is only meaningful alongside its grade level *and* its school year,
+  // and the one they are carrying belongs to the year that just ended. Keeping it
+  // put learners in "Grade 2 / Mabuti" of a school year that has no Grade 2
+  // sections at all — a class that does not exist, shown on the Students page as
+  // if it did, and unmatchable by any section filter.
+  //
+  // Cleared only when it is not a real section of the incoming year for that
+  // grade, so a school that reuses the same section names year to year keeps them
+  // and nobody has to re-assign a roster that did not change. Same rule as the
+  // backfill above, read the other way round.
   const pending = await client.query(
     `UPDATE students s
-        SET enrollment_status = 'pending', updated_at = NOW()
+        SET enrollment_status = 'pending',
+            section = CASE
+              WHEN s.section IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM sections sec
+                    WHERE sec.school_year_id = $1
+                      AND sec.grade_level = s.grade_level
+                      AND sec.name = s.section
+              ) THEN s.section
+              ELSE NULL
+            END,
+            updated_at = NOW()
       WHERE s.is_active = TRUE
         AND s.enrollment_status NOT IN ('transferred_out','dropped','graduated')
         AND NOT EXISTS (SELECT 1 FROM student_enrollments e
@@ -229,6 +296,193 @@ const rolloverStudents = async (client, schoolYearId) => {
   )
 
   return { adopted: adopted.rowCount, pending: pending.rowCount }
+}
+
+/**
+ * The learners the closing year has finished with, taken off the active roll.
+ *
+ * `rolloverStudents()` above answers "where does everyone stand in the incoming
+ * year". This answers the other half: who is not coming back at all. Without it
+ * the Students page accumulated every learner the school ever had — a graduate
+ * stayed on the roll forever, and someone who dropped two years ago still sat in
+ * the list an admin scrolls every day.
+ *
+ * Judged entirely from the **closing** year's record, four ways:
+ *
+ *   - `status` is 'dropped' or 'transferred_out' — they stopped attending
+ *   - `outcome` is 'graduated'                   — they finished the last grade
+ *   - no record at all                           — never enrolled for that year
+ *
+ * `archived_by` is left NULL, which is how the Students page tells a row it filed
+ * itself from one an admin archived by hand.
+ *
+ * ── Two guards, both load-bearing ──
+ *
+ * A learner with a `pending` or `enrolled` record in the **incoming** year is
+ * never archived, whatever the closing year says. Someone who dropped last year
+ * and has been re-enrolled for the new one is coming back, and the promotion
+ * wizard writes exactly such a row for everyone it places — archiving them would
+ * empty the roster the wizard had just filled.
+ *
+ * The no-record branch is skipped entirely when the closing year holds no
+ * enrolment records at all. Enrolment history only starts at the year that was
+ * active when `2026_08_21_student_enrollments.sql` ran, so a year predating it
+ * has no record for anybody — and that branch would then archive the whole
+ * school in one click. The other three conditions read a record that exists, so
+ * they are safe on such a year by construction.
+ */
+/**
+ * "This learner has a record in the year being activated" — the single fact that
+ * decides which side of the roll they land on, and the reason the two statements
+ * below cannot contradict each other: the archive requires it to be false, the
+ * restore requires it to be true.
+ *
+ * **Any** record counts, not just `pending`/`enrolled`. A learner who dropped
+ * during the year now being activated is a fact *of* that year — the Students page
+ * should list them with a Dropped badge, which is what the status column is for.
+ * Archiving them would hide the very row an admin needs to see, and this predicate
+ * used to say `status IN ('pending','enrolled')` for exactly that mistake.
+ */
+const IN_INCOMING_YEAR = `
+              SELECT 1 FROM student_enrollments f
+               WHERE f.student_id = s2.id
+                 AND f.school_year_id = $1`
+
+//
+// Written once and shared with the pre-flight count below, so the number the Edit
+// School Year modal shows before the click and the number activation actually
+// archives cannot drift apart. Bound as $1 = incoming year id, $2 = closing year
+// id, $3 = whether the closing year has any enrolment records at all.
+const DEPARTED_FROM = `
+       FROM students s2
+       LEFT JOIN student_enrollments e
+              ON e.student_id = s2.id AND e.school_year_id = $2
+      WHERE s2.is_active = TRUE
+        AND (
+              e.outcome = 'graduated'
+           OR e.status IN ('dropped','transferred_out')
+           OR (e.id IS NULL AND $3::boolean)
+        )
+        AND NOT EXISTS (${IN_INCOMING_YEAR})`
+
+// Does the closing year have a roster at all? See the second guard above.
+const closingYearIsRostered = async (runner, closingId) => {
+  const r = await runner.query(
+    'SELECT 1 FROM student_enrollments WHERE school_year_id=$1 LIMIT 1', [closingId]
+  )
+  return r.rowCount > 0
+}
+
+/**
+ * The other direction: learners the year being activated brings back.
+ *
+ * Activation decides who is on the roll, and it has to decide **both ways** —
+ * `archiveDepartedStudents()` on its own could only ever shrink the roll, so
+ * switching back to an earlier school year left everyone that later years had
+ * filed away still archived, including learners who plainly attended the year now
+ * being activated. Reconciling one direction only is the same bug the rollover was
+ * written to fix for the snapshot.
+ *
+ * **Who belongs is `BELONGS_TO_YEAR`** — the exact predicate the Enrollment page
+ * filters its roster with, imported rather than restated. Anyone that year's roster
+ * would list, and who is only archived because some activation filed them away,
+ * comes back on the roll. The two questions are the same one, and answering them
+ * separately is what went wrong: this used to restore *every* system archive when
+ * reopening an earlier year, so going back to SY 2026-2027 revived learners who had
+ * already dropped out in SY 2025-2026 — people that same year's roster correctly
+ * refused to list. Now the archive reason never has to be interpreted; the records
+ * decide, as of the year being activated.
+ *
+ * A record for the incoming year always wins, whatever it says — `pending`,
+ * `enrolled`, and `dropped` too: dropping out *during* the year now running is a
+ * fact of it, and the Students page should show that row with its Dropped badge
+ * rather than hide the learner it describes.
+ *
+ * **Only system archives are lifted** (`archived_by IS NULL`). An admin who archived
+ * a duplicate or a mistaken record by hand made a judgement about the record itself,
+ * not about which year is running, and activation must not overturn it. That is what
+ * the NULL convention is for.
+ */
+const restoreReturningStudents = async (client, incoming) => {
+  const r = await client.query(
+    `UPDATE students s
+        SET is_active = TRUE,
+            archived_at = NULL,
+            archived_by = NULL,
+            archived_reason = NULL,
+            updated_at = NOW()
+       FROM (
+         SELECT s2.id
+           FROM students s2
+           LEFT JOIN student_enrollments e
+                  ON e.student_id = s2.id AND e.school_year_id = $1
+           ${PREV_JOIN.replace('s.id', 's2.id')}
+          WHERE s2.is_active = FALSE
+            AND s2.archived_by IS NULL
+            AND ${BELONGS_TO_YEAR}
+       ) d
+      WHERE d.id = s.id
+      RETURNING s.id`,
+    [incoming.id, incoming.label]
+  )
+  return r.rowCount
+}
+
+const archiveDepartedStudents = async (client, incomingId, closing) => {
+  if (!closing) return 0
+  const rostered = await closingYearIsRostered(client, closing.id)
+
+  const r = await client.query(
+    `UPDATE students s
+        SET is_active = FALSE,
+            archived_at = NOW(),
+            archived_by = NULL,
+            archived_reason = d.reason,
+            updated_at = NOW()
+       FROM (
+         SELECT s2.id,
+                CASE
+                  WHEN e.id IS NULL            THEN 'No enrolment record — SY ' || $4
+                  WHEN e.outcome = 'graduated' THEN 'Graduated — SY ' || $4
+                  WHEN e.status = 'dropped'    THEN 'Dropped — SY ' || $4
+                  ELSE                              'Transferred out — SY ' || $4
+                END AS reason
+         ${DEPARTED_FROM}
+       ) d
+      WHERE d.id = s.id
+      RETURNING s.id`,
+    [incomingId, closing.id, rostered, closing.label]
+  )
+
+  return r.rowCount
+}
+
+// The same set, counted rather than written — the pre-flight number. Scoped by
+// grade like everything else the readiness endpoint reports, so a scoped admin is
+// told how many of *their* learners activation will file away.
+const countReturningStudents = async (incoming) => {
+  const r = await query(
+    `SELECT COUNT(*)::int AS n
+       FROM students s
+       LEFT JOIN student_enrollments e ON e.student_id = s.id AND e.school_year_id = $1
+       ${PREV_JOIN}
+      WHERE s.is_active = FALSE AND s.archived_by IS NULL AND ${BELONGS_TO_YEAR}`,
+    [incoming.id, incoming.label]
+  )
+  return r.rows[0].n
+}
+
+const countDepartedStudents = async (incomingId, closing, role) => {
+  if (!closing) return 0
+  const rostered = await closingYearIsRostered({ query }, closing.id)
+  const params = [incomingId, closing.id, rostered]
+  let scope = ''
+  if (isScopedAdmin(role)) {
+    params.push(gradeScopeForRole(role))
+    scope = ` AND s2.grade_level = ANY($${params.length}::text[])`
+  }
+  const r = await query(`SELECT COUNT(*)::int AS n ${DEPARTED_FROM}${scope}`, params)
+  return r.rows[0].n
 }
 
 // ════════════════════════════════════════════════════════════
@@ -323,6 +577,17 @@ router.get('/school-years/:id/enrollment-readiness', authorizeAnyAdmin, async (r
       ? await countUndecidedOutcomes(closing.id, req.user.role)
       : 0
 
+    // The third question, and the one with the most visible effect: how many
+    // learners activation takes off the active roll altogether. Counted with the
+    // same predicate the activation writes with, so the warning and the outcome
+    // are the same set.
+    // Same direction rule the activation itself uses: reopening an earlier year
+    // archives nobody, because `closing` is then a *later* year and judging who has
+    // left by it is backwards. See `rewinding` in `PUT /school-years/:id`.
+    const rewinding = !!closing && closing.label > sy.rows[0].label
+    const will_archive = rewinding ? 0 : await countDepartedStudents(req.params.id, closing, req.user.role)
+    const will_restore = await countReturningStudents({ id: req.params.id, label: sy.rows[0].label })
+
     res.json({
       school_year: sy.rows[0],
       total_students: total,
@@ -331,6 +596,9 @@ router.get('/school-years/:id/enrollment-readiness', authorizeAnyAdmin, async (r
       by_status,
       closing_school_year: closing,
       undecided_outcomes,
+      will_archive,
+      will_restore,
+      rewinding,
     })
   } catch (err) { next(err) }
 })
@@ -546,12 +814,47 @@ router.put('/school-years/:id', authorizeSuperAdmin, async (req, res, next) => {
       )
       if (!r.rows.length) throw new AppError('School year not found.', 404)
 
+      // Three statements, and the order is the whole design.
+      //
+      // Restore first: `rolloverStudents` only adopts a record onto a row where
+      // `s.is_active = TRUE`, so a learner still archived when it runs would come
+      // back holding a stale grade level and section from whenever they left.
+      //
+      // Archive last, so it can overrule the `'pending'` the rollover just wrote
+      // for someone who is not coming back. It cannot undo the restore either way —
+      // the two read the same `IN_INCOMING_YEAR` predicate from opposite sides.
+      //
+      // ── Direction matters, but only to the archive ──
+      //
+      // `closing` is just "whichever year was active before this click", and when
+      // an admin reopens an **earlier** year that is a year which comes *after* the
+      // one now running. Judging who has left by it is backwards: a learner who
+      // graduated in 2025-2026 did not leave before 2024-2025, they were sitting in
+      // it. So rewinding archives nobody.
+      //
+      // The **restore** needs no such special case, and giving it one was a bug: it
+      // used to bring back every system archive when rewinding, which revived
+      // learners who had left in a year earlier than the one being reopened. It now
+      // asks `BELONGS_TO_YEAR` — the roster's own predicate, evaluated as of the
+      // incoming year — so who comes back is decided by the records, in both
+      // directions, and matches exactly who that year's roster lists.
+      const rewinding = !!closing && closing.label > existing.label
       const rollover = activating
-        ? {
-            ...(await rolloverStudents(client, req.params.id)),
-            closing_school_year: closing,
-            undecided_outcomes: undecidedOutcomes,
-          }
+        ? await (async () => {
+            const restored = await restoreReturningStudents(client, { id: req.params.id, label: existing.label })
+            const moved    = await rolloverStudents(client, req.params.id)
+            const archived = rewinding
+              ? 0
+              : await archiveDepartedStudents(client, req.params.id, closing)
+            return {
+              ...moved,
+              restored,
+              archived,
+              rewinding,
+              closing_school_year: closing,
+              undecided_outcomes: undecidedOutcomes,
+            }
+          })()
         : null
       return { school_year: r.rows[0], rollover }
     })
