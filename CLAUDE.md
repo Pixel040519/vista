@@ -79,7 +79,16 @@ Key tables:
 - `grading_structure` — configurable categories + components per subject (self-ref `category_id`; NULL = category, non-NULL = component).
 - `score_items` — individual assessments under a component, scoped to **subject + section + quarter**.
 - `student_scores` — per-student raw scores; unique on `(score_item_id, student_id)`.
-- `behavior_logs` — teacher observations + VADER `vader_compound` score.
+- `behavior_logs` — teacher observations + VADER `vader_compound` score. `school_year_id`
+  (nullable, FK `school_years.id`) records which year the observation belongs to. There is no
+  subject to derive it from, so it is stamped on write with **the year that is active when the
+  log is recorded** — a teacher observes a learner while working inside a school year, and the
+  optional `observed_at` only moves the timestamp within it. It is deliberately **not** read off
+  the date: years can leave months uncovered between them and can also overlap, so a date can
+  name two years or none. `2026_08_31_behavior_school_year.sql` backfilled history from the
+  learner's attendance that same day (which knows its year authoritatively) and then, for the
+  rest, from the date — leaving NULL where neither could answer. NULL counts for no year and
+  Student Detail groups those logs under "No school year recorded".
 - `risk_assessments` — AI risk tier (Stable/Moderate/High). Factor columns `attendance_factor`/`academic_factor`/`behavioral_factor`/`ece_competency_factor` are `DECIMAL(5,4)`. Three are 0–1 (normalize before insert, e.g. avg_grade 92 → 0.92); **`behavioral_factor` is the signed raw VADER compound (−1 to +1)** — column is wide enough to hold negatives and FastAPI persists it verbatim from `behavioral_score`. `ece_competency_factor` is populated for **descriptively-assessed** learners from their latest-quarter rating average, weighted per the record's own `rating_scale` (E/G/F/NA still gives E=1.0 / G=0.75 / F=0.5 / NA=0.25). FastAPI follows the data rather than a grade list — a numeric learner has no competency records, so the factor stays NULL.
 - `academic_predictions` — grade forecasts with confidence scores.
 - `dismissal_logs` — SecurePass QR scan/authorization records. `gate_label VARCHAR(20)` records the entrance the guard set in the `vista_guard` Settings screen (e.g. "Gate 1"); nullable for admin/teacher-side scans that don't pass through the guard app. `fetcher_type` (`'self'` | `'auth'` | NULL legacy) + `fetcher_authorized_id` (FK `authorized_pickup_persons.id`, nullable, `ON DELETE SET NULL`) capture the actual fetcher: `authorized_by` always remains the responsible parent (FK `users.id`) so the existing JOIN and parent notifications keep working — the fetcher columns are an audit overlay, not a replacement.
@@ -562,10 +571,13 @@ same way instead of matching on the name alone. Moving a section to another grad
 level is refused once anything depends on it — that is not a rename, and the
 learners and score items in it belong to the old grade. See `utils/sections.js`.
 
-**Still open:** `behavior_logs`, `risk_assessments` and `dismissal_logs` carry
-only timestamps, no year dimension — and unlike `attendance`, which gained a
-`school_year_id` in `2026_08_23_attendance_school_year.sql`, none of them has a
-`subject_id` to derive one from, so backfilling them would be a guess.
+**Still open:** `risk_assessments` and `dismissal_logs` carry only timestamps, no
+year dimension, and neither has a `subject_id` to derive one from.
+`attendance` gained a `school_year_id` in `2026_08_23_attendance_school_year.sql`
+and `behavior_logs` in `2026_08_31_behavior_school_year.sql` — the latter stamped
+on write from the active year rather than derived, since an observation has no
+subject. Neither remaining table has an equivalent moment to stamp, so their
+history would have to be guessed from the clock.
 Enrolment history
 starts at the school year that was active when
 `2026_08_21_student_enrollments.sql` ran; earlier rosters cannot be reconstructed.

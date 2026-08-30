@@ -66,10 +66,12 @@ attendanceRouter.get('/', enforceParentLinked, async (req, res, next) => {
     }
 
     const result = await query(
-      `SELECT a.*, u.full_name as recorded_by_name, sub.name as subject_name
+      `SELECT a.*, u.full_name as recorded_by_name, sub.name as subject_name,
+              sy.label as school_year
        FROM attendance a
        LEFT JOIN users u ON u.id = a.recorded_by
        LEFT JOIN subjects sub ON sub.id = a.subject_id
+       LEFT JOIN school_years sy ON sy.id = a.school_year_id
        WHERE a.student_id = $1
          AND ($2::date IS NULL OR a.date >= $2::date)
          AND ($3::date IS NULL OR a.date <= $3::date)
@@ -512,6 +514,7 @@ behaviorRouter.get('/', enforceParentLinked, async (req, res, next) => {
     const listSql = `
       SELECT bl.*,
              u.full_name AS teacher_name,
+             sy.label AS school_year,
              s.first_name, s.middle_name, s.surname,
              s.grade_level, s.section,
              (
@@ -524,6 +527,7 @@ behaviorRouter.get('/', enforceParentLinked, async (req, res, next) => {
         FROM behavior_logs bl
         JOIN users u    ON u.id = bl.teacher_id
         JOIN students s ON s.id = bl.student_id
+        LEFT JOIN school_years sy ON sy.id = bl.school_year_id
         ${whereSql}
        ORDER BY bl.observed_at DESC
        LIMIT $${listParams.length - 1} OFFSET $${listParams.length}
@@ -610,8 +614,10 @@ behaviorRouter.post('/', authorize('teacher'), async (req, res, next) => {
 
     const result = await query(
       `INSERT INTO behavior_logs
-         (student_id, teacher_id, observation, category, sentiment, sentiment_score, observed_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (student_id, teacher_id, observation, category, sentiment, sentiment_score, observed_at,
+          school_year_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7,
+          (SELECT id FROM school_years WHERE is_active = TRUE LIMIT 1))
        RETURNING *`,
       [student_id, req.user.id, observation, category, sentiment, sentiment_score,
        observed_at || new Date()]

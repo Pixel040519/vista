@@ -32,6 +32,23 @@ const ECE_RATINGS = [
 ]
 const ECE_RATING_BY_VALUE = Object.fromEntries(ECE_RATINGS.map(r => [r.value, r]))
 
+// Attendance records whose school year the backfill could not resolve — no
+// subject to derive it from and no sibling row that had one.
+const UNASSIGNED_SY = 'No school year recorded'
+
+// Present / Late / Excused / Absent tallies, shown on both the school year and
+// the month header so a year can be read without opening it.
+function AttendanceCounts({ summary }) {
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap justify-end">
+      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">P {summary.Present || 0}</span>
+      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">L {summary.Late || 0}</span>
+      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">E {summary.Excused || 0}</span>
+      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">A {summary.Absent || 0}</span>
+    </div>
+  )
+}
+
 export default function StudentDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -51,7 +68,9 @@ export default function StudentDetail() {
   const [loading, setLoading]   = useState(true)
   const [tab, setTab]           = useState('Overview')
   const [expandedSYs, setExpandedSYs] = useState(() => new Set())
+  const [expandedAttSYs, setExpandedAttSYs] = useState(() => new Set())
   const [expandedAttMonths, setExpandedAttMonths] = useState(() => new Set())
+  const [expandedBehSYs, setExpandedBehSYs] = useState(() => new Set())
   const [expandedBehMonths, setExpandedBehMonths] = useState(() => new Set())
   const [behaviorFilter, setBehaviorFilter] = useState('All')
 
@@ -112,7 +131,9 @@ export default function StudentDetail() {
     })
   }
   const toggleSY           = toggleInSet(setExpandedSYs)
+  const toggleAttSY        = toggleInSet(setExpandedAttSYs)
   const toggleAttMonth     = toggleInSet(setExpandedAttMonths)
+  const toggleBehSY        = toggleInSet(setExpandedBehSYs)
   const toggleBehMonth     = toggleInSet(setExpandedBehMonths)
   const toggleEceSubject   = toggleInSet(setExpandedEceSubjects)
 
@@ -349,43 +370,78 @@ export default function StudentDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grades])
 
-  // Group attendance by month (yyyy-MM key, most recent first)
   const monthKey = (d) => {
     const dt = new Date(d)
     return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`
   }
-  const attByMonth = attendance.reduce((acc, r) => {
-    const k = monthKey(r.date)
-    if (!acc[k]) acc[k] = { records: [], summary: { Present: 0, Absent: 0, Late: 0, Excused: 0 } }
-    acc[k].records.push(r)
-    acc[k].summary[r.status] = (acc[k].summary[r.status] || 0) + 1
+
+  // Group attendance by school year, then by month within it. The year comes
+  // from the record's own school_year_id (resolved by the API), never from the
+  // date: consecutive years leave months uncovered between one year's end and
+  // the next one's start, so dates cannot say which year a record belongs to.
+  // A record the backfill could not attribute has no year at all and lands in
+  // its own bucket rather than being guessed into someone else's.
+  const emptyAttSummary = () => ({ Present: 0, Absent: 0, Late: 0, Excused: 0 })
+  const attBySY = attendance.reduce((acc, r) => {
+    const sy = r.school_year || UNASSIGNED_SY
+    const mk = monthKey(r.date)
+    if (!acc[sy]) acc[sy] = { total: 0, summary: emptyAttSummary(), months: {} }
+    if (!acc[sy].months[mk]) acc[sy].months[mk] = { records: [], summary: emptyAttSummary() }
+    acc[sy].months[mk].records.push(r)
+    acc[sy].months[mk].summary[r.status] = (acc[sy].months[mk].summary[r.status] || 0) + 1
+    acc[sy].summary[r.status] = (acc[sy].summary[r.status] || 0) + 1
+    acc[sy].total++
     return acc
   }, {})
-  const sortedAttMonths = Object.keys(attByMonth).sort().reverse()
+  // Most recent year first, with the unattributed bucket always last — it has no
+  // place on the timeline, so sorting it by label would drop it at the top.
+  const sortedAttSYs = Object.keys(attBySY).sort((a, b) => {
+    if (a === UNASSIGNED_SY) return 1
+    if (b === UNASSIGNED_SY) return -1
+    return b.localeCompare(a)
+  })
+  const attMonthsOf = (sy) => Object.keys(attBySY[sy].months).sort().reverse()
 
   useEffect(() => {
-    if (sortedAttMonths.length && expandedAttMonths.size === 0) {
-      setExpandedAttMonths(new Set([sortedAttMonths[0]]))
+    if (sortedAttSYs.length && expandedAttSYs.size === 0) {
+      const latestSY = sortedAttSYs[0]
+      setExpandedAttSYs(new Set([latestSY]))
+      setExpandedAttMonths(new Set([attMonthsOf(latestSY)[0]]))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attendance])
 
-  // Behavior: filter by sentiment, then group by month
+  // Behavior: filter by sentiment, then group by school year and month. The year
+  // is the one stamped on the log when it was written, never read off the date —
+  // see the Attendance grouping above for why the date cannot answer this.
   const filteredBehavior = behaviorFilter === 'All'
     ? behavior
     : behavior.filter(b => b.sentiment === behaviorFilter)
-  const behByMonth = filteredBehavior.reduce((acc, b) => {
-    const k = monthKey(b.observed_at)
-    if (!acc[k]) acc[k] = []
-    acc[k].push(b)
+  const behBySY = filteredBehavior.reduce((acc, b) => {
+    const sy = b.school_year || UNASSIGNED_SY
+    const mk = monthKey(b.observed_at)
+    if (!acc[sy]) acc[sy] = { total: 0, months: {} }
+    if (!acc[sy].months[mk]) acc[sy].months[mk] = []
+    acc[sy].months[mk].push(b)
+    acc[sy].total++
     return acc
   }, {})
-  const sortedBehMonths = Object.keys(behByMonth).sort().reverse()
+  const sortedBehSYs = Object.keys(behBySY).sort((a, b) => {
+    if (a === UNASSIGNED_SY) return 1
+    if (b === UNASSIGNED_SY) return -1
+    return b.localeCompare(a)
+  })
+  const behMonthsOf = (sy) => Object.keys(behBySY[sy].months).sort().reverse()
 
   useEffect(() => {
-    if (sortedBehMonths.length && expandedBehMonths.size === 0) {
-      setExpandedBehMonths(new Set([sortedBehMonths[0]]))
-    }
+    if (!sortedBehSYs.length) return
+    // Re-seed whenever the sentiment filter has left nothing open — switching to
+    // a filter whose logs are all in years that were collapsed would otherwise
+    // show a list of shut drawers.
+    if (sortedBehSYs.some(sy => expandedBehSYs.has(sy))) return
+    const latestSY = sortedBehSYs[0]
+    setExpandedBehSYs(new Set([latestSY]))
+    setExpandedBehMonths(new Set([behMonthsOf(latestSY)[0]]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [behavior, behaviorFilter])
 
@@ -845,48 +901,69 @@ export default function StudentDetail() {
           <div className="card p-8 text-center text-sm text-slate-400">No attendance records found.</div>
         ) : (
           <div className="space-y-3">
-            {sortedAttMonths.map(mk => {
-              const isOpen = expandedAttMonths.has(mk)
-              const { records, summary } = attByMonth[mk]
+            {sortedAttSYs.map(sy => {
+              const syOpen = expandedAttSYs.has(sy)
+              const { summary: sySummary, total, months } = attBySY[sy]
               return (
-                <div key={mk} className="card overflow-hidden">
+                <div key={sy} className="card overflow-hidden">
                   <button
-                    onClick={() => toggleAttMonth(mk)}
+                    onClick={() => toggleAttSY(sy)}
                     className="w-full flex items-center gap-2 px-5 py-3 hover:bg-slate-50 transition-colors"
                   >
-                    {isOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
-                    <span className="text-sm font-semibold text-slate-800">{formatMonth(mk)}</span>
-                    <div className="ml-auto flex items-center gap-1.5 flex-wrap justify-end">
-                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">P {summary.Present || 0}</span>
-                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">L {summary.Late || 0}</span>
-                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">E {summary.Excused || 0}</span>
-                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">A {summary.Absent || 0}</span>
-                    </div>
+                    {syOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                    <span className="text-sm font-semibold text-slate-800">
+                      {sy === UNASSIGNED_SY ? sy : `SY ${sy}`}
+                    </span>
+                    <span className="text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                      {total} {total === 1 ? 'record' : 'records'}
+                    </span>
+                    <div className="ml-auto"><AttendanceCounts summary={sySummary} /></div>
                   </button>
-                  {isOpen && (
-                    <div className="overflow-x-auto border-t border-slate-100">
-                      <table className="table-base">
-                        <thead><tr><th>Date</th><th>Status</th><th>Subject</th><th>Recorded By</th></tr></thead>
-                        <tbody>
-                          {records.map(a => (
-                            <tr key={a.id}>
-                              <td className="font-mono text-xs">{format(new Date(a.date), 'MMM d, yyyy')}</td>
-                              <td>
-                                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                  a.status === 'Present' ? 'bg-emerald-50 text-emerald-700' :
-                                  a.status === 'Absent'  ? 'bg-red-50 text-red-700' :
-                                  a.status === 'Late'    ? 'bg-amber-50 text-amber-700' :
-                                                           'bg-blue-50 text-blue-700'
-                                }`}>{a.status}</span>
-                              </td>
-                              <td className="text-slate-500 text-xs">{a.subject_name || '—'}</td>
-                              <td className="text-slate-400 text-xs">
-                                {isTeacher && a.recorded_by === user?.id ? 'You' : (a.recorded_by_name || '—')}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+
+                  {syOpen && (
+                    <div className="border-t border-slate-100 divide-y divide-slate-100">
+                      {attMonthsOf(sy).map(mk => {
+                        const isOpen = expandedAttMonths.has(mk)
+                        const { records, summary } = months[mk]
+                        return (
+                          <div key={mk}>
+                            <button
+                              onClick={() => toggleAttMonth(mk)}
+                              className="w-full flex items-center gap-2 pl-9 pr-5 py-2.5 bg-slate-50/50 hover:bg-slate-50 transition-colors"
+                            >
+                              {isOpen ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />}
+                              <span className="text-xs font-semibold text-slate-600">{formatMonth(mk)}</span>
+                              <div className="ml-auto"><AttendanceCounts summary={summary} /></div>
+                            </button>
+                            {isOpen && (
+                              <div className="overflow-x-auto border-t border-slate-100">
+                                <table className="table-base">
+                                  <thead><tr><th>Date</th><th>Status</th><th>Subject</th><th>Recorded By</th></tr></thead>
+                                  <tbody>
+                                    {records.map(a => (
+                                      <tr key={a.id}>
+                                        <td className="font-mono text-xs">{format(new Date(a.date), 'MMM d, yyyy')}</td>
+                                        <td>
+                                          <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                                            a.status === 'Present' ? 'bg-emerald-50 text-emerald-700' :
+                                            a.status === 'Absent'  ? 'bg-red-50 text-red-700' :
+                                            a.status === 'Late'    ? 'bg-amber-50 text-amber-700' :
+                                                                     'bg-blue-50 text-blue-700'
+                                          }`}>{a.status}</span>
+                                        </td>
+                                        <td className="text-slate-500 text-xs">{a.subject_name || '—'}</td>
+                                        <td className="text-slate-400 text-xs">
+                                          {isTeacher && a.recorded_by === user?.id ? 'You' : (a.recorded_by_name || '—')}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
                   )}
                 </div>
@@ -918,55 +995,80 @@ export default function StudentDetail() {
                 )
               })}
             </div>
-            {sortedBehMonths.length === 0 ? (
+            {sortedBehSYs.length === 0 ? (
               <div className="card p-8 text-center text-sm text-slate-400">No {behaviorFilter.toLowerCase()} logs in this view.</div>
-            ) : sortedBehMonths.map(mk => {
-              const isOpen = expandedBehMonths.has(mk)
-              const logs = behByMonth[mk]
+            ) : sortedBehSYs.map(sy => {
+              const syOpen = expandedBehSYs.has(sy)
+              const { total, months } = behBySY[sy]
               return (
-                <div key={mk} className="card overflow-hidden">
+                <div key={sy} className="card overflow-hidden">
                   <button
-                    onClick={() => toggleBehMonth(mk)}
+                    onClick={() => toggleBehSY(sy)}
                     className="w-full flex items-center gap-2 px-5 py-3 hover:bg-slate-50 transition-colors"
                   >
-                    {isOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
-                    <span className="text-sm font-semibold text-slate-800">{formatMonth(mk)}</span>
+                    {syOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+                    <span className="text-sm font-semibold text-slate-800">
+                      {sy === UNASSIGNED_SY ? sy : `SY ${sy}`}
+                    </span>
                     <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
-                      {logs.length} {logs.length === 1 ? 'log' : 'logs'}
+                      {total} {total === 1 ? 'log' : 'logs'}
                     </span>
                   </button>
-                  {isOpen && (
-                    <div className="border-t border-slate-100 p-3 space-y-2">
-                      {logs.map(b => {
-                        const mine = isTeacher && b.teacher_id === user?.id
+
+                  {syOpen && (
+                    <div className="border-t border-slate-100 divide-y divide-slate-100">
+                      {behMonthsOf(sy).map(mk => {
+                        const isOpen = expandedBehMonths.has(mk)
+                        const logs = months[mk]
                         return (
-                        <div key={b.id} className="p-3 bg-slate-50 rounded-xl flex gap-4">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${mine ? 'bg-brand-50 text-brand-600' : 'bg-white text-slate-500 text-sm font-bold'}`}>
-                            {mine ? <Pencil size={14}/> : (b.teacher_name?.[0] || 'T')}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between gap-2 flex-wrap">
-                              <p className="text-sm font-medium text-slate-800">{mine ? 'Logged by you' : b.teacher_name}</p>
-                              <div className="flex items-center gap-2">
-                                <SentimentBadge sentiment={b.sentiment} />
-                                {b.category && <span className="text-xs text-slate-400 bg-white px-2 py-0.5 rounded-full">{b.category}</span>}
-                              </div>
-                            </div>
-                            <p className="text-sm text-slate-600 mt-1.5">{b.observation}</p>
-                            <p className="text-xs text-slate-400 mt-1.5">{format(new Date(b.observed_at), 'MMM d, yyyy · h:mm a')}</p>
-                            {b.sentiment_score !== null && (
-                              <div className="mt-2 flex items-center gap-2">
-                                <div className="flex-1 h-1.5 bg-slate-200 rounded-full max-w-24">
-                                  <div
-                                    className={`h-full rounded-full ${b.sentiment === 'Positive' ? 'bg-brand-500' : b.sentiment === 'Negative' ? 'bg-red-500' : 'bg-slate-400'}`}
-                                    style={{ width: `${Math.abs(b.sentiment_score) * 100}%` }}
-                                  />
-                                </div>
-                                <span className="text-xs font-mono text-slate-400">score: {Number(b.sentiment_score).toFixed(3)}</span>
+                          <div key={mk}>
+                            <button
+                              onClick={() => toggleBehMonth(mk)}
+                              className="w-full flex items-center gap-2 pl-9 pr-5 py-2.5 bg-slate-50/50 hover:bg-slate-50 transition-colors"
+                            >
+                              {isOpen ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />}
+                              <span className="text-xs font-semibold text-slate-600">{formatMonth(mk)}</span>
+                              <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                                {logs.length} {logs.length === 1 ? 'log' : 'logs'}
+                              </span>
+                            </button>
+                            {isOpen && (
+                              <div className="border-t border-slate-100 p-3 space-y-2">
+                                {logs.map(b => {
+                                  const mine = isTeacher && b.teacher_id === user?.id
+                                  return (
+                                  <div key={b.id} className="p-3 bg-slate-50 rounded-xl flex gap-4">
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${mine ? 'bg-brand-50 text-brand-600' : 'bg-white text-slate-500 text-sm font-bold'}`}>
+                                      {mine ? <Pencil size={14}/> : (b.teacher_name?.[0] || 'T')}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                                        <p className="text-sm font-medium text-slate-800">{mine ? 'Logged by you' : b.teacher_name}</p>
+                                        <div className="flex items-center gap-2">
+                                          <SentimentBadge sentiment={b.sentiment} />
+                                          {b.category && <span className="text-xs text-slate-400 bg-white px-2 py-0.5 rounded-full">{b.category}</span>}
+                                        </div>
+                                      </div>
+                                      <p className="text-sm text-slate-600 mt-1.5">{b.observation}</p>
+                                      <p className="text-xs text-slate-400 mt-1.5">{format(new Date(b.observed_at), 'MMM d, yyyy · h:mm a')}</p>
+                                      {b.sentiment_score !== null && (
+                                        <div className="mt-2 flex items-center gap-2">
+                                          <div className="flex-1 h-1.5 bg-slate-200 rounded-full max-w-24">
+                                            <div
+                                              className={`h-full rounded-full ${b.sentiment === 'Positive' ? 'bg-brand-500' : b.sentiment === 'Negative' ? 'bg-red-500' : 'bg-slate-400'}`}
+                                              style={{ width: `${Math.abs(b.sentiment_score) * 100}%` }}
+                                            />
+                                          </div>
+                                          <span className="text-xs font-mono text-slate-400">score: {Number(b.sentiment_score).toFixed(3)}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                  )
+                                })}
                               </div>
                             )}
                           </div>
-                        </div>
                         )
                       })}
                     </div>
