@@ -955,7 +955,13 @@ export default function Students() {
   const setGradeFilter   = (v) => updateParams({ ...base(), grade: v, section: '' })
   const setSectionFilter = (v) => updateParams({ ...base(), section: v })
   const setStatusFilter  = (v) => updateParams({ ...base(), status: v })
-  const setShowArchived  = (v) => updateParams({ ...base(), archived: v })
+  // Switching tabs clears the status filter. The two tabs do not offer the same
+  // statuses — Active lists the ones a learner can be put into, Archived only the
+  // ones its rows actually hold — so carrying a selection across lands on a filter
+  // the new tab would never have offered, and the list comes up short or empty for
+  // a reason that is off screen. Grade, section and search are meaningful on both
+  // and carry over as before.
+  const setShowArchived  = (v) => updateParams({ ...base(), status: '', archived: v })
   const setTeacherSection = (v) => updateParams({ q: search, grade: '', section: '', status: '', ts: v })
 
   const updateParams = (vals) => {
@@ -982,6 +988,37 @@ export default function Students() {
 
   const [students, setStudents]     = useState([])
   const [byStatus, setByStatus]     = useState({})
+  // Which statuses the filter offers, and it differs by tab because the two tabs
+  // are different kinds of list.
+  //
+  // **Active** is a worklist: every status here is one a learner can be *put into*
+  // from this page, so an empty one is an answer ("nobody is dropped") rather than a
+  // dead option, and all of them stay listed. `graduated` is the exception — the
+  // promotion wizard earns it, this page cannot set it, and graduating archives the
+  // learner — so it appears only in the window between the wizard recording a
+  // graduation and the next activation filing them away.
+  //
+  // **Archived** is a record: nothing here is settable (the row shows the Archived
+  // badge and its reason in place of a status), so a status with nobody under it
+  // offers nothing but an empty list. Only statuses actually held by archived
+  // learners are listed — which is what takes Enrolled and Pending off this tab in
+  // the ordinary case, while still finding, say, the learner an admin archived by
+  // hand mid-year with their Enrolled standing intact.
+  //
+  // `graduated` is off the Archived tab outright, not merely pruned when empty: it
+  // is never offered there even though that is where graduates end up. Archived rows
+  // are found by their reason, not by a status the page cannot set.
+  //
+  // Either way the selected filter is never dropped, or the select would go blank
+  // while still filtering on it — the one path that can still show Graduated on the
+  // Archived tab, and only when a URL asks for it by hand.
+  const statusOptions = useMemo(() => (
+    [...STUDENT_STATUSES, NO_RECORD].filter(st =>
+      statusFilter === st.id || (showArchived
+        ? st.id !== 'graduated' && byStatus[st.id] > 0
+        : st.id !== 'graduated' || byStatus.graduated > 0)
+    )
+  ), [byStatus, showArchived, statusFilter])
   const [archivedCount, setArchivedCount] = useState(0)
   const [pagination, setPagination] = useState({ total:0, page:1, totalPages:1 })
   const [loading, setLoading]       = useState(true)
@@ -1212,7 +1249,7 @@ export default function Students() {
             <select className="input appearance-none cursor-pointer"
               value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
               <option value="">All Statuses</option>
-              {STUDENT_STATUSES.map(st => (
+              {statusOptions.map(st => (
                 <option key={st.id} value={st.id}>
                   {st.label}{byStatus[st.id] ? ` (${byStatus[st.id]})` : ''}
                 </option>
