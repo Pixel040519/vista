@@ -7,7 +7,7 @@ import { useLocation } from 'react-router-dom'
 import { attendanceApi, studentApi, curriculumApi } from '../api/client'
 import { LoadingSpinner, EmptyState } from '../components/UI'
 import { useAuth } from '../context/AuthContext'
-import { ClipboardCheck, Search } from 'lucide-react'
+import { ClipboardCheck, Search, Save } from 'lucide-react'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 
@@ -37,6 +37,7 @@ export function Attendance() {
   const [selectedSection, setSelectedSection] = useState(initialDeepLink?.selectedSection || '')
   const [students, setStudents] = useState([])
   const [records, setRecords]   = useState({})
+  const [loaded, setLoaded]     = useState({})  // records as last loaded or saved — the diff baseline
   const [date, setDate]         = useState(format(new Date(), 'yyyy-MM-dd'))
   const [search, setSearch]     = useState('')
   const [saving, setSaving]     = useState(false)
@@ -45,6 +46,10 @@ export function Attendance() {
   const [selectedSubject, setSelectedSubject] = useState('')
   const pendingDeepLinkSubject = useRef(initialDeepLink?.selectedSubject || '')
   const appliedDeepLinkTs = useRef(initialDeepLink?.ts || 0)
+
+  // Loading or clearing the marks moves the baseline with them; only a
+  // teacher's click may move one without the other.
+  const resetRecords = (r) => { setRecords(r); setLoaded(r) }
 
   // Apply a fresh deep-link when the dashboard navigates in with new state.
   // The `ts` check ensures we only apply each deep-link once, even if React
@@ -69,7 +74,7 @@ export function Attendance() {
     if (!selectedSection) { setStudents([]); setSubjects([]); setSelectedSubject(''); return }
     const [grade_level, section] = selectedSection.split('|||')
     setLoading(true)
-    setRecords({})
+    resetRecords({})
     studentApi.list({ grade_level, section, limit: 200 })
       .then(res => setStudents(res.data.students))
       .catch(() => setStudents([]))
@@ -98,11 +103,11 @@ export function Attendance() {
 
   // Load existing attendance records when date, section, or subject changes
   useEffect(() => {
-    if (!selectedSection || !date || !selectedSubject) { setRecords({}); return }
+    if (!selectedSection || !date || !selectedSubject) { resetRecords({}); return }
     const [grade_level, section] = selectedSection.split('|||')
     attendanceApi.bulk({ date, grade_level, section, subject_id: selectedSubject })
-      .then(res => setRecords(res.data.records || {}))
-      .catch(() => setRecords({}))
+      .then(res => resetRecords(res.data.records || {}))
+      .catch(() => resetRecords({}))
   }, [selectedSection, date, selectedSubject])
 
   const filtered = students.filter(s =>
@@ -110,12 +115,20 @@ export function Attendance() {
     (s.lrn || '').toLowerCase().includes(search.toLowerCase())
   )
 
+  // How many marks differ from what was loaded — drives the save bar. A cleared
+  // mark counts too, which is why both sides are walked.
+  const dirtyCount = useMemo(() => {
+    const ids = new Set([...Object.keys(records), ...Object.keys(loaded)])
+    return [...ids].filter(id => records[id] !== loaded[id]).length
+  }, [records, loaded])
+
   const setStatus = (id, status) => setRecords(p => {
     if (p[id] === status) { const { [id]: _, ...rest } = p; return rest }
     return { ...p, [id]: status }
   })
 
   const handleSave = async () => {
+    const saved = records
     const toSubmit = Object.entries(records).map(([student_id, status]) => ({
       student_id, date, status, subject_id: selectedSubject
     }))
@@ -124,6 +137,7 @@ export function Attendance() {
     try {
       await attendanceApi.submit(toSubmit)
       toast.success(`Attendance saved for ${toSubmit.length} students.`)
+      setLoaded(saved)
     } catch {}
     setSaving(false)
   }
@@ -138,18 +152,13 @@ export function Attendance() {
   const currentSection = selectedSection ? selectedSection.split('|||') : []
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="space-y-5 animate-fade-in pb-24">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="page-title">Attendance</h1>
           <p className="page-subtitle">Mark and track daily attendance</p>
         </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <input type="date" className="input w-auto" value={date} onChange={e => setDate(e.target.value)} />
-          <button onClick={handleSave} disabled={saving || !selectedSection || !selectedSubject} className="btn-primary">
-            {saving ? 'Saving...' : 'Save Attendance'}
-          </button>
-        </div>
+        <input type="date" className="input w-auto" value={date} onChange={e => setDate(e.target.value)} />
       </div>
 
       <div className="card p-4 flex flex-col sm:flex-row gap-3">
@@ -241,6 +250,28 @@ export function Attendance() {
           </div>
         )}
       </div>
+      )}
+
+      {/* Sticky save bar */}
+      {dirtyCount > 0 && (
+        <div className="fixed bottom-0 left-0 lg:left-64 right-0 z-30 bg-white border-t border-slate-200 shadow-lg animate-slide-up">
+          <div className="px-4 sm:px-6 py-3 flex items-center gap-3">
+            <span className="text-sm font-medium text-slate-700">
+              {dirtyCount} unsaved mark{dirtyCount === 1 ? '' : 's'}
+              <span className="text-slate-500 font-normal">
+                {' '}&middot; {currentSection.join(' — ')}
+                {' '}&middot; {subjects.find(s => s.id === selectedSubject)?.name || 'Subject'}
+                {' '}&middot; {date}
+              </span>
+            </span>
+            <button onClick={() => setRecords(loaded)} disabled={saving}
+              className="ml-auto btn-secondary text-sm disabled:opacity-60">Discard</button>
+            <button onClick={handleSave} disabled={saving}
+              className="btn-primary flex items-center gap-2 text-sm disabled:opacity-60">
+              <Save size={15} /> {saving ? 'Saving...' : 'Save Attendance'}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )

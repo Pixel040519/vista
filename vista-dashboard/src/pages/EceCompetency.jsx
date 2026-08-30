@@ -153,7 +153,7 @@ export default function EceCompetency() {
   const [skills, setSkills] = useState([])
   const [students, setStudents] = useState([])
   const [grid, setGrid] = useState({}) // grid[studentId][skillId] = rating
-  const [dirty, setDirty] = useState(false)
+  const [loaded, setLoaded] = useState({}) // grid as last loaded or saved — the diff baseline
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -207,7 +207,7 @@ export default function EceCompetency() {
           g[r.student_id][r.skill_id] = r.rating
         }
         setGrid(g)
-        setDirty(false)
+        setLoaded(g)
       })
       .catch(err => toast.error(err.response?.data?.error || 'Failed to load data'))
       .finally(() => setLoading(false))
@@ -226,11 +226,23 @@ export default function EceCompetency() {
       }
       return next
     })
-    setDirty(true)
   }
+
+  const dirtyCount = useMemo(() => {
+    let n = 0
+    for (const sid of new Set([...Object.keys(grid), ...Object.keys(loaded)])) {
+      const cur = grid[sid] || {}
+      const base = loaded[sid] || {}
+      for (const skid of new Set([...Object.keys(cur), ...Object.keys(base)])) {
+        if (cur[skid] !== base[skid]) n++
+      }
+    }
+    return n
+  }, [grid, loaded])
 
   const handleSave = async () => {
     if (!selectedClass) return
+    const saved = grid
     const [grade_level, section] = selectedClass.split('||')
     const entries = []
     for (const student of students) {
@@ -247,7 +259,7 @@ export default function EceCompetency() {
     try {
       await eceApi.saveRecords({ grade_level, section, quarter, entries })
       toast.success(`Saved ${entries.length} rating(s)`)
-      setDirty(false)
+      setLoaded(saved)
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to save')
     }
@@ -419,7 +431,7 @@ export default function EceCompetency() {
   )
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="space-y-5 animate-fade-in pb-24">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="page-title">ECE Competency Tracker</h1>
@@ -429,15 +441,6 @@ export default function EceCompetency() {
               : 'Record developmental milestones for early learners'}
           </p>
         </div>
-        {!isReadOnly && (
-          <button
-            onClick={handleSave}
-            disabled={!dirty || saving}
-            className="btn-primary"
-          >
-            <Save size={16} /> {saving ? 'Saving...' : 'Save Ratings'}
-          </button>
-        )}
       </div>
 
       {/* Filters */}
@@ -751,6 +754,28 @@ export default function EceCompetency() {
             })}
           </div>
         )
+      )}
+
+      {/* Sticky save bar */}
+      {!isReadOnly && dirtyCount > 0 && (
+        <div className="fixed bottom-0 left-0 lg:left-64 right-0 z-30 bg-white border-t border-slate-200 shadow-lg animate-slide-up">
+          <div className="px-4 sm:px-6 py-3 flex items-center gap-3">
+            <span className="text-sm font-medium text-slate-700">
+              {dirtyCount} unsaved rating{dirtyCount === 1 ? '' : 's'}
+              {selectedClass && (
+                <span className="text-slate-500 font-normal">
+                  {' '}&middot; {selectedClass.split('||').join(' — ')} &middot; {grading.abbr(quarter)}
+                </span>
+              )}
+            </span>
+            <button onClick={() => setGrid(loaded)} disabled={saving}
+              className="ml-auto btn-secondary text-sm disabled:opacity-60">Discard</button>
+            <button onClick={handleSave} disabled={saving}
+              className="btn-primary flex items-center gap-2 text-sm disabled:opacity-60">
+              <Save size={15} /> {saving ? 'Saving...' : 'Save Ratings'}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
