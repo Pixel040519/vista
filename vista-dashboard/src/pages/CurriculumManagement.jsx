@@ -657,7 +657,7 @@ function AssessmentCard({ entry, scales, onSave, onReset }) {
 }
 
 export default function CurriculumManagement() {
-  const { isSuperAdmin, gradeScope } = useAuth()
+  const { isSuperAdmin, gradeScope, syncActiveSchoolYear } = useAuth()
   const visibleGrades = isSuperAdmin || !gradeScope?.length
     ? GRADE_LEVELS
     : GRADE_LEVELS.filter(g => gradeScope.includes(g))
@@ -683,6 +683,11 @@ export default function CurriculumManagement() {
         if (!prev) return syl.find(s => s.is_active) || syl[0] || null
         return syl.find(s => s.id === prev.id) || prev
       })
+      // This page is the only place the active year can change, and this runs
+      // after every one of its mutations — so it is where the rest of the app
+      // finds out. Covers a rename of the active year as well as a switch,
+      // since what the session caches is the label.
+      syncActiveSchoolYear(syl.find(s => s.is_active)?.label || null)
     } catch {}
   }, []) // eslint-disable-line
 

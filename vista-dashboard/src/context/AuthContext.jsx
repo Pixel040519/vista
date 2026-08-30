@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useMemo } from 'react'
+import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { authApi } from '../api/client'
 import { gradeScopeForRole, isAnyAdmin, isSuperAdmin, isScopedAdmin, ROLES } from '../utils/roles'
 
@@ -38,6 +38,33 @@ export function AuthProvider({ children }) {
     setUser(null)
   }
 
+  // Read by syncActiveSchoolYear, which must compare against the user as it is
+  // now — a closure would compare against the one captured when its caller was
+  // created, and go on refreshing (or not) on the strength of a year that has
+  // already changed once.
+  const userRef = useRef(user)
+  useEffect(() => { userRef.current = user }, [user])
+
+  const refreshUser = useCallback(async () => {
+    try {
+      const res = await authApi.me()
+      setUser(res.data.user)
+      return res.data.user
+    } catch { return null }
+  }, [])
+
+  // The auth payload snapshots the active school year — its label, period model
+  // and grading policy — and nothing in the session invalidates that. Activating
+  // a different year, or renaming the active one, moves it out from under every
+  // page that reads it, and until now only a browser reload caught up. So
+  // whoever fetches a fresh list of years hands the active label here; only a
+  // real difference costs a /me round trip.
+  const syncActiveSchoolYear = useCallback((label = null) => {
+    const current = userRef.current
+    if (!current || label === current.active_school_year) return
+    return refreshUser()
+  }, [refreshUser])
+
   const activeAssignments = useMemo(() => {
     if (!user?.assignments) return []
     if (!user.active_school_year) return user.assignments
@@ -64,6 +91,7 @@ export function AuthProvider({ children }) {
   return (
     <AuthContext.Provider value={{
       user, login, logout, loading, activeAssignments, updateUser,
+      refreshUser, syncActiveSchoolYear,
       gradeScope, ...roleFlags,
     }}>
       {children}
