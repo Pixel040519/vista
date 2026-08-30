@@ -12,7 +12,7 @@ import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
-import { MANUAL_STATUSES, STUDENT_STATUSES, WITHDRAWN_STATUS_IDS, statusLabel, statusClasses } from '../utils/enrollment'
+import { MANUAL_STATUSES, STUDENT_STATUSES, NO_RECORD, WITHDRAWN_STATUS_IDS, statusLabel, statusClasses } from '../utils/enrollment'
 
 // ── School constants ──────────────────────────────────────────
 const GRADE_LEVELS = ['Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
@@ -1301,20 +1301,23 @@ export default function Students() {
                               </p>
                             </div>
                           ) : isSuperAdmin ? (
-                            <button onClick={() => setStatusTarget(s)} title="Change enrolment status"
+                            <button onClick={() => setStatusTarget(s)}
+                              title={s.status_display === NO_RECORD.id
+                                ? 'No enrolment record for this school year — set a status to create one.'
+                                : 'Change enrolment status'}
                               className={clsx(
                                 'px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap hover:ring-2 hover:ring-offset-1 hover:ring-brand-300 transition-all',
-                                statusClasses(s.enrollment_status)
+                                statusClasses(s.status_display || s.enrollment_status)
                               )}>
-                              {statusLabel(s.enrollment_status)}
+                              {statusLabel(s.status_display || s.enrollment_status)}
                             </button>
                           ) : (
                             <span title="Enrolment status is set by a super admin."
                               className={clsx(
                                 'px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap',
-                                statusClasses(s.enrollment_status)
+                                statusClasses(s.status_display || s.enrollment_status)
                               )}>
-                              {statusLabel(s.enrollment_status)}
+                              {statusLabel(s.status_display || s.enrollment_status)}
                             </span>
                           )}
                         </td>

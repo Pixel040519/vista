@@ -372,6 +372,19 @@ with. Without it, `prev` skipping gaps meant someone who attended 2024-2025, sat
 2025-2026 and was looked at from 2026-2027 still read as `enrolled` and stayed on
 every future roster.
 
+**The Students page shows it too, derived rather than stored.** `GET /api/students`
+returns `status_display`: `'none'` where the learner's snapshot says `pending` and they
+have no `student_enrollments` row for the **active** year, the stored value otherwise.
+Only `pending` is reinterpreted, because it is the only value `rolloverStudents()`
+invents — it writes `pending` both for a learner with a pending record and for one with
+no record at all, so the page showed the two as one badge and the difference was
+visible only on the Enrollment page. The badge, the status filter and `by_status` all
+read the derived value, so they agree with each other; the stored
+`students.enrollment_status` is returned untouched beside it for the status editor.
+Nothing new is written: `PATCH /:id/enrollment-status` already upserts the active
+year's record, so confirming a not-enrolled learner turns the badge into a real
+Pending or Enrolled.
+
 The principle behind the last two rows is that a year the learner did not attend means
 they left — and the test for that is whether the year has **begun**, not whether it has
 finished. The **active** year has begun: someone with no record in the year the school is

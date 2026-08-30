@@ -233,6 +233,35 @@ router.get('/parents/search', authorizeAnyAdmin, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// "Not enrolled" as the Students page shows it.
+//
+// It is not a stored value and must not become one: a learner is not enrolled for
+// a school year when they have **no `student_enrollments` row** for it, and the
+// Enrollment page has always read it that way. The snapshot cannot say it on its
+// own — `rolloverStudents()` writes 'pending' both for a learner who has a pending
+// record and for one who has no record at all, so the Students page showed the two
+// as the same Pending badge and the difference was invisible outside Enrollment.
+//
+// Deriving it keeps one source of truth. The rule is narrow on purpose: only a
+// 'pending' snapshot can be reinterpreted, because that is the only value the
+// rollover invents. Every other value was recorded about the learner and stays
+// exactly what it says — and `PATCH /:id/enrollment-status` upserts the active
+// year's record, so confirming a not-enrolled learner turns the badge into a real
+// Pending or Enrolled rather than leaving the two out of step.
+//
+// With no active school year nothing is reinterpreted: the join would match
+// nothing and every pending learner would read as not enrolled.
+const ACTIVE_SY_JOIN = `
+         LEFT JOIN student_enrollments act
+                ON act.student_id = s.id
+               AND act.school_year_id = (SELECT id FROM school_years WHERE is_active=TRUE LIMIT 1)`
+
+const STATUS_DISPLAY = `
+         CASE WHEN s.enrollment_status = 'pending'
+                   AND act.id IS NULL
+                   AND EXISTS (SELECT 1 FROM school_years WHERE is_active=TRUE)
+              THEN 'none' ELSE s.enrollment_status END`
+
 // GET /api/students
 router.get('/', async (req, res, next) => {
   try {
@@ -289,7 +318,10 @@ router.get('/', async (req, res, next) => {
     const unstatusedConditions = [...conditions]
     const unstatusedParams     = [...params]
 
-    if (enrollment_status) { params.push(enrollment_status); conditions.push(`s.enrollment_status=$${params.length}`) }
+    // Filtered on the *displayed* status rather than the column, so picking
+    // "Not enrolled" returns exactly the rows wearing that badge — and picking
+    // "Pending" no longer returns them too.
+    if (enrollment_status) { params.push(enrollment_status); conditions.push(`(${STATUS_DISPLAY}) = $${params.length}`) }
 
     // `archived=all` can leave an admin with no filters at all, and `WHERE` with
     // nothing after it is a syntax error — before this the hardcoded
@@ -305,13 +337,15 @@ router.get('/', async (req, res, next) => {
                 s.date_of_birth, s.gender, s.grade_level, s.section, s.enrollment_status,
                 s.profile_photo_url, s.home_address, s.created_at,
                 s.is_active, s.archived_at, s.archived_reason,
-                arch.full_name AS archived_by_name
+                arch.full_name AS archived_by_name,
+                (${STATUS_DISPLAY}) AS status_display
          FROM students s ${join}
          LEFT JOIN users arch ON arch.id = s.archived_by
+         ${ACTIVE_SY_JOIN}
          ${where}
          ORDER BY s.surname, s.first_name
          LIMIT $${params.length-1} OFFSET $${params.length}`, params),
-      query(`SELECT COUNT(*) FROM students s ${join} ${where}`, params.slice(0,-2))
+      query(`SELECT COUNT(*) FROM students s ${join} ${ACTIVE_SY_JOIN} ${where}`, params.slice(0,-2))
     ])
 
     // Status breakdown over the same filters *except* the status filter itself,
@@ -319,15 +353,15 @@ router.get('/', async (req, res, next) => {
     // showing their counts while one of them is selected.
     const [byStatus, archivedCount] = await Promise.all([
       query(
-        `SELECT s.enrollment_status, COUNT(*)::int AS count
-         FROM students s ${join} ${clause(unstatusedConditions)} GROUP BY 1`,
+        `SELECT (${STATUS_DISPLAY}) AS enrollment_status, COUNT(*)::int AS count
+         FROM students s ${join} ${ACTIVE_SY_JOIN} ${clause(unstatusedConditions)} GROUP BY 1`,
         unstatusedParams
       ),
       // The number on the Archived tab, counted over the shared filters only, so
       // the tab keeps its count while it is the tab you are standing on.
       isAnyAdmin(req.user.role)
         ? query(
-            `SELECT COUNT(*)::int AS n FROM students s ${join}
+            `SELECT COUNT(*)::int AS n FROM students s ${join} ${ACTIVE_SY_JOIN}
              ${clause([...sharedConditions, 's.is_active=FALSE'])}`,
             sharedParams
           )
