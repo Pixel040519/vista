@@ -312,6 +312,21 @@ const rolloverStudents = async (client, schoolYearId) => {
  *   - `status` is 'dropped' or 'transferred_out' — they stopped attending
  *   - `outcome` is 'graduated'                   — they finished the last grade
  *   - no record at all                           — never enrolled for that year
+ *   - `status` is still 'pending'                — expected, never confirmed, and
+ *                                                  the year is now over
+ *
+ * That last one is the roster's rule, not a new one: `LEFT_SQL` in
+ * `utils/rosterSql.js` has always counted a learner left `pending` when their year
+ * closed as having left, so later years' rosters already refuse to list them. The
+ * archive said otherwise, and the two disagreeing is what left a learner who never
+ * confirmed enrolment sitting on the active roll for good — on the Students page
+ * but on no roster that could explain why.
+ *
+ * It bites only where nobody confirmed the learner all year, because the guard
+ * below spares anyone with a record in the incoming year. A cohort the promotion
+ * wizard placed forward is safe for that activation; a cohort left `pending`
+ * through a whole year and never placed again is archived at the next one, which
+ * the pre-flight count in the Edit School Year modal shows before the click.
  *
  * `archived_by` is left NULL, which is how the Students page tells a row it filed
  * itself from one an admin archived by hand.
@@ -360,7 +375,7 @@ const DEPARTED_FROM = `
       WHERE s2.is_active = TRUE
         AND (
               e.outcome = 'graduated'
-           OR e.status IN ('dropped','transferred_out')
+           OR e.status IN ('dropped','transferred_out','pending')
            OR (e.id IS NULL AND $3::boolean)
         )
         AND NOT EXISTS (${IN_INCOMING_YEAR})`
@@ -445,6 +460,7 @@ const archiveDepartedStudents = async (client, incomingId, closing) => {
                   WHEN e.id IS NULL            THEN 'No enrolment record — SY ' || $4
                   WHEN e.outcome = 'graduated' THEN 'Graduated — SY ' || $4
                   WHEN e.status = 'dropped'    THEN 'Dropped — SY ' || $4
+                  WHEN e.status = 'pending'    THEN 'Enrolment never confirmed — SY ' || $4
                   ELSE                              'Transferred out — SY ' || $4
                 END AS reason
          ${DEPARTED_FROM}

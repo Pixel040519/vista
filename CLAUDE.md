@@ -470,9 +470,22 @@ left by it is backwards — a learner who graduated in 2025-2026 did not leave b
 **rewinding** and archives nobody.
 
 `archiveDepartedStudents()` takes off the roll every learner whose record in the **closing**
-year was `dropped` or `transferred_out`, carried an `outcome` of `graduated`, or **did not
-exist at all**, leaving `archived_by` NULL so the UI can tell a system archive from an
-admin's. Two guards, both load-bearing: a learner with a record in the **incoming** year is
+year was `dropped`, `transferred_out` or still `pending`, carried an `outcome` of
+`graduated`, or **did not exist at all**, leaving `archived_by` NULL so the UI can tell a
+system archive from an admin's.
+
+**`pending` is in that list because the roster already put it there.** `LEFT_SQL` counts a
+learner left `pending` when their year closed as having left — expected, never confirmed,
+and the year is over — so later years' rosters have always refused to list them. The archive
+disagreeing is what left such a learner on the active roll permanently: on the Students page,
+on no roster that could explain it, and reachable only by an admin who thought to look. The
+two now answer alike, and the archive reason says which it was (*"Enrolment never confirmed —
+SY 2025-2026"*). It reaches only learners nobody confirmed **all year**, since the first guard
+below spares anyone with a record in the incoming year — so a cohort the wizard has placed
+forward is safe, while a cohort left `pending` through a year and never placed again is
+archived at the next activation, in the number the pre-flight shows before the click.
+
+Two guards, both load-bearing: a learner with a record in the **incoming** year is
 never archived (the promotion wizard writes exactly such a row for everyone it places, so
 without this activation would empty the roster the wizard had just filled), and the
 **no-record** branch is skipped when the closing year holds no `student_enrollments` rows at
