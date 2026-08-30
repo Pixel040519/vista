@@ -294,11 +294,15 @@ into Grade 1, but cannot place a Kinder learner into Grade 4. Note this also mea
 attendance question the status column answers, which is why it is not a contradiction of the
 status rule above — but it is the one path by which a scoped admin still changes that column.
 
-The Students page follows the same rule — `PATCH /api/students/:id/enrollment-status` is
-`authorizeSuperAdmin` and its status badge is only clickable for `super_admin`. It is the
-single-learner path to the same column, so leaving it open would have made the rule a
-speed bump. Reading status stays open to everyone: the badge, the filter and the
-`by_status` breakdown are all unchanged.
+**The Students page does not write status at all any more.** Its badge is a plain
+read-only chip for every role, `super_admin` included. Enrolment status is a fact
+*about a school year*, and that page carries no year — it only ever showed the active
+one's — so setting it there answered a per-year question on a page that cannot ask it.
+Status is set on the Enrollment page, which is scoped to a year by construction. The
+endpoint behind the old badge, `PATCH /api/students/:id/enrollment-status`
+(`authorizeSuperAdmin`, writes the mirror and the active year's record in one
+transaction), still exists but nothing in the web app calls it. Reading status is
+unchanged and open to everyone: the badge, the filter and the `by_status` breakdown.
 
 **A grade level that disagrees with an outcome is confirmed, not blocked.** The Enrollment
 page checks a drafted grade level against whichever outcome bears on the row — the row's
@@ -381,9 +385,9 @@ no record at all, so the page showed the two as one badge and the difference was
 visible only on the Enrollment page. The badge, the status filter and `by_status` all
 read the derived value, so they agree with each other; the stored
 `students.enrollment_status` is returned untouched beside it for the status editor.
-Nothing new is written: `PATCH /:id/enrollment-status` already upserts the active
-year's record, so confirming a not-enrolled learner turns the badge into a real
-Pending or Enrolled.
+Nothing new is written, and nothing on that page writes it: the badge is read-only,
+so a not-enrolled learner becomes a real Pending or Enrolled by being given a record
+on the Enrollment page.
 
 The principle behind the last two rows is that a year the learner did not attend means
 they left — and the test for that is whether the year has **begun**, not whether it has
@@ -622,6 +626,6 @@ Roles stored in `users.role` (enum constraint: `super_admin`, `admin_ece`, `admi
 - **teacher** — scoped to `activeAssignments` (from `/api/auth/me`, filtered to the active SY). Teacher-facing pages (Students, Attendance, Score Entry, Behavior, ECE Competency) use a "Class" dropdown filtered to assigned sections. Risk Overview, the "In Your Class" card on Student Detail, and TeacherDashboard all draw teacher-scoped numbers from `/api/ai/class-health/all` — a single source of truth for teacher-scoped band numbers.
 - **parent** — limited access; students endpoint filters to linked students via `parent_student`.
 
-Both scoped admins keep the **placement** half of enrolment work within their grade scope — which grade level and section a learner sits in. **Enrolment status is `super_admin`'s**, on both surfaces that write it: the Enrollment page's Status column is read-only and `PUT /api/enrollment` refuses a changed status, and the Students page's badge is read-only with `PATCH /api/students/:id/enrollment-status` gated too. See "Enrollment & school-year rollover".
+Both scoped admins keep the **placement** half of enrolment work within their grade scope — which grade level and section a learner sits in. **Enrolment status is `super_admin`'s**, on both surfaces that write it: the Enrollment page's Status column is read-only and `PUT /api/enrollment` refuses a changed status, and the Students page no longer writes status at all — its badge is a read-only chip for every role, including `super_admin`, since that page carries no school year to set a per-year fact against. See "Enrollment & school-year rollover".
 
 **Scoped-admin enforcement**: every GET that returns students or student-derived rows filters by `gradeScopeForRole(req.user.role)`. Mutations on grade-scoped rows (students, subjects, sections, grading, guardians, QR, behavior-admin queries) call `enforceGradeScope(req, grade_level)` which throws 403 out-of-scope. Account CRUD: scoped admins see only teachers whose active-SY assignments fall within their scope (or no active-SY assignments yet); historical out-of-scope assignments are preserved on edit/delete.

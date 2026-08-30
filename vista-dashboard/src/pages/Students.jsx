@@ -12,7 +12,7 @@ import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
-import { MANUAL_STATUSES, STUDENT_STATUSES, NO_RECORD, WITHDRAWN_STATUS_IDS, statusLabel, statusClasses } from '../utils/enrollment'
+import { STUDENT_STATUSES, NO_RECORD, statusLabel, statusClasses } from '../utils/enrollment'
 
 // ── School constants ──────────────────────────────────────────
 const GRADE_LEVELS = ['Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
@@ -821,101 +821,9 @@ function ArchiveConfirm({ student, archiving, onConfirm, onClose }) {
   )
 }
 
-// ── Enrolment Status ──────────────────────────────────────────
-//
-// Changing status here writes the active school year's enrolment record too, so
-// the roster and the year-by-year history stay in step. Only a learner marked
-// `enrolled` appears on a teacher's class list, which is why confirming a
-// pending learner matters as much as recording one who left.
-//
-// Attendance only. 'Graduated' is a year-end outcome earned from results, so the
-// Year-End Promotion wizard is the only thing that records one.
-function StatusChange({ student, onConfirm, onClose }) {
-  const [status, setStatus]   = useState(student.enrollment_status || 'enrolled')
-  const [remarks, setRemarks] = useState('')
-  const [saving, setSaving]   = useState(false)
-
-  const leaving = WITHDRAWN_STATUS_IDS.includes(status)
-  const unchanged = status === student.enrollment_status
-  // A graduate's current standing is not on the list below, so nothing is
-  // selected until the admin picks something — which would re-enrol them.
-  const wasGraduated = student.enrollment_status === 'graduated'
-
-  const handle = async () => {
-    setSaving(true)
-    try { await onConfirm({ status, remarks: remarks.trim() || undefined }) }
-    finally { setSaving(false) }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="p-4 bg-slate-50 rounded-xl flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full bg-brand-100 flex items-center justify-center font-bold text-brand-700">
-          {nameInitial(student)}
-        </div>
-        <div>
-          <p className="font-semibold text-slate-800">{formatName(student)}</p>
-          <p className="text-xs text-slate-500">
-            {student.grade_level}{student.section ? ` — ${student.section}` : ''} · LRN {student.lrn}
-          </p>
-        </div>
-      </div>
-
-      {wasGraduated && (
-        <div className="p-3 bg-brand-50 border border-brand-200 rounded-xl text-xs text-brand-800">
-          This learner is recorded as <strong>Graduated</strong> in Year-End Promotion. Graduation is not
-          set here &mdash; choosing a status below would put them back on the school&rsquo;s books.
-        </div>
-      )}
-
-      <div className="space-y-2">
-        {MANUAL_STATUSES.map(st => (
-          <label key={st.id}
-            className={clsx(
-              'flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors',
-              status === st.id ? 'border-brand-400 bg-brand-50' : 'border-slate-200 hover:bg-slate-50'
-            )}>
-            <input type="radio" name="enrollment-status" className="mt-0.5"
-              checked={status === st.id} onChange={() => setStatus(st.id)}/>
-            <span>
-              <span className="block text-sm font-medium text-slate-800">{st.label}</span>
-              <span className="block text-xs text-slate-500">{st.description}</span>
-            </span>
-          </label>
-        ))}
-      </div>
-
-      {leaving && (
-        <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">
-            Reason <span className="text-slate-400 font-normal">(optional, kept on the record)</span>
-          </label>
-          <input className="input" value={remarks} maxLength={500}
-            onChange={e => setRemarks(e.target.value)}
-            placeholder="e.g. Moved to Cebu"/>
-        </div>
-      )}
-
-      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
-        {status === 'enrolled'
-          ? 'This learner will appear on their teachers’ class lists for attendance, score entry and competency ratings.'
-          : 'This learner will be hidden from teachers’ class lists. Their grades, attendance and behavior logs are kept.'}
-      </div>
-
-      <div className="flex gap-3">
-        <button onClick={onClose} className="btn-secondary flex-1">Cancel</button>
-        <button onClick={handle} disabled={saving || unchanged}
-          className="btn-primary flex-1 justify-center disabled:opacity-50 disabled:cursor-not-allowed">
-          {saving ? 'Saving...' : 'Save status'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
 // ── Main Page ─────────────────────────────────────────────────
 export default function Students() {
-  const { user, activeAssignments, isAnyAdmin, isSuperAdmin, isTeacher, gradeScope } = useAuth()
+  const { user, activeAssignments, isAnyAdmin, isTeacher, gradeScope } = useAuth()
   const isAdmin  = isAnyAdmin
   const assignments = activeAssignments
 
@@ -1030,7 +938,6 @@ export default function Students() {
   const [editGuardians, setEditGuardians] = useState(null)
   // `{ student, archiving }` — one target for both directions of the same act.
   const [archiveTarget, setArchiveTarget] = useState(null)
-  const [statusTarget, setStatusTarget]   = useState(null)
 
   // Load sections for the filter bar when grade changes (admin only)
   useEffect(() => {
@@ -1096,16 +1003,6 @@ export default function Students() {
     await studentApi.update(editTarget.id, data)
     toast.success('Student information updated.')
     setEditTarget(null); fetchStudents()
-  }
-
-  const handleStatusChange = async (payload) => {
-    try {
-      const res = await studentApi.setEnrollmentStatus(statusTarget.id, payload)
-      toast.success(res.data.message)
-      setStatusTarget(null); fetchStudents(pagination.page)
-    } catch (e) {
-      toast.error(e?.response?.data?.error || 'Failed to change status.')
-    }
   }
 
   const handleArchive = async (reason) => {
@@ -1337,19 +1234,15 @@ export default function Students() {
                                   : 'Date unknown'}
                               </p>
                             </div>
-                          ) : isSuperAdmin ? (
-                            <button onClick={() => setStatusTarget(s)}
-                              title={s.status_display === NO_RECORD.id
-                                ? 'No enrolment record for this school year — set a status to create one.'
-                                : 'Change enrolment status'}
-                              className={clsx(
-                                'px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap hover:ring-2 hover:ring-offset-1 hover:ring-brand-300 transition-all',
-                                statusClasses(s.status_display || s.enrollment_status)
-                              )}>
-                              {statusLabel(s.status_display || s.enrollment_status)}
-                            </button>
                           ) : (
-                            <span title="Enrolment status is set by a super admin."
+                            // Read-only for everyone, super admin included. Enrolment
+                            // status belongs to a school year, and this page only ever
+                            // showed the active one's — so editing it here answered a
+                            // per-year question on a page with no year on it. The
+                            // Enrollment page is where it is set.
+                            <span title={s.status_display === NO_RECORD.id
+                                   ? 'No enrolment record for this school year. Set one on the Enrollment page.'
+                                   : 'Enrolment status is set on the Enrollment page.'}
                               className={clsx(
                                 'px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap',
                                 statusClasses(s.status_display || s.enrollment_status)
@@ -1474,14 +1367,6 @@ export default function Students() {
               <button onClick={() => setEditGuardians(null)} className="btn-secondary w-full justify-center">Done</button>
             </div>
           </div>
-        )}
-      </Modal>
-
-      <Modal open={!!statusTarget} onClose={() => setStatusTarget(null)} title="Enrolment Status">
-        {statusTarget && (
-          <StatusChange student={statusTarget}
-            onConfirm={handleStatusChange}
-            onClose={() => setStatusTarget(null)}/>
         )}
       </Modal>
 

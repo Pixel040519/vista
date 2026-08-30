@@ -91,7 +91,6 @@ export const studentApi = {
   updateGuardian: (id, gid, d) => api.put(`/students/${id}/guardians/${gid}`, d),
   removeGuardian: (id, gid) => api.delete(`/students/${id}/guardians/${gid}`),
   setAcademicAccess: (id, data) => api.patch(`/students/${id}/academic-access`, data),
-  setEnrollmentStatus: (id, data) => api.patch(`/students/${id}/enrollment-status`, data),
 }
 
 // ── Attendance ────────────────────────────────────────────────
