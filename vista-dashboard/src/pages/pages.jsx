@@ -548,17 +548,23 @@ export function Grades() {
             ))}
           </div>
 
+          {/* Sheet header — identifies the class for BOTH tabs. It lived inside the
+              Grading Sheet branch, so switching to Grade Summary dropped the only
+              caption saying which subject, section and teacher the marks belong to,
+              on the one view whose columns are weighted category names that read the
+              same for every subject. `data` comes from `/grades/by-subject`, which is
+              loaded whenever the filters are complete regardless of the open tab, so
+              the summary needs no request of its own to say what it is showing. */}
+          <div className="px-5 pt-4 pb-3 border-b border-slate-200">
+            <div className="flex flex-wrap items-center justify-between gap-y-2 text-[11px] text-slate-500 uppercase tracking-wider">
+              <span><span className="font-semibold">Learning Area:</span> <span className="normal-case text-slate-700 text-xs font-medium">{data.subject_name}</span></span>
+              <span><span className="font-semibold">Grade & Section:</span> <span className="normal-case text-slate-700 text-xs font-medium">{gradeLevel} - {section}</span></span>
+              <span><span className="font-semibold">Subject Teacher:</span> <span className="normal-case text-slate-700 text-xs font-medium">{data.teacher_name || '—'}</span></span>
+            </div>
+          </div>
+
           {activeTab === 'grading' ? (
             <>
-              {/* Sheet header */}
-              <div className="px-5 pt-4 pb-3 border-b border-slate-200">
-                <div className="flex flex-wrap items-center justify-between gap-y-2 text-[11px] text-slate-500 uppercase tracking-wider">
-                  <span><span className="font-semibold">Learning Area:</span> <span className="normal-case text-slate-700 text-xs font-medium">{data.subject_name}</span></span>
-                  <span><span className="font-semibold">Grade & Section:</span> <span className="normal-case text-slate-700 text-xs font-medium">{gradeLevel} - {section}</span></span>
-                  <span><span className="font-semibold">Subject Teacher:</span> <span className="normal-case text-slate-700 text-xs font-medium">{data.teacher_name || '—'}</span></span>
-                </div>
-              </div>
-
               {data.students.length === 0 ? (
                 <EmptyState icon={BookOpen} title="No students enrolled" description="No students found in this class." />
               ) : (
