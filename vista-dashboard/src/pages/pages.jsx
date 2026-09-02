@@ -627,7 +627,11 @@ export function Grades() {
             </>
           ) : (
             <>
-              {/* Quarter selector */}
+              {/* Period selector — `grading.abbr(q)` renders Q1..Q4 on a four-quarter
+                  year and T1..T3 on a three-term one. It was a literal `Q{q}`, the only
+                  period label on the page that did not ask the school year what its
+                  periods are called, so a 3T year read "Q1 Q2 Q3" beside a Grading Sheet
+                  correctly headed 1st/2nd/3rd. */}
               <div className="px-5 pt-4 pb-3 border-b border-slate-200 flex items-center gap-2">
                 <span className="text-xs font-medium text-slate-500 mr-1">{grading.periodNoun}:</span>
                 {grading.periods.map(q => (
@@ -637,7 +641,7 @@ export function Grades() {
                         ? 'bg-brand-500 text-white'
                         : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                     )}>
-                    Q{q}
+                    {grading.abbr(q)}
                   </button>
                 ))}
               </div>
@@ -705,7 +709,7 @@ export function Grades() {
                 </div>
               ) : (
                 <div className="py-8">
-                  <EmptyState icon={BookOpen} title="No scores recorded" description="No score data found for this quarter." />
+                  <EmptyState icon={BookOpen} title="No scores recorded" description={`No score data found for this ${grading.periodNoun.toLowerCase()}.`} />
                 </div>
               )}
             </>

@@ -381,6 +381,27 @@ export function resolveGradingPolicy(schoolYearRow, gradeLevel, assessmentRow) {
 }
 
 /**
+ * The **active** school year's policy, taken from the auth payload.
+ *
+ * `/auth/me` and `/login` snapshot the active year's `period_model` and
+ * `grading_policy` onto the user (see `auth.routes.js`), so any surface that only
+ * ever shows the active year — the dashboard cards, a teacher's own class signals —
+ * can resolve its period labels with no request of its own. Surfaces that let the
+ * user pick a year must keep passing that year's row to `resolveGradingPolicy`
+ * instead; this one always answers for whatever year is running now.
+ *
+ * It exists so callers stop handing the whole `user` object to
+ * `resolveGradingPolicy` and relying on it happening to read two matching keys.
+ */
+export function gradingFromAuth(user, gradeLevel, assessmentRow) {
+  return resolveGradingPolicy(
+    user ? { period_model: user.period_model, grading_policy: user.grading_policy } : null,
+    gradeLevel,
+    assessmentRow
+  )
+}
+
+/**
  * Average the period grades into a final grade.
  * DO 015 §52: the average of the term grades, rounded to a whole number.
  * Missing periods are skipped so a partial year still reports meaningfully.

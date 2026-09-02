@@ -2,12 +2,18 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Sparkles, ChevronRight } from 'lucide-react'
 import { eceApi } from '../../api/client'
+import { useAuth } from '../../context/AuthContext'
+import { gradingFromAuth } from '../../utils/grading'
 
 const ECE_GRADES = ['Kinder']
 
 import { RATING_BAR_CLASSES } from '../../utils/ratingUi'
 
 export default function AdminEceOverviewCard() {
+  const { user } = useAuth()
+  // The card only ever reports the active year, and the auth payload already
+  // carries that year's period model — so no school-year request of its own.
+  const grading = gradingFromAuth(user)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -45,7 +51,9 @@ export default function AdminEceOverviewCard() {
           <Sparkles size={16} className="text-purple-500" />
           <div>
             <h3 className="text-sm font-semibold text-slate-800">ECE Competency Overview</h3>
-            <p className="text-xs text-slate-400">Rating progress · 4 ECE levels · Q{quarter}</p>
+            <p className="text-xs text-slate-400">
+              Rating progress · {byGradeLevel.length} ECE level{byGradeLevel.length !== 1 ? 's' : ''} · {grading.abbr(quarter)}
+            </p>
           </div>
         </div>
         <Link

@@ -124,6 +124,15 @@ Both are columns on `school_years`, and every computation resolves them through
 Defaults are `4Q`/`DO8_2015`, so archived years keep reproducing the exact grades
 that were issued to parents — **no historical data is re-transmuted**.
 
+**The period's *name* is as much a per-year fact as the count.** A `3T` year has terms,
+so every surface that names one reads `T1`/`T2`/`T3` and "this term" — never `Q1`, never
+"quarter". `resolveGradingPolicy()` returns `periodNoun`, `ordinals`, `abbr(p)` and
+`label(p)` for exactly this, and UI code must render through them rather than writing the
+letter out. The failure mode is quiet: `periods` is resolved correctly, so the right
+*number* of controls appears with the wrong letter on them, and a three-term year showed
+"Q1 Q2 Q3" beside sheet columns correctly headed 1st/2nd/3rd. When auditing for it, grep
+both `` Q{ `` and `` Q${ `` — half of the offenders were inside template literals.
+
 Both settings are **frozen once a school year is archived** (neither `is_active` nor
 `is_upcoming`): `PUT /api/curriculum/school-years/:id` rejects a real change with 409
 and the Edit School Year modal disables the two selects. The model is therefore chosen

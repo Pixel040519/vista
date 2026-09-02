@@ -2,10 +2,15 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Sparkles, ChevronRight } from 'lucide-react'
 import { eceApi } from '../../api/client'
+import { useAuth } from '../../context/AuthContext'
+import { gradingFromAuth } from '../../utils/grading'
 
 import { RATING_BAR_CLASSES } from '../../utils/ratingUi'
 
 export default function EceCompetencyCard() {
+  const { user } = useAuth()
+  // Active year only — same reasoning as AdminEceOverviewCard.
+  const grading = gradingFromAuth(user)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -55,7 +60,7 @@ export default function EceCompetencyCard() {
           <Sparkles size={16} className="text-purple-500" />
           <div>
             <h3 className="text-sm font-semibold text-slate-800">ECE Competency Tracker</h3>
-            <p className="text-xs text-slate-400">Rating progress · Q{quarter}</p>
+            <p className="text-xs text-slate-400">Rating progress · {grading.abbr(quarter)}</p>
           </div>
         </div>
         <Link to="/ece-competency" className="text-xs text-purple-600 font-medium hover:text-purple-700 flex items-center gap-1">

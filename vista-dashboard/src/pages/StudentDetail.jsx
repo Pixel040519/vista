@@ -1111,7 +1111,7 @@ export default function StudentDetail() {
                   <Baby size={14} className="text-brand-600 mt-0.5 flex-shrink-0" />
                   <p>
                     <span className="font-semibold">ECE signals</span> replace grade-based predictions.
-                    Competency ratings reflect the latest quarter with records.
+                    Competency ratings reflect the latest {activeGrading.periodNoun.toLowerCase()} with records.
                   </p>
                 </div>
 
@@ -1149,8 +1149,8 @@ export default function StudentDetail() {
                                 {competency.total_skills === 0
                                   ? 'No competency skills defined for this grade level yet.'
                                   : competency.quarter
-                                    ? `${competency.rated} of ${competency.total_skills} skills rated · Q${competency.quarter}`
-                                    : `${competency.rated} of ${competency.total_skills} skills rated · no quarter yet`}
+                                    ? `${competency.rated} of ${competency.total_skills} skills rated · ${activeGrading.abbr(competency.quarter)}`
+                                    : `${competency.rated} of ${competency.total_skills} skills rated · no ${activeGrading.periodNoun.toLowerCase()} yet`}
                               </p>
                               {competency.rated > 0 && (
                                 <>
@@ -1422,13 +1422,13 @@ export default function StudentDetail() {
                           <p className="text-xs text-slate-500 mt-0.5">
                             {metrics.academic.sample_count === 0
                               ? 'No grades recorded yet this school year.'
-                              : `Based on ${metrics.academic.sample_count} ${metrics.academic.sample_count === 1 ? 'subject' : 'subjects'} · latest quarter each`}
+                              : `Based on ${metrics.academic.sample_count} ${metrics.academic.sample_count === 1 ? 'subject' : 'subjects'} · latest ${activeGrading.periodNoun.toLowerCase()} each`}
                           </p>
                           {metrics.academic.per_subject.length > 0 && (
                             <div className="mt-1.5 flex flex-wrap gap-1">
                               {metrics.academic.per_subject.map(p => (
                                 <span key={p.subject_name} className="text-[11px] font-mono bg-white text-slate-600 px-1.5 py-0.5 rounded">
-                                  {p.subject_name}: {p.grade} (Q{p.quarter})
+                                  {p.subject_name}: {p.grade} ({activeGrading.abbr(p.quarter)})
                                 </span>
                               ))}
                             </div>
