@@ -354,7 +354,20 @@ have left, judged from their most recent earlier record:
 | **not enrolled** | no record at all for a school year that has **started** — archived or active |
 | **`pending` when that year closed** | expected, never confirmed, and the year is over |
 
-**Graduating is not one of them.** `outcome = 'graduated'` drops a learner out of later
+**Joining late is the mirror of it**, and needs its own rule (`JOINED_SQL`). A learner
+added today has one record, for the active year, and nothing earlier — which the rule above
+correctly reads as "new, not absent" and so lists them on this year and every year to come.
+Read backwards, though, the same reasoning put them on the roster of a year that closed
+before they existed, marked **Not enrolled** as if someone had forgotten to enrol them.
+`prev` answers this too: a record from an earlier year means they were already here, and its
+absence means one of two things — **no records anywhere**, a learner from before enrolment
+history began, who is never hidden for exactly the reason above; or **records, but none
+earlier**, which is someone who joined in this year or a later one. A year a learner
+predates is not a gap in their enrolment for an admin to fill in. Like graduating, this is
+not lifted by `include_left`: that flag is for finding a learner who left so they can be
+re-enrolled, and a learner added last week did not leave SY 2024-2025.
+
+**Graduating is not one of them either.** `outcome = 'graduated'` drops a learner out of later
 years too, but on its own rule (`COMPLETED_SQL`) and with a different strength. Two
 reasons it is not folded in with the three above. A graduate did not leave, they
 *finished* — the opposite of transferring out or not coming back — and grouping them
@@ -430,10 +443,10 @@ reason *"No enrolment record — SY 2025-2026"* — and that flag then hid them 
 correct it. Archived learners are **marked**, via `is_archived` / `archived_reason` on the
 row, never hidden.
 
-`LEFT_SQL` and `COMPLETED_SQL` are the whole filter, and they already ask the per-year
-question properly — from the learner's most recent record *earlier* than the year on
-screen, with `e.id IS NOT NULL` overriding both, so a record for the year always wins. The
-two results that matter sit either side of one year:
+`LEFT_SQL`, `COMPLETED_SQL` and `JOINED_SQL` are the whole filter, and they already ask the
+per-year question properly — from the learner's most recent record *earlier* than the year on
+screen, with `e.id IS NOT NULL` overriding all three, so a record for the year always wins.
+The results that matter sit either side of one year:
 
 | | SY 2025-2026 | SY 2026-2027 |
 |---|---|---|
@@ -441,8 +454,9 @@ two results that matter sit either side of one year:
 | graduated in 2025-2026 | listed, `graduated` | absent |
 | declared "Not enrolled" in 2025-2026 | listed, **Not enrolled** | absent |
 | enrolled in 2025-2026, no 2026-2027 record | listed, `enrolled` | listed, **Not enrolled** |
+| added in 2026-2027 | absent — they were not here yet | listed, `enrolled` |
 
-The last row is the distinction the whole rule turns on: a learner who was present and then
+The fourth row is the distinction the whole rule turns on: a learner who was present and then
 has a gap is a gap to fill in, while one who had already left stays gone. Neither is decided
 by whether they happen to be archived now.
 

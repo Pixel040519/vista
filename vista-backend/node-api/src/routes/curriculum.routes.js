@@ -9,7 +9,7 @@ const { gradeScopeForRole, canManageGrade, isScopedAdmin, isSuperAdmin } = requi
 const { RATING_SCALES, resolveAssessment } = require('../utils/grading')
 const { loadAssessmentRows } = require('../utils/assessmentConfig')
 // The same predicate the Enrollment roster filters on — see `utils/rosterSql.js`.
-const { PREV_JOIN, BELONGS_TO_YEAR } = require('../utils/rosterSql')
+const { PREV_JOIN, BELONGS_TO_YEAR, withStudentAlias } = require('../utils/rosterSql')
 
 // Look up a row's grade_level from one of the curriculum tables and enforce scope.
 const assertCurriculumRowInScope = async (req, table, id) => {
@@ -431,10 +431,10 @@ const restoreReturningStudents = async (client, incoming) => {
            FROM students s2
            LEFT JOIN student_enrollments e
                   ON e.student_id = s2.id AND e.school_year_id = $1
-           ${PREV_JOIN.replace('s.id', 's2.id')}
+           ${withStudentAlias(PREV_JOIN, 's2')}
           WHERE s2.is_active = FALSE
             AND s2.archived_by IS NULL
-            AND ${BELONGS_TO_YEAR}
+            AND ${withStudentAlias(BELONGS_TO_YEAR, 's2')}
        ) d
       WHERE d.id = s.id
       RETURNING s.id`,

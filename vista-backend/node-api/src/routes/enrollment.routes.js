@@ -21,7 +21,7 @@ const { assertSectionsExist } = require('../utils/sections')
 const { syStatus, isArchivedYear } = require('../utils/schoolYear')
 // One definition of "was this learner part of this school year", shared with the
 // activation in `curriculum.routes.js` so the roster and the roll cannot disagree.
-const { PREV_JOIN, LEFT_SQL, COMPLETED_SQL, NOT_LEFT, NOT_COMPLETED } = require('../utils/rosterSql')
+const { PREV_JOIN, LEFT_SQL, COMPLETED_SQL, NOT_LEFT, NOT_COMPLETED, HAS_JOINED } = require('../utils/rosterSql')
 const {
   ENROLLMENT_STATUSES, OUTCOMES, PROMOTION_OUTCOMES, MANUAL_STATUS_IDS,
   NO_RECORD_ID, SELECTABLE_STATUS_IDS,
@@ -305,6 +305,11 @@ const resolveSYId = async (sy_id) => {
 // A **graduate** is excluded on a separate rule (`COMPLETED_SQL`) that
 // `include_left` does not lift. They did not leave, they finished, and there is
 // nothing in a later year to re-enrol them into.
+//
+// And a learner is excluded from the years that ran **before** they joined
+// (`JOINED_SQL`), which is the same argument pointed backwards: without it, adding
+// a learner today listed them on every closed year as "Not enrolled", as though
+// their enrolment for SY 2024-2025 were an oversight rather than an impossibility.
 router.get('/', async (req, res, next) => {
   try {
     const { grade_level, section, status, outcome, q } = req.query
@@ -382,6 +387,14 @@ router.get('/', async (req, res, next) => {
     const notCompleted = NOT_COMPLETED
     conditions.push(notCompleted)
 
+    // And a learner who had not joined yet is filtered out of the years that ran
+    // before them — see JOINED_SQL. `include_left` does not lift this one either:
+    // the toggle is for finding someone who left so they can be re-enrolled, and a
+    // learner added last week did not leave a school year that closed in 2024.
+    // Their earliest record is the year they joined in, which lists them normally.
+    const hasJoined = HAS_JOINED
+    conditions.push(hasJoined)
+
     // A closed year with no filters leaves nothing to constrain on, and `WHERE`
     // with nothing after it is a syntax error.
     const clause = (arr) => arr.length ? `WHERE ${arr.join(' AND ')}` : ''
@@ -439,7 +452,7 @@ router.get('/', async (req, res, next) => {
            FROM students s
            LEFT JOIN student_enrollments e ON e.student_id=s.id AND e.school_year_id=$1
            ${PREV_JOIN}
-          ${clause([...scopeConditions, notCompleted, notLeft])}
+          ${clause([...scopeConditions, notCompleted, hasJoined, notLeft])}
           GROUP BY 1`,
         scopeParams
       ),
@@ -460,7 +473,7 @@ router.get('/', async (req, res, next) => {
            FROM students s
            LEFT JOIN student_enrollments e ON e.student_id=s.id AND e.school_year_id=$1
            ${PREV_JOIN}
-          ${clause([...scopeConditions, notCompleted, `NOT ${notLeft}`])}`,
+          ${clause([...scopeConditions, notCompleted, hasJoined, `NOT ${notLeft}`])}`,
         scopeParams
       ),
     ])

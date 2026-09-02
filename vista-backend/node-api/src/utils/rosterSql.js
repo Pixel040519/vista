@@ -76,16 +76,65 @@ const LEFT_SQL = `(
 const COMPLETED_SQL = `(prev.outcome IS NOT DISTINCT FROM 'graduated')`
 
 /**
- * The two exclusions as the roster applies them, each escaped by
+ * "Had joined the school by this year" — the mirror image of `LEFT_SQL`.
+ *
+ * A roster that only asks who **left** lists every learner the school has ever
+ * had on every year it has ever run. Adding a learner today gave them one record,
+ * for the active year, and nothing earlier — which `LEFT_SQL` reads as "new, not
+ * absent" and so shows them, correctly, on this year and every year to come. But
+ * the same reasoning ran backwards too, and put a learner enrolled this week on
+ * the roster of a school year that closed before they existed, listed as **Not
+ * enrolled** as though someone had forgotten to enrol them.
+ *
+ * `prev` answers it: a record from an **earlier** year is the learner having
+ * already been here. Its absence means one of two things, and only the second is
+ * a joiner —
+ *
+ *   - **no records at all** — a learner from before enrolment history began (it
+ *     starts at the year active when `2026_08_21_student_enrollments.sql` ran).
+ *     Nothing says when they joined, so they are never hidden, exactly as
+ *     `LEFT_SQL` never hides them.
+ *   - **records, but none earlier** — they joined in this year or a later one.
+ *     Before that they were not a learner here, and a year they predate is not a
+ *     gap in their enrolment for an admin to fill in.
+ *
+ * `e.id IS NOT NULL` still overrides, so the year they *were* added in lists them
+ * normally, and so does any year someone deliberately enrolled them into.
+ */
+const JOINED_SQL = `(
+  prev.status IS NOT NULL
+  OR NOT EXISTS (SELECT 1 FROM student_enrollments je WHERE je.student_id = s.id)
+)`
+
+/**
+ * The three exclusions as the roster applies them, each escaped by
  * `e.id IS NOT NULL` — **a record for the year in question always wins**, whatever
  * happened before or since.
  */
 const NOT_LEFT = `(e.id IS NOT NULL OR ${LEFT_SQL})`
 const NOT_COMPLETED = `(e.id IS NOT NULL OR NOT ${COMPLETED_SQL})`
+const HAS_JOINED = `(e.id IS NOT NULL OR ${JOINED_SQL})`
 
-/** Both together: "belongs to this school year". */
-const BELONGS_TO_YEAR = `(${NOT_LEFT} AND ${NOT_COMPLETED})`
+/** All three together: "belongs to this school year". */
+const BELONGS_TO_YEAR = `(${NOT_LEFT} AND ${NOT_COMPLETED} AND ${HAS_JOINED})`
+
+/**
+ * Re-point a fragment at a different `students` alias.
+ *
+ * Every fragment above is written against `s`, which is the alias each caller
+ * happens to use — except the activation's `UPDATE students s ... FROM (SELECT
+ * s2.id FROM students s2 ...)`, where `s` is already taken by the row being
+ * written. That call site used to fix up `PREV_JOIN` with a bare `.replace()`,
+ * which rewrites only the **first** match; the moment a second fragment mentioned
+ * `s.id` — `JOINED_SQL` does — the leftover would have silently correlated to the
+ * outer `s` and quietly answered a different question. Global, and applied to
+ * every fragment a query uses, is the only safe form.
+ */
+const withStudentAlias = (sql, alias) =>
+  alias === 's' ? sql : sql.replace(/\bs\.id\b/g, `${alias}.id`)
 
 module.exports = {
-  PREV_JOIN, LEFT_SQL, COMPLETED_SQL, NOT_LEFT, NOT_COMPLETED, BELONGS_TO_YEAR,
+  PREV_JOIN, LEFT_SQL, COMPLETED_SQL, JOINED_SQL,
+  NOT_LEFT, NOT_COMPLETED, HAS_JOINED, BELONGS_TO_YEAR,
+  withStudentAlias,
 }
