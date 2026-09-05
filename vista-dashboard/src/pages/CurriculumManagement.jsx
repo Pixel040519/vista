@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import {
   Plus, Pencil, Trash2, BookOpen, LayoutGrid,
   ChevronDown, ChevronRight, X, Check, CalendarDays,
-  ChevronDown as ChevDown, Copy, SlidersHorizontal, ClipboardList, Lock, Users
+  ChevronDown as ChevDown, Copy, SlidersHorizontal, ClipboardList, Lock, Users,
+  GraduationCap, Search
 } from 'lucide-react'
 import { curriculumApi } from '../api/client'
 import { LoadingSpinner, Modal } from '../components/UI'
@@ -48,8 +49,13 @@ const GRADE_COLORS = {
   'Grade 6':     { bg:'bg-orange-50',  border:'border-orange-200',  badge:'bg-orange-100 text-orange-700',  dot:'bg-orange-400'  },
 }
 
+// "Surname, First" for a teacher record. Users carry a `full_name`, but the
+// house convention everywhere else is to compose from the parts.
+const teacherLabel = (t) =>
+  t ? `${t.surname}, ${t.first_name}${t.middle_name ? ` ${t.middle_name[0]}.` : ''}` : ''
+
 // ── Inline editable item ──────────────────────────────────────
-function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
+function EditableItem({ item, onSave, onDelete, type, onGradingConfig, onAdviser }) {
   const [editing, setEditing]   = useState(false)
   const [name, setName]         = useState(item.name)
   const [saving, setSaving]     = useState(false)
@@ -109,6 +115,26 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
             <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-brand-400" title="Grading structure configured" />
           )}
         </div>
+        {/* The adviser is a second line rather than a chip beside the name:
+            it is a person's name, so it needs the width, and "No adviser" has
+            to be as visible as a filled one — an unadvised section is the state
+            an admin is looking for. */}
+        {type === 'section' && onAdviser && (
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <GraduationCap size={11} className="flex-shrink-0 text-slate-300"/>
+            {item.adviser ? (
+              <>
+                <span className="text-xs text-slate-500 truncate">{teacherLabel(item.adviser)}</span>
+                {item.adviser.is_active === false && (
+                  <span className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700"
+                    title="This teacher's account has been deactivated.">Inactive</span>
+                )}
+              </>
+            ) : (
+              <span className="text-xs text-slate-300 italic">No adviser</span>
+            )}
+          </div>
+        )}
       </div>
       <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-2">
         {type === 'subject' && onGradingConfig && (
@@ -116,6 +142,15 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig }) {
             className="p-1.5 rounded-lg text-slate-400 hover:text-brand-500 hover:bg-brand-50 transition-colors"
             title="Configure grading structure">
             <SlidersHorizontal size={12}/>
+          </button>
+        )}
+        {/* Same slot the subjects' grading button occupies — the two types are
+            mutually exclusive, so the row keeps one shape. */}
+        {type === 'section' && onAdviser && (
+          <button onClick={() => onAdviser(item)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-brand-500 hover:bg-brand-50 transition-colors"
+            title={item.adviser ? 'Change class adviser' : 'Assign a class adviser'}>
+            <GraduationCap size={12}/>
           </button>
         )}
         <button onClick={() => setEditing(true)}
@@ -168,7 +203,7 @@ function AddItemForm({ gradeLevel, type, syId, onAdd, onClose }) {
 }
 
 // ── Grade Level Card ──────────────────────────────────────────
-function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradingConfig }) {
+function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradingConfig, onAdviser }) {
   const [open, setOpen]     = useState(true)
   const [adding, setAdding] = useState(false)
   const colors = GRADE_COLORS[grade] || GRADE_COLORS['Grade 1']
@@ -201,7 +236,8 @@ function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradin
             </p>
           )}
           {items.map(item => (
-            <EditableItem key={item.id} item={item} type={type} onSave={onSave} onDelete={onDelete} onGradingConfig={onGradingConfig}/>
+            <EditableItem key={item.id} item={item} type={type} onSave={onSave} onDelete={onDelete}
+              onGradingConfig={onGradingConfig} onAdviser={onAdviser}/>
           ))}
           {adding && (
             <AddItemForm gradeLevel={grade} type={type} syId={syId} onAdd={onAdd} onClose={() => setAdding(false)}/>
@@ -209,6 +245,188 @@ function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradin
         </div>
       )}
     </div>
+  )
+}
+
+// ── Assign Class Adviser Modal ────────────────────────────────
+//
+// The adviser is the teacher responsible for a section as a whole, which is a
+// different question from the per-subject rows in `teacher_assignments` that
+// the Accounts page maintains. It is stored on the section, so this is the
+// natural place to set it.
+//
+// Two things the list has to communicate, both of which come off the API:
+// which teachers already teach this class (the obvious candidates, floated to
+// the top), and which are unavailable because they already advise another
+// section this year — those render disabled with the reason on the row, the
+// way the promotion wizard writes "Graduated — Grade 6 only".
+function AdviserModal({ section, gradeLevel, onClose, onSave }) {
+  const [teachers, setTeachers] = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [search, setSearch]     = useState('')
+  const [picked, setPicked]     = useState(section.adviser?.id || null)
+  const [saving, setSaving]     = useState(false)
+  // Removing is its own action, confirmed in place, not a pick that then has to
+  // be saved. It swaps the modal body rather than opening a second Modal over
+  // this one — one surface, and no stacked backdrops for a one-line question.
+  const [confirmRemove, setConfirmRemove] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    curriculumApi.adviserCandidates(section.id)
+      .then(res => { if (alive) setTeachers(res.data.teachers || []) })
+      .catch(e => toast.error(e?.response?.data?.error || 'Failed to load teachers.'))
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [section.id])
+
+  const q = search.trim().toLowerCase()
+  const matches = teachers.filter(t =>
+    !q || `${t.surname} ${t.first_name} ${t.email || ''}`.toLowerCase().includes(q))
+  const teaching = matches.filter(t => t.teaches_this_class)
+  const others   = matches.filter(t => !t.teaches_this_class)
+
+  // Nothing to save when the pick is what is already stored.
+  // Save is live whenever a teacher is selected, including the one already
+  // stored. Re-saving the same adviser is idempotent server-side — the clash
+  // check excludes this section, so the write is a no-op that still confirms —
+  // and gating on "changed" left the button dead in the one state an admin is
+  // most likely to click it from: opening the modal to check who the adviser is
+  // and pressing Save. Only "nothing selected at all" has nothing to write.
+
+  // One writer for both actions — assigning someone and clearing the slot are
+  // the same request with a different payload, so they cannot drift.
+  const commit = async (teacherId) => {
+    setSaving(true)
+    try {
+      await onSave(section.id, teacherId)
+      onClose()
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Failed to set adviser.')
+    } finally { setSaving(false) }
+  }
+
+  const submit = e => {
+    e.preventDefault()
+    if (!picked) return
+    commit(picked)
+  }
+
+  const Row = ({ t }) => {
+    const blocked = !!t.advises
+    return (
+      <label className={clsx(
+        'flex items-start gap-2.5 px-3 py-2 rounded-lg border transition-colors',
+        blocked ? 'border-transparent opacity-60 cursor-not-allowed'
+          : picked === t.id ? 'border-brand-300 bg-brand-50 cursor-pointer'
+          : 'border-transparent hover:bg-slate-50 cursor-pointer')}>
+        <input type="radio" name="adviser" className="mt-1 flex-shrink-0"
+          checked={picked === t.id} disabled={blocked}
+          onChange={() => setPicked(t.id)}/>
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-slate-700 truncate">{teacherLabel(t)}</p>
+          {t.email && <p className="text-xs text-slate-400 truncate">{t.email}</p>}
+          {blocked && (
+            <p className="text-xs text-amber-600 mt-0.5">
+              Already advises {t.advises.name ? `${t.advises.grade_level} — ${t.advises.name}` : 'another section'}
+            </p>
+          )}
+        </div>
+      </label>
+    )
+  }
+
+  // Confirm step for Remove. Replaces the picker rather than sitting beside it,
+  // so the only two things on screen are the question and its two answers.
+  if (confirmRemove) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl bg-red-50 border border-red-200 px-3.5 py-3">
+          <p className="text-sm font-medium text-red-800">
+            Remove {teacherLabel(section.adviser)} as adviser of {gradeLevel} — {section.name}?
+          </p>
+          <p className="text-xs text-red-700 mt-1">
+            The section will have no class adviser until one is assigned. Nothing else changes —
+            their teaching assignments, and every grade, attendance mark and observation they
+            recorded, are untouched.
+          </p>
+        </div>
+
+        <div className="flex gap-3 pt-1 border-t border-slate-100">
+          <button type="button" onClick={() => setConfirmRemove(false)} disabled={saving}
+            className="btn-secondary flex-1">
+            Cancel
+          </button>
+          <button type="button" onClick={() => commit(null)} disabled={saving}
+            className="btn-primary flex-1 justify-center !bg-red-600 hover:!bg-red-700">
+            {saving ? 'Removing...' : 'Remove adviser'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
+        <p className="text-sm font-medium text-slate-700">{gradeLevel} — {section.name}</p>
+        <p className="text-xs text-slate-500 mt-0.5">
+          {section.adviser
+            ? <>Currently advised by <span className="font-medium">{teacherLabel(section.adviser)}</span>.</>
+            : 'This section has no adviser yet.'}
+        </p>
+      </div>
+
+      <div className="relative">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+        <input className="input pl-9" placeholder="Search teachers by name or email..."
+          value={search} onChange={e => setSearch(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && e.preventDefault()}/>
+      </div>
+
+      <div className="max-h-72 overflow-y-auto -mx-1 px-1 space-y-1">
+        {loading && <p className="text-xs text-slate-400 text-center py-6">Loading teachers...</p>}
+        {!loading && !matches.length && (
+          <p className="text-xs text-slate-400 text-center py-6">
+            {teachers.length ? 'No teachers match that search.' : 'No active teacher accounts yet.'}
+          </p>
+        )}
+        {!loading && !!teaching.length && (
+          <>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 px-3 pt-1">
+              Teaching this class
+            </p>
+            {teaching.map(t => <Row key={t.id} t={t}/>)}
+          </>
+        )}
+        {!loading && !!others.length && (
+          <>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 px-3 pt-2">
+              {teaching.length ? 'Other teachers' : 'All teachers'}
+            </p>
+            {others.map(t => <Row key={t.id} t={t}/>)}
+          </>
+        )}
+      </div>
+
+      <p className="text-xs text-slate-400">A teacher may advise one section per school year.</p>
+
+      <div className="flex gap-3 pt-1 border-t border-slate-100">
+        {/* Remove is a complete action, not a pick: it asks, then writes. Making
+            it clear the radio and wait for Save meant two clicks for one intent,
+            with the middle state showing an adviser still selected. */}
+        {section.adviser && (
+          <button type="button" onClick={() => setConfirmRemove(true)} disabled={saving}
+            className="btn-secondary !text-red-600 hover:!bg-red-50 disabled:opacity-40">
+            Remove
+          </button>
+        )}
+        <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+        <button type="submit" disabled={saving || !picked} className="btn-primary flex-1 justify-center">
+          {saving ? 'Saving...' : 'Save adviser'}
+        </button>
+      </div>
+    </form>
   )
 }
 
@@ -670,6 +888,10 @@ export default function CurriculumManagement() {
   const [showCreate, setShowCreate]     = useState(false)
   const [editSY, setEditSY]             = useState(null)
   const [gradingSubject, setGradingSubject] = useState(null)
+  // { section, gradeLevel } — the grade level rides along because a section row
+  // carries its own grade_level but the modal's heading reads better built from
+  // the card it was opened on.
+  const [adviserFor, setAdviserFor] = useState(null)
   const [assessment, setAssessment] = useState({ config: [], scales: [] })
 
   // ── Load school years ──────────────────────────────────────
@@ -790,6 +1012,19 @@ export default function CurriculumManagement() {
   const handleUpdateSection = async (id, payload) => {
     const res = await curriculumApi.updateSection(id, payload)
     const updated = res.data.section
+    setSections(prev => {
+      const next = { ...prev }
+      for (const gl of GRADE_LEVELS) next[gl] = (next[gl]||[]).map(s => s.id === id ? updated : s)
+      return next
+    })
+  }
+
+  // `teacherId` of null clears the adviser. The API returns the section in the
+  // same shape a read gives, so this merges exactly like handleUpdateSection.
+  const handleSetAdviser = async (id, teacherId) => {
+    const res = await curriculumApi.setSectionAdviser(id, { teacher_id: teacherId })
+    const updated = res.data.section
+    toast.success(res.data.message)
     setSections(prev => {
       const next = { ...prev }
       for (const gl of GRADE_LEVELS) next[gl] = (next[gl]||[]).map(s => s.id === id ? updated : s)
@@ -1000,7 +1235,8 @@ export default function CurriculumManagement() {
               {visibleGrades.map(grade => (
                 <GradeCard key={grade} grade={grade}
                   items={sections[grade] || []} type="section" syId={selectedSY.id}
-                  onAdd={handleAddSection} onSave={handleUpdateSection} onDelete={handleDeleteSection}/>
+                  onAdd={handleAddSection} onSave={handleUpdateSection} onDelete={handleDeleteSection}
+                  onAdviser={sec => setAdviserFor({ section: sec, gradeLevel: grade })}/>
               ))}
             </div>
           )}
@@ -1025,6 +1261,18 @@ export default function CurriculumManagement() {
             onClose={() => setEditSY(null)}
             onSave={handleUpdateSY}
             onDelete={handleDeleteSY}
+          />
+        )}
+      </Modal>
+
+      {/* ── Class Adviser Modal ─────────────────────────── */}
+      <Modal open={!!adviserFor} onClose={() => setAdviserFor(null)} title="Class Adviser">
+        {adviserFor && (
+          <AdviserModal
+            section={adviserFor.section}
+            gradeLevel={adviserFor.gradeLevel}
+            onClose={() => setAdviserFor(null)}
+            onSave={handleSetAdviser}
           />
         )}
       </Modal>

@@ -53,8 +53,11 @@ api.interceptors.response.use(
     }
 
     const msg = err.response?.data?.error || 'Something went wrong.'
-    // Only show toast for non-401 errors (401 is handled silently above)
-    if (err.response?.status !== 401) toast.error(msg)
+    // Only show toast for non-401 errors (401 is handled silently above).
+    // `silent: true` opts a request out entirely — for endpoints whose failure
+    // is an expected state the caller already renders inline, so a toast would
+    // report an error where the page is working correctly.
+    if (err.response?.status !== 401 && !original?.silent) toast.error(msg)
     return Promise.reject(err)
   }
 )
@@ -144,7 +147,11 @@ export const aiApi = {
   risk:        (data)    => api.post('/ai/risk-assessment', data),
   riskAll:     ()        => api.get('/ai/risk-all'),
   sentiment:   (text)    => api.post('/ai/sentiment', { text }),
-  classHealth: (id)      => api.get('/ai/class-health', { params: { student_id: id } }),
+  // 404 here means "you teach this learner no subject", which is a normal state
+  // rather than a failure — routine for a class adviser, who opens advisory
+  // learners they teach nothing to. Student Detail renders it as an inline card,
+  // so the toast would be duplicate noise on a page that is working.
+  classHealth: (id)      => api.get('/ai/class-health', { params: { student_id: id }, silent: true }),
   classHealthAll: ()     => api.get('/ai/class-health/all'),
   eceClassHealth: (id)   => api.get('/ai/ece-class-health', { params: { student_id: id } }),
 }
@@ -220,6 +227,17 @@ export const enrollmentApi = {
 }
 
 // ── Curriculum (Subjects & Sections) ─────────────────────────
+// The class adviser's read-only view of the section they advise. Deliberately
+// has no write methods — the API exposes none, because entering grades, marking
+// attendance and recording scores stay with the subject teacher.
+export const advisoryApi = {
+  classList:  (params) => api.get('/advisory/class-list',  { params }),
+  grades:     (params) => api.get('/advisory/grades',     { params }),
+  competency: (params) => api.get('/advisory/competency', { params }),
+  attendance: (params) => api.get('/advisory/attendance', { params }),
+  behavior:   (params) => api.get('/advisory/behavior',   { params }),
+}
+
 export const curriculumApi = {
   // School Years
   getSchoolYears:     ()          => api.get('/curriculum/school-years'),
@@ -239,6 +257,11 @@ export const curriculumApi = {
   createSection:      (data)      => api.post('/curriculum/sections', data),
   updateSection:      (id, d)     => api.put(`/curriculum/sections/${id}`, d),
   deleteSection:      (id)        => api.delete(`/curriculum/sections/${id}`),
+  // Class adviser — the teacher responsible for a section as a whole, as
+  // opposed to the per-subject rows in teacher_assignments. `teacher_id: null`
+  // clears it.
+  adviserCandidates:  (id)        => api.get(`/curriculum/sections/${id}/adviser-candidates`),
+  setSectionAdviser:  (id, d)     => api.put(`/curriculum/sections/${id}/adviser`, d),
   // Grading Structure (per subject)
   getGrading:         (subjectId) => api.get(`/curriculum/subjects/${subjectId}/grading`),
   saveGrading:        (subjectId, data) => api.put(`/curriculum/subjects/${subjectId}/grading`, data),

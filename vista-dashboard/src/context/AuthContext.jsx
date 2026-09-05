@@ -71,6 +71,11 @@ export function AuthProvider({ children }) {
     return user.assignments.filter(a => a.school_year === user.active_school_year)
   }, [user])
 
+  // The sections this teacher advises. Unlike `assignments` above there is no
+  // filtering to do — /login and /me already scope it to the active school year,
+  // because an advisory is a now-fact and no surface asks for last year's.
+  const advisory = useMemo(() => user?.advisory || [], [user])
+
   const updateUser = (patch) => {
     setUser(prev => prev ? { ...prev, ...patch } : prev)
   }
@@ -90,7 +95,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{
-      user, login, logout, loading, activeAssignments, updateUser,
+      user, login, logout, loading, activeAssignments, advisory, updateUser,
       refreshUser, syncActiveSchoolYear,
       gradeScope, ...roleFlags,
     }}>

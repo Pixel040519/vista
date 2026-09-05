@@ -18,6 +18,7 @@ import Enrollment from './pages/Enrollment'
 import PromotionWizard from './pages/PromotionWizard'
 import ScoreEntry from './pages/ScoreEntry'
 import EceCompetency from './pages/EceCompetency'
+import MyClass from './pages/MyClass'
 import Profile from './pages/Profile'
 import { ROLES, ANY_ADMIN } from './utils/roles'
 
@@ -67,6 +68,10 @@ export default function App() {
 
             <Route path="score-entry" element={
               <PrivateRoute roles={['teacher']}><ScoreEntry /></PrivateRoute>
+            } />
+
+            <Route path="my-class" element={
+              <PrivateRoute roles={[ROLES.TEACHER]}><MyClass /></PrivateRoute>
             } />
 
             <Route path="ece-competency" element={

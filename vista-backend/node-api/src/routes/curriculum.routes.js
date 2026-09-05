@@ -668,6 +668,14 @@ router.post('/school-years', authorizeSuperAdmin, async (req, res, next) => {
            ON CONFLICT DO NOTHING`,
           [newSY.id, value.copy_from_id]
         )
+        // Name and grade level only — `adviser_id` is deliberately not copied,
+        // which is where this departs from the teacher-assignment copy 40 lines
+        // below. A subject assignment is a timetable that mostly repeats; an
+        // advisory is a fresh decision each year about who is responsible for a
+        // cohort. Copying one forward would also carry a stale adviser — someone
+        // who has since left or moved grade levels — into a year nobody has
+        // reviewed, and the one-per-teacher-per-year index would then block the
+        // correct assignment until an admin found and cleared the copy.
         await client.query(
           `INSERT INTO sections (name, grade_level, school_year_id)
            SELECT name, grade_level, $1 FROM sections
@@ -1020,21 +1028,51 @@ router.delete('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
 // SECTIONS  (all filtered by school_year_id)
 // ════════════════════════════════════════════════════════════
 
+// The adviser rides along on every section read, nested the way
+// `getStudentWithGuardians` nests guardians. `is_active` is deliberately part
+// of it: teacher accounts are soft-deleted, so a section can hold a
+// deactivated teacher and the UI has to be able to say so rather than
+// rendering a blank where a name was.
+//
+// Both queries below join `users`, which has an `is_active` of its own, so
+// every section column is alias-qualified from here on.
+const ADVISER_JSON = `CASE WHEN adv.id IS NULL THEN NULL ELSE json_build_object(
+         'id',          adv.id,
+         'surname',     adv.surname,
+         'first_name',  adv.first_name,
+         'middle_name', adv.middle_name,
+         'is_active',   adv.is_active
+       ) END AS adviser`
+
+// One section in the shape every read returns it. Used by the writers so a
+// mutation's response and a fresh fetch cannot disagree.
+const loadSectionRow = async (id) => {
+  const r = await query(
+    `SELECT s.id, s.name, s.grade_level, s.created_at, s.adviser_id, ${ADVISER_JSON}
+       FROM sections s
+       LEFT JOIN users adv ON adv.id = s.adviser_id
+      WHERE s.id=$1`, [id]
+  )
+  return r.rows[0] || null
+}
+
 router.get('/sections', async (req, res, next) => {
   try {
     const sy_id = await resolveSYId(req.query.sy_id)
-    const conditions = ['school_year_id=$1', 'is_active=TRUE']
+    const conditions = ['s.school_year_id=$1', 's.is_active=TRUE']
     const params = [sy_id]
-    if (req.query.grade_level) { params.push(req.query.grade_level); conditions.push(`grade_level=$${params.length}`) }
+    if (req.query.grade_level) { params.push(req.query.grade_level); conditions.push(`s.grade_level=$${params.length}`) }
     if (isScopedAdmin(req.user.role)) {
       params.push(gradeScopeForRole(req.user.role))
-      conditions.push(`grade_level = ANY($${params.length}::text[])`)
+      conditions.push(`s.grade_level = ANY($${params.length}::text[])`)
     }
 
     const result = await query(
-      `SELECT id, name, grade_level, created_at
-       FROM sections WHERE ${conditions.join(' AND ')}
-       ORDER BY ${GRADE_ORDER}, name`, params
+      `SELECT s.id, s.name, s.grade_level, s.created_at, s.adviser_id, ${ADVISER_JSON}
+       FROM sections s
+       LEFT JOIN users adv ON adv.id = s.adviser_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY ${GRADE_ORDER}, s.name`, params
     )
     res.json({ sections: result.rows })
   } catch (err) { next(err) }
@@ -1045,10 +1083,12 @@ router.get('/sections/grouped', async (req, res, next) => {
     const sy_id = await resolveSYId(req.query.sy_id)
     const scope = gradeScopeForRole(req.user.role)
     const result = await query(
-      `SELECT id, name, grade_level
-       FROM sections WHERE school_year_id=$1 AND is_active=TRUE
-         AND grade_level = ANY($2::text[])
-       ORDER BY ${GRADE_ORDER}, name`, [sy_id, scope]
+      `SELECT s.id, s.name, s.grade_level, s.adviser_id, ${ADVISER_JSON}
+       FROM sections s
+       LEFT JOIN users adv ON adv.id = s.adviser_id
+       WHERE s.school_year_id=$1 AND s.is_active=TRUE
+         AND s.grade_level = ANY($2::text[])
+       ORDER BY ${GRADE_ORDER}, s.name`, [sy_id, scope]
     )
     const grouped = {}
     for (const gl of scope) grouped[gl] = []
@@ -1075,9 +1115,13 @@ router.post('/sections', authorizeAnyAdmin, async (req, res, next) => {
     )
     if (dup.rows.length) throw new AppError(`Section "${value.name}" already exists in ${value.grade_level} for this school year.`, 409)
 
+    // `adviser` is returned NULL rather than omitted so a freshly-added section
+    // has the same shape as one that came back from a read — the Sections tab
+    // merges this row straight into its state map.
     const result = await query(
       `INSERT INTO sections (name, grade_level, school_year_id)
-       VALUES ($1,$2,$3) RETURNING id, name, grade_level, created_at`,
+       VALUES ($1,$2,$3)
+       RETURNING id, name, grade_level, created_at, adviser_id, NULL::json AS adviser`,
       [value.name, value.grade_level, sy_id]
     )
     res.status(201).json({ message: 'Section added.', section: result.rows[0] })
@@ -1135,7 +1179,7 @@ router.put('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
       const r = await client.query(
         `UPDATE sections SET name=$1, grade_level=$2, updated_at=NOW()
           WHERE id=$3 AND is_active=TRUE
-          RETURNING id, name, grade_level, created_at`,
+          RETURNING id`,
         [newName, newGrade, sec.id]
       )
       if (!r.rows.length) throw new AppError('Section not found.', 404)
@@ -1143,15 +1187,20 @@ router.put('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
       // Carry the name across everything that holds it, scoped to this
       // section's grade level and school year.
       const moved = renaming ? await renameSectionEverywhere(client, sec, newName) : null
-      return { section: r.rows[0], moved }
+      return { moved }
     })
+
+    // Re-read through the shared loader so the response carries the adviser.
+    // The Sections tab replaces its cached section wholesale, so a row without
+    // it would blank the adviser on screen until the next fetch.
+    const section = await loadSectionRow(sec.id)
 
     const moved = result.moved
     res.json({
       message: moved && moved.total
         ? `Section renamed to "${newName}". Updated ${describeUsage(moved) || `${moved.total} record(s)`}.`
         : 'Section updated.',
-      section: result.section,
+      section,
       updated: moved,
     })
   } catch (err) { next(err) }
@@ -1176,8 +1225,183 @@ router.delete('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
       )
     }
 
+    // The adviser is deliberately not part of `sectionUsage`. That guard counts
+    // what a delete would *orphan* — learners, enrolment records, teacher
+    // assignments, score items, all of which hold the section by name and would
+    // outlive it. The adviser is a pointer on the row being deleted and goes
+    // with it, which is also why the uniqueness index carries `is_active=TRUE`:
+    // a soft-deleted section must stop holding its teacher.
     await query('UPDATE sections SET is_active=FALSE, updated_at=NOW() WHERE id=$1', [req.params.id])
     res.json({ message: `Section "${sec.name}" removed from ${sec.grade_level}.` })
+  } catch (err) { next(err) }
+})
+
+// ── Section advisers ─────────────────────────────────────────
+//
+// The adviser is the teacher responsible for a class as a whole, as opposed to
+// `teacher_assignments`, which links a teacher to a class per *subject* and so
+// answers "who teaches Math to Grade 3 Mabini" rather than "who is responsible
+// for Grade 3 Mabini".
+//
+// It is a column on `sections` because that table is already keyed
+// (school_year_id, grade_level, name) — exactly the scope of an advisory — and
+// because it is keyed by the section's own id, so `renameSectionEverywhere()`
+// carries it through a rename with no extra statement.
+//
+// These are separate endpoints rather than a third field on `PUT /sections/:id`:
+// that handler's contract is name + grade level, with a rename fan-out, a
+// usage-blocked grade move and a `Nothing to update.` 400, and an orthogonal
+// field tangles all three.
+//
+// Archived school years are not gated here. Renaming and deleting a section on
+// a closed year are already ungated — unlike enrolment writes and the grading
+// model freeze — so the adviser follows the surface it lives on. A decision,
+// not an oversight.
+
+const ADVISER_RULE = 'A teacher may advise one section per school year.'
+
+// Load the section an adviser call is about, scope-checked.
+const loadAdvisableSection = async (req) => {
+  await assertCurriculumRowInScope(req, 'sections', req.params.id)
+  const sec = await loadSection(req.params.id)
+  if (!sec || !sec.section_is_active) throw new AppError('Section not found.', 404)
+  return sec
+}
+
+// The other section this teacher already advises in the same school year, or
+// null. Naming it is only safe when the caller could have seen it anyway: an
+// `admin_ece` refused on their own Kinder card must not learn from the message
+// that the teacher advises "Grade 5 — Sampaguita".
+const advisedElsewhere = async (req, teacherId, schoolYearId, exceptId) => {
+  const r = await query(
+    `SELECT grade_level, name FROM sections
+      WHERE school_year_id=$1 AND adviser_id=$2 AND is_active=TRUE AND id <> $3
+      LIMIT 1`,
+    [schoolYearId, teacherId, exceptId]
+  )
+  if (!r.rows.length) return null
+  const other = r.rows[0]
+  return canManageGrade(req.user.role, other.grade_level)
+    ? { grade_level: other.grade_level, name: other.name }
+    : { grade_level: null, name: null }
+}
+
+const describeAdvised = (other) =>
+  other.name ? `${other.grade_level} — ${other.name}` : 'another section'
+
+// Every active teacher, with the two facts the picker needs: whether they
+// already teach this class (so the obvious candidate sorts to the top) and
+// whether they already advise elsewhere this year (so that row can be disabled
+// with the reason on it, the way the promotion wizard writes
+// "Graduated — Grade 6 only").
+router.get('/sections/:id/adviser-candidates', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const sec = await loadAdvisableSection(req)
+
+    // `teacher_assignments.school_year` is the year's **label**, not its id —
+    // see the table map at the top of utils/sections.js.
+    const result = await query(
+      `SELECT u.id, u.surname, u.first_name, u.middle_name, u.email,
+              EXISTS (
+                SELECT 1 FROM teacher_assignments ta
+                 WHERE ta.teacher_id = u.id AND ta.school_year = $1
+                   AND ta.grade_level = $2 AND ta.section = $3
+              ) AS teaches_this_class,
+              adv.grade_level AS advises_grade_level,
+              adv.name        AS advises_section
+         FROM users u
+         LEFT JOIN sections adv
+                ON adv.adviser_id = u.id
+               AND adv.school_year_id = $4
+               AND adv.is_active = TRUE
+               AND adv.id <> $5
+        WHERE u.role = 'teacher' AND u.is_active = TRUE
+        ORDER BY u.surname, u.first_name`,
+      [sec.label, sec.grade_level, sec.name, sec.school_year_id, sec.id]
+    )
+
+    const teachers = result.rows.map(r => ({
+      id:          r.id,
+      surname:     r.surname,
+      first_name:  r.first_name,
+      middle_name: r.middle_name,
+      email:       r.email,
+      teaches_this_class: r.teaches_this_class,
+      advises: r.advises_grade_level
+        ? (canManageGrade(req.user.role, r.advises_grade_level)
+            ? { grade_level: r.advises_grade_level, name: r.advises_section }
+            : { grade_level: null, name: null })
+        : null,
+    }))
+
+    res.json({
+      teachers,
+      section: { id: sec.id, name: sec.name, grade_level: sec.grade_level, school_year: sec.label },
+    })
+  } catch (err) { next(err) }
+})
+
+router.put('/sections/:id/adviser', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const { error, value } = Joi.object({
+      // null clears the adviser; it is required rather than optional so an
+      // empty body cannot silently mean "remove".
+      teacher_id: Joi.string().uuid().allow(null).required(),
+    }).validate(req.body)
+    if (error) throw new AppError(error.details[0].message, 422)
+
+    const sec = await loadAdvisableSection(req)
+    let teacher = null
+
+    if (value.teacher_id) {
+      const t = await query(
+        'SELECT id, surname, first_name, role, is_active FROM users WHERE id=$1',
+        [value.teacher_id]
+      )
+      if (!t.rows.length || t.rows[0].role !== 'teacher') {
+        throw new AppError('That account is not a teacher.', 422)
+      }
+      teacher = t.rows[0]
+      if (!teacher.is_active) throw new AppError('That teacher account is deactivated.', 422)
+
+      // The partial unique index is the guarantee; this pre-check exists so the
+      // refusal can name the section already holding them.
+      const other = await advisedElsewhere(req, value.teacher_id, sec.school_year_id, sec.id)
+      if (other) {
+        throw new AppError(
+          `${teacher.first_name} ${teacher.surname} already advises ${describeAdvised(other)} ` +
+          `in SY ${sec.label}. ${ADVISER_RULE}`,
+          409
+        )
+      }
+    }
+
+    try {
+      const r = await query(
+        `UPDATE sections SET adviser_id=$1, updated_at=NOW()
+          WHERE id=$2 AND is_active=TRUE RETURNING id`,
+        [value.teacher_id, sec.id]
+      )
+      if (!r.rows.length) throw new AppError('Section not found.', 404)
+    } catch (e) {
+      // The pre-check races — two admins can both pass it and only one write
+      // wins. The index is what actually holds the rule.
+      if (e.code === '23505') {
+        throw new AppError(
+          `That teacher already advises another section in SY ${sec.label}. ${ADVISER_RULE}`,
+          409
+        )
+      }
+      throw e
+    }
+
+    const section = await loadSectionRow(sec.id)
+    res.json({
+      message: teacher
+        ? `${teacher.first_name} ${teacher.surname} is now the adviser of ${sec.grade_level} — ${sec.name}.`
+        : `Adviser removed from ${sec.grade_level} — ${sec.name}.`,
+      section,
+    })
   } catch (err) { next(err) }
 })
 

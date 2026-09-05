@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Users, UserCheck, UserX, AlertTriangle, ClipboardCheck, CheckCircle2,
-  ChevronRight, BookOpen, Clock, ArrowRight,
+  ChevronRight, BookOpen, Clock, ArrowRight, GraduationCap,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { aiApi } from '../../api/client'
@@ -39,7 +39,7 @@ const BAND_LABEL = {
 }
 
 export default function TeacherDashboard() {
-  const { user, activeAssignments } = useAuth()
+  const { user, activeAssignments, advisory } = useAuth()
   const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [classHealth, setClassHealth] = useState(null)
@@ -178,6 +178,22 @@ export default function TeacherDashboard() {
             )}
           </p>
         </div>
+        {/* Advisory class — the section this teacher is responsible for as a
+            whole, which is a different fact from the subjects they teach and
+            may name a class they teach nothing in. */}
+        {advisory?.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {advisory.map(v => (
+              <span key={v.id}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-50 border border-brand-200 text-xs"
+                title="You are the class adviser.">
+                <GraduationCap size={13} className="text-brand-600"/>
+                <span className="text-slate-500">Adviser of</span>
+                <span className="font-semibold text-brand-700">{v.grade_level} · {v.section}</span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {loading ? <LoadingSpinner /> : (

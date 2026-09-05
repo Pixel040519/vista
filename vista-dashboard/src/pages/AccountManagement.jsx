@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   UserCog, Plus, Search, Pencil, Trash2, ShieldOff,
-  ShieldCheck, Eye, EyeOff, X, BookOpen, ChevronDown, History, Shield
+  ShieldCheck, Eye, EyeOff, X, BookOpen, ChevronDown, History, Shield, GraduationCap
 } from 'lucide-react'
 import { accountApi, curriculumApi } from '../api/client'
 import { LoadingSpinner, EmptyState, Modal, PhoneInput } from '../components/UI'
@@ -367,6 +367,25 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
             </p>
           )}
         </div>
+
+        {/* Read-only, and deliberately so. `sections.adviser_id` is written on
+            the Curriculum page's Sections tab; adding a second control here
+            would be a second surface for one rule, which this codebase has been
+            bitten by before. The note exists so an admin editing a teacher knows
+            the advisory is there and where to go to change it, rather than
+            hunting for a control that is missing on purpose. */}
+        {initial?.advisory?.length > 0 && (
+          <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+            <GraduationCap size={14} className="text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-800">
+              <span className="font-semibold">
+                Class adviser of {initial.advisory.map(v => `${v.grade_level} · ${v.section}`).join(', ')}
+              </span>{' '}
+              this school year. That is separate from the subjects above and is set on the
+              Curriculum page's Sections tab.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Actions */}
@@ -384,19 +403,59 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
 }
 
 // ── Assignment Tags ───────────────────────────────────────────
-function AssignmentTags({ assignments = [] }) {
-  const [expanded, setExpanded] = useState(false)
-  const visible = expanded ? assignments : assignments.slice(0, 2)
-  const extra   = assignments.length - 2
+// Which (grade_level, section) pairs this teacher advises. Shared by the tag
+// row and the history modal so the two mark the same thing the same way.
+const advisoryKeys = (advisory = []) =>
+  new Set(advisory.map(v => `${v.grade_level}|||${v.section}`))
 
-  if (!assignments.length) return <span className="text-slate-400 text-xs">No assignments</span>
+// Advisories with no assignment row to attach to — the teacher advises the class
+// but teaches no subject in it. They need a chip of their own, because there is
+// nothing to append the marker to and dropping them would lose the fact.
+const unattachedAdvisory = (advisory = [], rows = []) =>
+  advisory.filter(v => !rows.some(a => a.grade_level === v.grade_level && a.section === v.section))
+
+function AssignmentTags({ assignments = [], advisory = [] }) {
+  const [expanded, setExpanded] = useState(false)
+
+  // The advisory is a property **of a class**, so it rides on the assignment
+  // chips for that class rather than sitting beside them as a separate entry —
+  // one class, one chip, reading "Grade · Section · Subject · Adviser".
+  const keys   = advisoryKeys(advisory)
+  const marked = assignments.map(a => ({ ...a, adviser: keys.has(`${a.grade_level}|||${a.section}`) }))
+  // Advised classes sort first so the marker cannot end up hidden behind
+  // "+N more" — it is the most significant thing in this column.
+  const ordered = [...marked.filter(a => a.adviser), ...marked.filter(a => !a.adviser)]
+  const orphans = unattachedAdvisory(advisory, assignments)
+
+  const visible = expanded ? ordered : ordered.slice(0, 2)
+  const extra   = ordered.length - 2
+
+  // A teacher can hold either fact without the other, so the empty state has to
+  // consider both — otherwise someone who advises a class but teaches nothing
+  // in the active year reads as "No assignments".
+  if (!assignments.length && !advisory.length) {
+    return <span className="text-slate-400 text-xs">No assignments</span>
+  }
 
   return (
     <div className="flex flex-wrap gap-1">
+      {orphans.map(v => (
+        <span key={v.id}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 text-xs font-semibold border border-amber-200"
+          title="Class adviser, with no subject taught in this class — set on the Curriculum page">
+          <GraduationCap size={10} />
+          {v.grade_level} · {v.section} · Adviser
+        </span>
+      ))}
       {visible.map((a, i) => (
-        <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-brand-50 text-brand-700 text-xs font-medium border border-brand-100">
-          <BookOpen size={10} />
-          {a.grade_level} · {a.section} · {a.subject}
+        <span key={i}
+          className={clsx('inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border',
+            a.adviser
+              ? 'bg-amber-50 text-amber-800 font-semibold border-amber-200'
+              : 'bg-brand-50 text-brand-700 font-medium border-brand-100')}
+          title={a.adviser ? 'Class adviser — set on the Curriculum page' : undefined}>
+          {a.adviser ? <GraduationCap size={10} /> : <BookOpen size={10} />}
+          {a.grade_level} · {a.section} · {a.subject}{a.adviser && ' · Adviser'}
         </span>
       ))}
       {!expanded && extra > 0 && (
@@ -482,22 +541,35 @@ function DeleteConfirm({ teacher, onConfirm, onClose }) {
 // ── Assignment History Modal Content ─────────────────────────
 function AssignmentHistory({ teacher, onClose }) {
   const [history, setHistory]   = useState([])
+  const [advisory, setAdvisory] = useState([])
   const [loading, setLoading]   = useState(true)
 
   useEffect(() => {
     accountApi.assignmentHistory(teacher.id)
-      .then(res => setHistory(res.data.assignments || []))
-      .catch(() => setHistory([]))
+      .then(res => {
+        setHistory(res.data.assignments || [])
+        setAdvisory(res.data.advisory || [])
+      })
+      .catch(() => { setHistory([]); setAdvisory([]) })
       .finally(() => setLoading(false))
   }, [teacher.id])
 
-  // Group by school year
+  // Group both by school year. The year list is the **union** of the two, not
+  // the assignment years alone: a teacher can advise a class in a year they
+  // taught no subject in, and that year would otherwise vanish from their
+  // history entirely.
   const grouped = {}
   for (const a of history) {
     if (!grouped[a.school_year]) grouped[a.school_year] = []
     grouped[a.school_year].push(a)
   }
-  const years = Object.keys(grouped).sort((a, b) => b.localeCompare(a))
+  const advisoryBy = {}
+  for (const v of advisory) {
+    if (!advisoryBy[v.school_year]) advisoryBy[v.school_year] = []
+    advisoryBy[v.school_year].push(v)
+  }
+  const years = [...new Set([...Object.keys(grouped), ...Object.keys(advisoryBy)])]
+    .sort((a, b) => b.localeCompare(a))
 
   return (
     <div className="space-y-4">
@@ -521,14 +593,36 @@ function AssignmentHistory({ teacher, onClose }) {
                 SY {sy}
               </h3>
               <div className="space-y-1.5">
-                {grouped[sy].map(a => (
-                  <div key={a.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-100">
-                    <BookOpen size={12} className="text-brand-500 flex-shrink-0" />
-                    <span className="text-sm text-slate-700">
-                      {a.grade_level} &middot; {a.section} &middot; <span className="font-medium">{a.subject}</span>
+                {/* Same rule as the tag row: the advisory marks the subject rows
+                    for that class rather than sitting above them as its own
+                    entry, and only stands alone when there is no such row. */}
+                {unattachedAdvisory(advisoryBy[sy], grouped[sy]).map(v => (
+                  <div key={v.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
+                    <GraduationCap size={12} className="text-amber-600 flex-shrink-0" />
+                    <span className="text-sm text-amber-900">
+                      {v.grade_level} &middot; {v.section} &middot; <span className="font-semibold">Class adviser</span>
                     </span>
                   </div>
                 ))}
+                {(grouped[sy] || []).map(a => {
+                  const adviser = advisoryKeys(advisoryBy[sy]).has(`${a.grade_level}|||${a.section}`)
+                  return (
+                    <div key={a.id}
+                      className={clsx('flex items-center gap-2 px-3 py-2 rounded-lg border',
+                        adviser ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-100')}>
+                      {adviser
+                        ? <GraduationCap size={12} className="text-amber-600 flex-shrink-0" />
+                        : <BookOpen size={12} className="text-brand-500 flex-shrink-0" />}
+                      <span className={clsx('text-sm', adviser ? 'text-amber-900' : 'text-slate-700')}>
+                        {a.grade_level} &middot; {a.section} &middot; <span className="font-medium">{a.subject}</span>
+                        {adviser && <> &middot; <span className="font-semibold">Adviser</span></>}
+                      </span>
+                    </div>
+                  )
+                })}
+                {!grouped[sy] && (
+                  <p className="text-xs text-slate-400 px-3">No subjects taught this school year.</p>
+                )}
               </div>
             </div>
           ))}
@@ -1072,7 +1166,7 @@ export default function AccountManagement() {
 
                     {/* Assignments */}
                     <td className="max-w-xs">
-                      <AssignmentTags assignments={t.assignments} />
+                      <AssignmentTags assignments={t.assignments} advisory={t.advisory} />
                     </td>
 
                     {/* Status badge */}

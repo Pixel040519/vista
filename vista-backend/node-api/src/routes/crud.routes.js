@@ -15,6 +15,14 @@ const {
 } = require('../middleware/parentScope');
 const pushService = require('../services/push.service');
 const { photoUrlFromPath } = require('../middleware/upload.middleware');
+// The second source of teacher scope. `teacher_assignments` says which subjects
+// a teacher teaches; `sections.adviser_id` says which class they are responsible
+// for. Both narrow the three reads below — see utils/advisory.js.
+const {
+  advisedStudentSql,
+  isAdviserOfStudent,
+  activeSchoolYear,
+} = require('../utils/advisory');
 
 // Build a "First Middle Surname" string from name parts (server-side users
 // have name parts but `full_name` is the authoritative display column already;
@@ -49,19 +57,35 @@ attendanceRouter.get('/', enforceParentLinked, async (req, res, next) => {
     let teacherFilter = '';
     if (req.user.role === 'teacher') {
       const activeSY = await query(
-        `SELECT label FROM school_years WHERE is_active=TRUE LIMIT 1`
+        `SELECT id, label FROM school_years WHERE is_active=TRUE LIMIT 1`
       );
       const syLabel = activeSY.rows[0]?.label || null;
-      params.push(req.user.id, syLabel);
+      const syId    = activeSY.rows[0]?.id || null;
+      params.push(req.user.id, syLabel, syId);
+      // Two ways a teacher may see a learner's attendance, and they answer
+      // different questions. As a **subject teacher** they see the subjects they
+      // teach, in every year. As the **class adviser** they see the whole
+      // register — every subject, including ones they do not teach — but only
+      // for the active year, because that is the year they advise. Widening the
+      // adviser side to all years would hand them a learner's entire history off
+      // a one-year responsibility.
       teacherFilter = `
-         AND sub.name IN (
-           SELECT ta.subject
-           FROM teacher_assignments ta
-           JOIN students st ON st.id = $1
-           WHERE ta.teacher_id = $5
-             AND ta.grade_level = st.grade_level
-             AND ta.section = st.section
-             AND ta.school_year = $6
+         AND (
+           sub.name IN (
+             SELECT ta.subject
+             FROM teacher_assignments ta
+             JOIN students st ON st.id = $1
+             WHERE ta.teacher_id = $5
+               AND ta.grade_level = st.grade_level
+               AND ta.section = st.section
+               AND ta.school_year = $6
+           )
+           OR (
+             a.school_year_id = $7::uuid
+             AND EXISTS (
+               SELECT 1 FROM students st WHERE st.id = $1 AND ${advisedStudentSql(5)}
+             )
+           )
          )`;
     }
 
@@ -222,15 +246,27 @@ gradeRouter.get('/', enforceParentLinked, async (req, res, next) => {
       );
       const syLabel = activeSY.rows[0]?.label || null;
       params.push(req.user.id, syLabel);
+      // Mirror of the attendance filter above: subject teacher sees their own
+      // learning areas in any year, class adviser sees every learning area but
+      // only for the year they advise. `grades.school_year` is the year's label,
+      // not its id, so the adviser's bound is the label.
       teacherFilter = `
-         AND s.name IN (
-           SELECT ta.subject
-           FROM teacher_assignments ta
-           JOIN students st ON st.id = $1
-           WHERE ta.teacher_id = $3
-             AND ta.grade_level = st.grade_level
-             AND ta.section = st.section
-             AND ta.school_year = $4
+         AND (
+           s.name IN (
+             SELECT ta.subject
+             FROM teacher_assignments ta
+             JOIN students st ON st.id = $1
+             WHERE ta.teacher_id = $3
+               AND ta.grade_level = st.grade_level
+               AND ta.section = st.section
+               AND ta.school_year = $4
+           )
+           OR (
+             g.school_year = $4
+             AND EXISTS (
+               SELECT 1 FROM students st WHERE st.id = $1 AND ${advisedStudentSql(3)}
+             )
+           )
          )`;
     }
 
@@ -495,11 +531,32 @@ behaviorRouter.get('/', enforceParentLinked, async (req, res, next) => {
     if (date_to)    add('bl.observed_at <  (?::date + INTERVAL \'1 day\')', date_to);
 
     if (req.user.role === 'teacher') {
-      add('bl.teacher_id = ?', req.user.id);
-      // Defense-in-depth: only return logs for students the teacher actually teaches.
-      // (StudentDetail hits this for any student, so fall back to empty rather than 403.)
-      const owns = await teacherOwnsStudent(req.user.id, student_id);
-      if (!owns) return res.json({ logs: [], total: 0 });
+      // Two independent ways in, and they grant different things.
+      //
+      // A **subject teacher** sees only the logs they wrote themselves. A
+      // **class adviser** sees every teacher's logs for their advisory learners,
+      // because conduct is the adviser's responsibility and a record made of
+      // only their own observations would be worse than none — it would look
+      // complete while missing whatever the other teachers saw. This is the one
+      // read in the app where a teacher sees another teacher's writing.
+      //
+      // The adviser's reach is bounded to the active year (they advise this
+      // year, not the learner's whole past); their own logs stay visible across
+      // every year, as before.
+      const owns    = await teacherOwnsStudent(req.user.id, student_id);
+      const advises = await isAdviserOfStudent(req.user.id, student_id);
+      // StudentDetail hits this for any student, so fall back to empty rather
+      // than 403 — the page must not break on a learner the teacher has no
+      // relationship with.
+      if (!owns && !advises) return res.json({ logs: [], total: 0 });
+
+      if (advises) {
+        const sy = await activeSchoolYear();
+        params.push(req.user.id, sy?.id || null);
+        where.push(`(bl.teacher_id = $${params.length - 1} OR bl.school_year_id = $${params.length}::uuid)`);
+      } else {
+        add('bl.teacher_id = ?', req.user.id);
+      }
     } else if (teacher_id) {
       add('bl.teacher_id = ?', teacher_id);
     }

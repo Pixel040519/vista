@@ -67,6 +67,11 @@ const teacherNavGroups = [
   {
     label: 'My Students',
     items: [
+      // Only for a teacher who actually advises a section. `when` is evaluated
+      // against live auth context below — a role filter cannot express this,
+      // since every teacher has the role and only some hold an adviser row.
+      { to: '/my-class', icon: GraduationCap, label: 'My Class',
+        when: ({ advisory }) => advisory.length > 0 },
       { to: '/students', icon: Users,         label: 'Students'      },
       { to: '/behavior', icon: Heart,         label: 'Behavior'      },
       { to: '/risk',     icon: AlertTriangle, label: 'Risk Overview' },
@@ -81,7 +86,7 @@ const teacherNavGroups = [
 ]
 
 export default function Sidebar({ open, onClose }) {
-  const { user, logout } = useAuth()
+  const { user, logout, advisory } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [confirmLogout, setConfirmLogout] = useState(false)
@@ -125,8 +130,12 @@ export default function Sidebar({ open, onClose }) {
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
         {(user?.role === ROLES.TEACHER ? teacherNavGroups : adminNavGroups).map(group => {
-          const visibleItems = group.items.filter(
-            item => !item.roles || item.roles.includes(user?.role)
+          const visibleItems = group.items.filter(item =>
+            (!item.roles || item.roles.includes(user?.role)) &&
+            // `when` answers what a role list cannot: whether *this particular*
+            // user holds the thing the item is about. The group still auto-hides
+            // when nothing in it survives.
+            (!item.when || item.when({ user, advisory }))
           )
           if (visibleItems.length === 0) return null
 

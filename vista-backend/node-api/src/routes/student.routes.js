@@ -145,7 +145,34 @@ const getStudentWithGuardians = async (id, { includeArchived = false } = {}) => 
          'is_emergency_contact', ps.is_emergency_contact,
          'has_account',          (ps.parent_id IS NOT NULL),
          'home_address',         ps.home_address
-       ) ORDER BY ps.is_emergency_contact DESC, ps.created_at ASC) FILTER (WHERE ps.id IS NOT NULL), '[]') AS guardians
+       ) ORDER BY ps.is_emergency_contact DESC, ps.created_at ASC) FILTER (WHERE ps.id IS NOT NULL), '[]') AS guardians,
+       -- The class adviser, resolved from the learner's snapshot. grade_level
+       -- and section on students ARE the active year's snapshot, so the section
+       -- they name can only be looked up in the active year -- pairing them
+       -- with any other year's sections would answer a different question.
+       -- Comes back NULL for an archived learner, or one whose snapshot names a
+       -- section the active year does not have; Student Detail renders that as
+       -- an em dash rather than inventing an adviser.
+       --
+       -- A correlated subquery rather than a LEFT JOIN LATERAL: json has no
+       -- equality operator, so a lateral's output cannot go in the GROUP BY
+       -- below. Referencing s.grade_level/s.section ungrouped is legal because
+       -- s.id is the primary key and every other s column is functionally
+       -- dependent on it -- the same rule that lets SELECT s.* work here.
+       (SELECT json_build_object(
+                 'id',          u.id,
+                 'surname',     u.surname,
+                 'first_name',  u.first_name,
+                 'middle_name', u.middle_name,
+                 'is_active',   u.is_active
+               )
+          FROM sections sec
+          JOIN school_years sy ON sy.id = sec.school_year_id AND sy.is_active = TRUE
+          JOIN users u         ON u.id  = sec.adviser_id
+         WHERE sec.is_active = TRUE
+           AND sec.grade_level = s.grade_level
+           AND sec.name        = s.section
+         LIMIT 1) AS adviser
      FROM students s
      LEFT JOIN parent_student ps ON ps.student_id=s.id
      WHERE s.id=$1${includeArchived ? '' : ' AND s.is_active=TRUE'}

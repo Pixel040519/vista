@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ClipboardCheck, Heart, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock, CalendarDays, Archive, ArchiveRestore } from 'lucide-react'
+import { ArrowLeft, BookOpen, ClipboardCheck, Heart, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock, CalendarDays, Archive, ArchiveRestore, GraduationCap } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi, eceApi, curriculumApi, enrollmentApi } from '../api/client'
 import { resolveGradingPolicy } from '../utils/grading'
@@ -52,7 +52,7 @@ function AttendanceCounts({ summary }) {
 export default function StudentDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { user, isAnyAdmin } = useAuth()
+  const { user, isAnyAdmin, advisory } = useAuth()
   const isTeacher = user?.role === 'teacher'
   const [student, setStudent]   = useState(null)
   const [restoring, setRestoring] = useState(false)
@@ -121,6 +121,13 @@ export default function StudentDetail() {
   }, [activeGrading.periodModel])
 
   const isECE = !!student && ECE_GRADES.includes(student.grade_level)
+
+  // Is this learner in a section the viewer advises? Answered from the auth
+  // payload — `advisory` is already scoped to the active school year — so it
+  // costs no request.
+  const isAdvisee = !!student && (advisory || []).some(
+    v => v.grade_level === student.grade_level && v.section === student.section
+  )
 
   const toggleInSet = (setter) => (key) => {
     setter(prev => {
@@ -497,6 +504,35 @@ export default function StudentDetail() {
               <div className="flex items-center gap-3 mt-1 flex-wrap">
                 <span className="font-mono text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-lg">LRN: {student.lrn}</span>
                 <span className="text-xs text-slate-500">{student.grade_level} {student.section && `· ${student.section}`}</span>
+                {/* Both chips sit immediately after the class, because that is
+                    what they are a fact about — who is responsible for the
+                    section this learner is in. Which one shows depends on
+                    whether that person is you:
+                      · you       → "Your advisee", brand-tinted, since it is a
+                                    relationship to you and explains why the tabs
+                                    below show the whole record rather than only
+                                    the subjects you teach
+                      · anyone else → the adviser's name, neutral slate, because
+                                    it is reference information rather than
+                                    something about the viewer
+                    This is the only place the adviser appears on this page.
+                    Nothing renders when the section has no adviser — an absence
+                    is noise here rather than information. */}
+                {isAdvisee ? (
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-lg bg-brand-50 text-brand-700 border border-brand-200"
+                    title="You are the class adviser of this section.">
+                    <GraduationCap size={12}/> Your advisee
+                  </span>
+                ) : student.adviser && (
+                  <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg bg-slate-100 text-slate-600 border border-slate-200"
+                    title={`Class adviser of ${student.grade_level}${student.section ? ` · ${student.section}` : ''}`}>
+                    <GraduationCap size={12} className="text-slate-400"/>
+                    Adviser: <span className="font-semibold">{formatName(student.adviser)}</span>
+                    {student.adviser.is_active === false && (
+                      <span className="ml-0.5 text-[10px] font-semibold text-amber-600">(inactive)</span>
+                    )}
+                  </span>
+                )}
                 {risk && <RiskBadge level={risk.risk_level} />}
               </div>
             </div>
@@ -567,6 +603,10 @@ export default function StudentDetail() {
               ['Gender', student.gender],
               ['Grade Level', student.grade_level],
               ['Section', student.section || '—'],
+              // The adviser is deliberately not a row here — it lives in the
+              // header chip beside the class, which is the one place it is a
+              // fact about. Repeating it in this card said the same thing twice
+              // and buried it under the learner's own details.
             ].map(([label, val]) => (
               <div key={label} className="flex justify-between text-sm">
                 <span className="text-slate-500">{label}</span>
@@ -1373,6 +1413,10 @@ export default function StudentDetail() {
             <div className="rounded-xl border border-brand-100 bg-brand-50 px-4 py-3 text-xs text-brand-800">
               <span className="font-semibold">Scoped view:</span> AI insights below are limited to the subjects you teach
               {student.section && <> in <span className="font-semibold">{student.grade_level} · {student.section}</span></>}.
+              {/* An adviser's other tabs now carry the whole record, so say which
+                  half of the page this caveat is actually about — otherwise the
+                  banner reads as if it bounded everything. */}
+              {isAdvisee && <> The Grades, Attendance and Behavior tabs show the full record, because you are this class's adviser.</>}
             </div>
           )}
 

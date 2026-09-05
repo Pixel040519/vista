@@ -313,9 +313,17 @@ function ChangePasswordForm() {
 
 // ── Teacher Assignments (read-only) ──────────────────────────
 function TeacherAssignmentsCard() {
-  const { user, activeAssignments } = useAuth()
+  const { user, activeAssignments, advisory } = useAuth()
   const sy = user?.active_school_year
   const rows = activeAssignments || []
+
+  // A section is an advisory if the teacher is its adviser — a different fact
+  // from teaching a subject in it. The two usually coincide, so the chips carry
+  // a mark; the banner exists for the case where they do not, which is the one
+  // worth surfacing (a teacher can advise a class they teach no subject in, and
+  // nothing else on this page would tell them).
+  const advised = advisory || []
+  const isAdvised = a => advised.some(v => v.grade_level === a.grade_level && v.section === a.section)
 
   return (
     <div className="card p-5 sm:p-6">
@@ -333,6 +341,20 @@ function TeacherAssignmentsCard() {
         </div>
       </div>
 
+      {advised.length > 0 && (
+        <div className="mb-4 rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">
+            {advised.length > 1 ? 'Advisory classes' : 'Advisory class'}
+          </p>
+          <p className="text-sm text-slate-700 mt-0.5">
+            {advised.map(v => `${v.grade_level} · ${v.section}`).join(', ')}
+          </p>
+          <p className="text-xs text-slate-500 mt-1">
+            You are the class adviser. This is separate from the subjects you teach.
+          </p>
+        </div>
+      )}
+
       {rows.length === 0 ? (
         <p className="text-sm text-slate-500 italic">
           You have no assignments for the active school year yet.
@@ -342,13 +364,20 @@ function TeacherAssignmentsCard() {
           {rows.map(a => (
             <span
               key={a.id}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700"
+              className={clsx(
+                'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs text-slate-700',
+                isAdvised(a) ? 'bg-brand-50 border-brand-200' : 'bg-slate-50 border-slate-200'
+              )}
             >
               <span className="font-semibold">{a.grade_level}</span>
               <span className="text-slate-400">·</span>
               <span>{a.section}</span>
               <span className="text-slate-400">·</span>
               <span className="text-brand-700">{a.subject}</span>
+              {isAdvised(a) && (
+                <span className="ml-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-600"
+                  title="You are the adviser of this class.">Adviser</span>
+              )}
             </span>
           ))}
         </div>

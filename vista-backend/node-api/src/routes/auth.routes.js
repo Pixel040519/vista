@@ -9,6 +9,26 @@ const { AppError } = require('../middleware/error.middleware');
 const { normaliseName } = require('../utils/nameHelper');
 const { gradeScopeForRole } = require('../utils/roles');
 const { photoUrlFromPath } = require('../middleware/upload.middleware');
+const { advisorySections } = require('../utils/advisory');
+
+/**
+ * The sections a teacher advises in the **active** school year.
+ *
+ * Scoped server-side, unlike `assignments`, which deliberately returns every
+ * year and is filtered client-side against `active_school_year` — an advisory
+ * is a now-fact, and no surface asks for last year's. `syncActiveSchoolYear()`
+ * on the frontend re-fetches /me whenever the active year changes, so this
+ * stays current without new plumbing.
+ *
+ * An array, though `idx_sections_adviser_sy_unique` caps it at one: the shape
+ * is what callers destructure, and array-to-scalar is a painful change to make
+ * later if the one-per-year rule is ever relaxed.
+ *
+ * It reads `utils/advisory.js` — the same module that decides what the advisory
+ * endpoints will actually serve — rather than repeating the query, so what the
+ * client is told it advises and what the API will hand over cannot drift.
+ */
+const loadAdvisory = (teacherId) => advisorySections(teacherId);
 
 const registerSchema = Joi.object({
   email:       Joi.string().email().required(),
@@ -92,6 +112,7 @@ router.post('/login', async (req, res, next) => {
         [user.id]
       );
       userData.assignments = asgn.rows;
+      userData.advisory    = await loadAdvisory(user.id);
     }
 
     const syRes = await query(
@@ -145,6 +166,7 @@ router.get('/me', authenticate, async (req, res, next) => {
         [user.id]
       );
       user.assignments = asgn.rows;
+      user.advisory    = await loadAdvisory(user.id);
     }
 
     const syRes = await query(

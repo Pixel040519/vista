@@ -16,6 +16,9 @@ const {
   canManageGrade,
   isSuperAdmin,
 } = require('../utils/roles')
+// Advisories are read-only here. `sections.adviser_id` is written on the
+// Curriculum page's Sections tab and nowhere else — one rule, one write surface.
+const { advisorySections, advisoryHistory } = require('../utils/advisory')
 
 router.use(authenticate, authorizeAnyAdmin)
 
@@ -136,7 +139,21 @@ router.get('/teachers', async (req, res, next) => {
          COALESCE(json_agg(json_build_object(
            'id',ta.id,'grade_level',ta.grade_level,'section',ta.section,
            'subject',ta.subject,'school_year',ta.school_year
-         )) FILTER (WHERE ta.id IS NOT NULL),'[]') AS assignments
+         )) FILTER (WHERE ta.id IS NOT NULL),'[]') AS assignments,
+         -- The advisory alongside the assignments: a teacher_assignments row
+         -- says which subject they teach, sections.adviser_id says which class
+         -- they are responsible for, and a teacher can have either without the
+         -- other. A correlated subquery rather than a second LEFT JOIN so it
+         -- cannot multiply the assignment rows being aggregated above.
+         COALESCE((
+           SELECT json_agg(json_build_object(
+                    'id', sec.id, 'grade_level', sec.grade_level,
+                    'section', sec.name, 'school_year', asy.label
+                  ) ORDER BY sec.grade_level, sec.name)
+             FROM sections sec
+             JOIN school_years asy ON asy.id = sec.school_year_id
+            WHERE sec.adviser_id = u.id AND sec.is_active = TRUE AND asy.is_active = TRUE
+         ), '[]') AS advisory
        FROM users u
        LEFT JOIN teacher_assignments ta ON ta.teacher_id=u.id AND ta.school_year=$${syIdx}
        WHERE ${conditions.join(' AND ')}
@@ -158,20 +175,33 @@ router.get('/teachers/:id', async (req, res, next) => {
     if (!result.rows.length) throw new AppError('Teacher not found.', 404)
     const teacher = result.rows[0]
     teacher.assignments = await getAssignments(teacher.id)
+    // Active-year advisory, matching the scope `getAssignments()` uses. Purely
+    // informational here — the adviser is set on the Curriculum page's Sections
+    // tab, and this endpoint's PUT does not write it.
+    teacher.advisory = await advisorySections(teacher.id)
     res.json({ teacher })
   } catch (err) { next(err) }
 })
 
 // GET /api/accounts/teachers/:id/assignment-history — All assignments across school years
+//
+// `advisory` rides alongside, across every year rather than just the active one:
+// this is the record of what a teacher has held, and a year they advised a class
+// belongs in it as much as a year they taught a subject. The two are independent
+// — a teacher can advise a class they teach nothing in, and vice versa — so the
+// client has to union the years, not assume advisory is a subset.
 router.get('/teachers/:id/assignment-history', async (req, res, next) => {
   try {
-    const result = await query(
-      `SELECT id, grade_level, section, subject, school_year
-       FROM teacher_assignments WHERE teacher_id=$1
-       ORDER BY school_year DESC, grade_level, section, subject`,
-      [req.params.id]
-    )
-    res.json({ assignments: result.rows })
+    const [result, advisory] = await Promise.all([
+      query(
+        `SELECT id, grade_level, section, subject, school_year
+         FROM teacher_assignments WHERE teacher_id=$1
+         ORDER BY school_year DESC, grade_level, section, subject`,
+        [req.params.id]
+      ),
+      advisoryHistory(req.params.id),
+    ])
+    res.json({ assignments: result.rows, advisory })
   } catch (err) { next(err) }
 })
 

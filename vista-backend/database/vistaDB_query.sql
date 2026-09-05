@@ -712,3 +712,26 @@ ALTER TABLE students DROP CONSTRAINT IF EXISTS students_enrollment_status_check;
 ALTER TABLE students ADD CONSTRAINT students_enrollment_status_check
     CHECK (enrollment_status IN ('pending','enrolled','transferred_out','dropped','graduated'));
 CREATE INDEX IF NOT EXISTS idx_students_enrollment_status ON students(enrollment_status) WHERE is_active = TRUE;
+
+
+-- ============================================================
+-- VISTA Migration: a teacher adviser on every section
+-- See database/migrations/2026_09_05_section_adviser.sql
+-- ============================================================
+--
+-- `teacher_assignments` links a teacher to a class per **subject**, so it answers
+-- "who teaches Math to Grade 3 Mabini" but not "who is responsible for Grade 3
+-- Mabini". The adviser lives on `sections` because that table is already keyed
+-- (school_year_id, grade_level, name) -- exactly the scope of an advisory -- and
+-- because it is keyed by the section's own id, so the name fan-out in
+-- utils/sections.js carries it through renames for free.
+
+ALTER TABLE sections
+    ADD COLUMN IF NOT EXISTS adviser_id UUID REFERENCES users(id) ON DELETE SET NULL;
+
+-- One advisory class per teacher per school year. `is_active = TRUE` keeps a
+-- soft-deleted section from holding its teacher hostage; `adviser_id` leads so
+-- the same index serves the "which section do I advise" lookup in /auth/me.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sections_adviser_sy_unique
+    ON sections(adviser_id, school_year_id)
+    WHERE adviser_id IS NOT NULL AND is_active = TRUE;

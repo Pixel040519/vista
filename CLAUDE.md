@@ -93,7 +93,7 @@ Key tables:
 - `academic_predictions` — grade forecasts with confidence scores.
 - `dismissal_logs` — SecurePass QR scan/authorization records. `gate_label VARCHAR(20)` records the entrance the guard set in the `vista_guard` Settings screen (e.g. "Gate 1"); nullable for admin/teacher-side scans that don't pass through the guard app. `fetcher_type` (`'self'` | `'auth'` | NULL legacy) + `fetcher_authorized_id` (FK `authorized_pickup_persons.id`, nullable, `ON DELETE SET NULL`) capture the actual fetcher: `authorized_by` always remains the responsible parent (FK `users.id`) so the existing JOIN and parent notifications keep working — the fetcher columns are an audit overlay, not a replacement.
 - `school_years` — SY management via `is_active` (one) + `is_upcoming` (many). No `is_current` column. `period_model` (`'4Q'` | `'3T'`) and `grading_policy` (`'DO8_2015'` | `'DO15_2026'` | `'ZERO_BASED'`) declare **how that year is graded** — see "Grading periods & transmutation" below.
-- `sections` — class sections per grade level + school year.
+- `sections` — class sections per grade level + school year. `adviser_id` (UUID, FK `users.id`, `ON DELETE SET NULL`) is the **class adviser** — the teacher responsible for the section as a whole, as distinct from the per-subject rows in `teacher_assignments`. See "Class advisers" below.
 - `competency_domains` / `competency_skills` / `ece_competency_records` — competency tracker for **descriptively-assessed** grade levels. `rating_scale` (`'EGFNA'` | `'CODVBG'` | `'ABCDE'`) is stamped on every record and a pairwise CHECK ties it to the legal codes for that scale. Unique on `(student_id, skill_id, school_year_id, quarter)`.
 - `grade_level_assessment` — per `(school_year_id, grade_level)`: `assessment_mode` (`'numeric'` | `'descriptive'`) + `rating_scale` (required for descriptive, NULL for numeric). Zero rows = built-in defaults, so it is additive. See "Assessment mode" below.
 
@@ -199,6 +199,118 @@ grade level configured as descriptive. Add that guard before configuring one in 
 Still not implemented from DO 015: the new component weights (WW/PT/**Examinations**
 20/50/30), the per-learning-area descriptive grade on the report card (SF9 Learner's
 Progress Report), and the PACE form.
+
+## Class advisers
+
+`teacher_assignments` links a teacher to a class **per subject**, so it answers
+"who teaches Math to Grade 3 Mabini" but never "who is responsible for Grade 3
+Mabini". `sections.adviser_id` answers the second.
+
+It lives on `sections` because that table is already keyed
+`(school_year_id, grade_level, name)` — **exactly** the scope of an advisory — so one
+nullable column is automatically per-year and automatically one-adviser-per-section,
+with no new join and no new invariant. It is also keyed by the section's own **id**,
+which keeps it outside the name fan-out in `utils/sections.js`: a rename carries the
+adviser for free and `renameSectionEverywhere()` needed no new statement.
+
+The tempting alternative was `class_assignments`, which is already adviser-shaped
+(`UNIQUE(grade_level, section, school_year)`, no `subject` column) and completely
+dormant. It was rejected because it keys on the school-year **label string** and holds
+the section by name, making it a sixth entry in that fan-out. Do not revive it for this.
+
+**One advisory class per teacher per school year**, enforced by
+`idx_sections_adviser_sy_unique` — a partial unique index on
+`(adviser_id, school_year_id) WHERE adviser_id IS NOT NULL AND is_active = TRUE`.
+Three things that clause is doing:
+
+- `adviser_id IS NOT NULL` — unadvised sections are the common case and must not collide.
+- `is_active = TRUE` — sections are **soft**-deleted, so without it a deleted section
+  would go on holding its teacher and the admin could not reassign them.
+- `adviser_id` leads so the same index serves the "which section do I advise" lookup
+  in `/auth/login` and `/auth/me`.
+
+`PUT /api/curriculum/sections/:id/adviser` (`authorizeAnyAdmin` + grade scope) sets or
+clears it; `GET /api/curriculum/sections/:id/adviser-candidates` feeds the picker. Both
+are separate from `PUT /sections/:id`, whose contract is name + grade level with a rename
+fan-out and a usage-blocked grade move — an orthogonal field tangles all three. The 409
+names the section already holding the teacher, but **only when that section is inside the
+caller's grade scope**; otherwise it says "another section", so an `admin_ece` refused on
+their own Kinder card does not learn that the teacher advises Grade 5 — Sampaguita. The
+candidates endpoint redacts the same way.
+
+**That endpoint is the only writer.** Several surfaces *display* the advisory — Student
+Detail, the teacher's own dashboard and profile, and Account Management → Teachers, which
+shows it on the assignment chips and in the assignment-history modal — and none of them
+write it. Do not add a second control: one rule, one write surface, which is the mistake
+this codebase has already made once (the removed "Carry over" button). Displaying it
+beside teacher assignments is fine and useful; `PUT /api/accounts/teachers/:id` must keep
+its hands off the column.
+
+**The adviser is not part of `sectionUsage()`.** That guard counts what a delete would
+*orphan* — learners, enrolment records, teacher assignments, score items, all of which
+hold the section by name and outlive it. The adviser is a pointer on the row being
+deleted and goes with it.
+
+**"Copy from" does not carry it.** Subjects, sections and teacher assignments are all
+copied when a school year is created from another; `adviser_id` deliberately is not. A
+subject assignment is a timetable that mostly repeats, while an advisory is a fresh
+decision each year about who is responsible for a cohort — and copying one forward would
+carry a stale adviser into an unreviewed year, where the uniqueness index would then
+block the correct assignment until someone found and cleared the copy.
+
+**It grants reads, never writes.** See "The adviser's reach" below. Archived school years
+are **not** gated: renaming and deleting a section on a closed year are already ungated,
+unlike enrolment writes and the grading model freeze, so the adviser follows the surface
+it lives on.
+
+Teachers see their own advisory through `advisory` on the `/login` and `/me` payloads —
+scoped server-side to the **active** year, unlike `assignments`, which returns every year
+and is filtered client-side. It is an array although the index caps it at one.
+`GET /api/students/:id` carries `adviser` too, resolved from the learner's snapshot
+against the **active** year's sections (the snapshot describes no other year), so it is
+NULL for an archived learner or one whose section that year does not have.
+
+### The adviser's reach
+
+`teacher_assignments` is a **per-subject** fact, so a subject teacher sees one column of a
+learner's record. An adviser needs the whole row — they compile the SF9 report card across
+every learning area, keep the SF2 register, and handle conduct. `sections.adviser_id` is
+therefore the **second source of teacher scope**, and `utils/advisory.js` is the only place
+it is consulted. Do not re-inline it: the assignment lookup already exists in five
+different shapes across five routers and has drifted more than once.
+
+**Reads widen; writes do not.** `/api/advisory` (teacher-only, `advisory.routes.js`) is the
+adviser's cross-subject view of their own section — class list, a subjects×learners grade
+sheet, attendance across every subject, and behaviour from every teacher. It defines **no
+POST, PUT or DELETE**, so the read-only promise is structural rather than a convention:
+there is no adviser-authorized write to reach. Entering grades, marking attendance and
+recording scores stay with the subject teacher, gated by `verifyTeacherAssignment()`,
+`verifyEceAssignment()` and `teacherOwnsStudent()` exactly as before.
+
+Three existing per-student reads gained an `OR` so Student Detail works for an advisory
+learner: `GET /api/grades`, `GET /api/attendance` (each ORs the subject-name narrowing with
+`advisedStudentSql`) and `GET /api/behavior`, where an adviser sees **every teacher's** logs
+rather than only their own — the one read in the app where a teacher sees another teacher's
+writing, because a conduct record made of one teacher's observations would look complete
+while missing what everyone else saw.
+
+**The adviser's extra reach is bounded to the active school year**, while their
+subject-teacher reach stays unbounded as before. An advisory is a now-fact; "you advise
+this learner this year, so you see this year's whole record" is the rule. Widening it to
+all years would hand a one-year responsibility a learner's entire history.
+
+**Why a page and not a wider filter.** Every existing teacher surface is one subject at a
+time and derives a class *and then a subject* from `activeAssignments`, so an adviser with
+no subject in the class would select a class whose subject list is empty. There is also no
+seam that widens those reads without widening the writes beside them. The adviser's
+question is cross-subject and whole-class — a different screen.
+
+**A grade sheet's columns are the grade level's subjects plus any subject the learners
+actually hold a grade in.** `students.grade_level` is the active year's snapshot while a
+grade row points at whatever subject it was recorded against, so a learner moved mid-year
+has grades against another level's subjects *inside the same school year*. Listing only the
+current level's subjects silently drops them and the sheet reads as ungraded. They are
+surfaced with an `off_level` flag instead — marked, not hidden.
 
 ## Enrollment & school-year rollover
 
