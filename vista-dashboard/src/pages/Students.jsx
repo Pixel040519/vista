@@ -1037,8 +1037,7 @@ export default function Students() {
                     `${byStatus.enrolled || 0} enrolled`,
                     byStatus.pending && `${byStatus.pending} pending`,
                     (byStatus.transferred_out || byStatus.dropped || byStatus.graduated) &&
-                      `${(byStatus.transferred_out || 0) + (byStatus.dropped || 0) + (byStatus.graduated || 0)} left`,
-                    archivedCount && `${archivedCount} archived`,
+                      `${(byStatus.transferred_out || 0) + (byStatus.dropped || 0) + (byStatus.graduated || 0)} left`
                   ].filter(Boolean).join(' · ')}
           </p>
         </div>

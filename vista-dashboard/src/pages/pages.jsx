@@ -1036,6 +1036,18 @@ function AdminBehavior() {
     return () => clearTimeout(handle)
   }, [studentSearch, filters.student_id])
 
+  // Both dropdowns read the sections list rather than a grade constant of their
+  // own: the API already orders it by grade level and scopes it to the caller,
+  // so a scoped admin is offered only the grades they may manage.
+  const gradeLevels = useMemo(
+    () => [...new Set(sections.map(s => s.grade_level))],
+    [sections]
+  )
+  const sectionOptions = useMemo(
+    () => sections.filter(s => s.grade_level === filters.grade_level),
+    [sections, filters.grade_level]
+  )
+
   const cleanParams = useMemo(() => {
     const out = {}
     for (const [k, v] of Object.entries(filters)) if (v) out[k] = v
@@ -1092,7 +1104,7 @@ function AdminBehavior() {
             <XIcon size={12}/> Clear
           </button>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">Student</label>
             <input className="input" placeholder="Search by name or LRN…"
@@ -1128,22 +1140,23 @@ function AdminBehavior() {
             )}
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">Class</label>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Grade Level</label>
             <select className="input disabled:bg-slate-50 disabled:cursor-not-allowed"
               disabled={!!filters.student_id}
-              value={filters.grade_level && filters.section ? `${filters.grade_level}|||${filters.section}` : ''}
-              onChange={e => {
-                const v = e.target.value
-                if (!v) { patch('grade_level', ''); patch('section', ''); return }
-                const [gl, sec] = v.split('|||')
-                setFilters(f => ({ ...f, grade_level: gl, section: sec }))
-              }}>
-              <option value="">All classes</option>
-              {sections.map(s => (
-                <option key={s.id} value={`${s.grade_level}|||${s.name}`}>
-                  {s.grade_level} — {s.name}
-                </option>
-              ))}
+              value={filters.grade_level}
+              onChange={e => setFilters(f => ({ ...f, grade_level: e.target.value, section: '' }))}>
+              <option value="">All grade levels</option>
+              {gradeLevels.map(g => <option key={g} value={g}>{g}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Section</label>
+            <select className="input disabled:bg-slate-50 disabled:cursor-not-allowed"
+              disabled={!!filters.student_id || !filters.grade_level}
+              value={filters.section}
+              onChange={e => patch('section', e.target.value)}>
+              <option value="">All sections</option>
+              {sectionOptions.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
             </select>
           </div>
           <div>
