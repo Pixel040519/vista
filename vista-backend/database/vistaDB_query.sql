@@ -735,3 +735,54 @@ ALTER TABLE sections
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sections_adviser_sy_unique
     ON sections(adviser_id, school_year_id)
     WHERE adviser_id IS NOT NULL AND is_active = TRUE;
+
+
+-- ============================================================
+-- VISTA Migration: composite learning areas (MAPEH)
+-- See database/migrations/2026_09_06_subject_areas.sql
+-- ============================================================
+--
+-- MAPEH is one learning area graded through four areas (Music, Arts, Physical
+-- Education, Health), each with its own grading structure and score items --
+-- both of which hang off `subject_id`, so an area is a subject row pointing at
+-- its parent. NULL parent_id = a learning area; non-NULL = an area of one.
+-- The parent's `grades` row is derived and stored (utils/subjectAreas.js), so
+-- every reader still sees exactly one row per learning area.
+
+ALTER TABLE subjects
+    ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES subjects(id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS idx_subjects_parent
+    ON subjects(parent_id) WHERE parent_id IS NOT NULL;
+
+
+-- ============================================================
+-- VISTA Migration: give every MAPEH its four areas
+-- See database/migrations/2026_09_07_mapeh_areas.sql
+-- ============================================================
+--
+-- MAPEH is graded through exactly Music, Arts, Physical Education and Health
+-- wherever it exists -- a DepEd fact, not a per-school choice -- so the four are
+-- created automatically (utils/subjectAreas.js `ensureMapehAreas`) rather than
+-- composed by an admin. This backfills the rows that already exist, and skips
+-- any MAPEH that already carries grades of its own or whose area names are taken.
+
+INSERT INTO subjects (name, grade_level, school_year_id, parent_id)
+SELECT a.name, m.grade_level, m.school_year_id, m.id
+  FROM subjects m
+  CROSS JOIN (VALUES ('Music'), ('Arts'), ('Physical Education'), ('Health')) AS a(name)
+ WHERE m.is_active = TRUE
+   AND m.parent_id IS NULL
+   AND m.name ~* '\ymapeh\y'
+   AND NOT EXISTS (SELECT 1 FROM subjects c
+                    WHERE c.parent_id = m.id AND c.is_active = TRUE)
+   AND NOT EXISTS (SELECT 1 FROM grades g WHERE g.subject_id = m.id)
+   AND NOT EXISTS (SELECT 1 FROM score_items si
+                    WHERE si.subject_id = m.id AND si.is_active = TRUE)
+   AND NOT EXISTS (SELECT 1 FROM grading_structure gs
+                    WHERE gs.subject_id = m.id AND gs.is_active = TRUE)
+   AND NOT EXISTS (SELECT 1 FROM subjects x
+                    WHERE x.school_year_id = m.school_year_id
+                      AND x.grade_level    = m.grade_level
+                      AND x.is_active      = TRUE
+                      AND x.name IN ('Music', 'Arts', 'Physical Education', 'Health'));

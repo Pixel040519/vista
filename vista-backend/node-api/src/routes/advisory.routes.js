@@ -71,11 +71,17 @@ router.get('/class-list', async (req, res, next) => {
   try {
     const { section, assessment, students, grading } = await advisoryContext(req)
 
-    // Every subject of this grade level for this year — the adviser sees all of
-    // them, including the ones they do not teach. That is the whole point.
+    // Every learning area of this grade level for this year — the adviser sees
+    // all of them, including the ones they do not teach. That is the whole
+    // point. `parent_id IS NULL` keeps MAPEH one entry rather than five: the
+    // adviser compiles an SF9, which has one row per learning area.
     const subjects = await query(
-      `SELECT id, name FROM subjects
+      `SELECT id, name,
+              (SELECT COUNT(*)::int FROM subjects a
+                WHERE a.parent_id = subjects.id AND a.is_active = TRUE) AS area_count
+         FROM subjects
         WHERE grade_level=$1 AND school_year_id=$2 AND is_active=TRUE
+          AND parent_id IS NULL
         ORDER BY name`,
       [section.grade_level, section.school_year_id]
     )
@@ -139,7 +145,8 @@ router.get('/grades', async (req, res, next) => {
              FROM grades g
              JOIN subjects sub ON sub.id = g.subject_id
             WHERE g.student_id = ANY($1::uuid[])
-              AND g.school_year = $2`,
+              AND g.school_year = $2
+              AND sub.parent_id IS NULL`,
           [ids, section.school_year]
         )
       : { rows: [] }
@@ -156,9 +163,15 @@ router.get('/grades', async (req, res, next) => {
     // of blanks and looks like nobody has been graded. Surfacing them with an
     // `off_level` flag lets the adviser see the work and notice the anomaly,
     // which is the house rule everywhere else — marked, not hidden.
+    //
+    // Both sides of the union are **learning areas** (`parent_id IS NULL`).
+    // MAPEH is one column carrying the grade the roll-up wrote, not five; that
+    // is what an SF9 row is, and it is also what keeps `general_average` below
+    // from weighting MAPEH four times against every other learning area.
     const levelSubjects = await query(
       `SELECT id, name FROM subjects
         WHERE grade_level=$1 AND school_year_id=$2 AND is_active=TRUE
+          AND parent_id IS NULL
         ORDER BY name`,
       [section.grade_level, section.school_year_id]
     )

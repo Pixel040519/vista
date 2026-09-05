@@ -74,7 +74,7 @@ Key tables:
 - `authorized_pickup_persons` — non-account fetchers (yaya, lola, driver, relative) a parent has authorized to pick up a specific child. Unlike `parent_student` rows these have **no portal account** — they're scoped to `(parent_id, student_id)`, hold their own `surname`/`first_name`/`middle_name`/`relationship`/`photo_path`, and are managed exclusively by the owning parent through `/api/pickup-persons` from the vista_parent app. The Pickup QR tab lets the parent pick one of these as the fetcher before generating the QR; the chosen row's `id` lands in `students.qr_fetcher_id` and the `vista_guard` scan result renders the photo verbatim.
 - `teacher_assignments` / `class_assignments` — teacher↔class/subject mappings, scoped to a school year; unique per `(grade_level, section, subject, school_year)`.
 - `attendance` — per-student, per-subject, per-day record (Present/Absent/Late/Excused); unique on `(student_id, date, subject_id)` so each teacher records independently per subject. `school_year_id` (nullable, FK `school_years.id`) records **which year the attendance belongs to**, derived from the subject on write — `subjects` is scoped per school year, so the subject is authoritative. It is deliberately **not** derived from the date: consecutive school years leave months uncovered between one year's `end_date` and the next one's `start_date`, and every record falling in such a gap used to belong to no year at all and was invisible to every year-scoped query. NULL means genuinely unattributable (a legacy row with no subject) and counts for no year.
-- `subjects` — curriculum subjects scoped to grade level + school year.
+- `subjects` — curriculum subjects scoped to grade level + school year. `parent_id` (UUID, FK `subjects.id`, `ON DELETE CASCADE`) makes a row an **area** of another subject rather than a learning area of its own — MAPEH is graded through Music, Arts, Physical Education and Health. NULL on every ordinary subject. See "Composite learning areas" below.
 - `grades` — per-subject, per **grading period** (`score` = initial weighted avg; `grade` = final grade; `remarks` = "Passed"/"Failed" under the DO 8 policy, or a DO 015 descriptor under the newer ones). The column is still named `quarter` but means "period index" — see the grading-policy note below.
 - `grading_structure` — configurable categories + components per subject (self-ref `category_id`; NULL = category, non-NULL = component).
 - `score_items` — individual assessments under a component, scoped to **subject + section + quarter**.
@@ -311,6 +311,119 @@ grade row points at whatever subject it was recorded against, so a learner moved
 has grades against another level's subjects *inside the same school year*. Listing only the
 current level's subjects silently drops them and the sheet reads as ungraded. They are
 surfaced with an `off_level` flag instead — marked, not hidden.
+
+## Composite learning areas
+
+MAPEH is one DepEd **learning area** whose grade is built from four separately
+graded **areas**: Music, Arts, Physical Education, Health. DO 8, s. 2015 —
+"individual grades are given to each area ... the quarterly grade for MAPEH is
+the average of the quarterly grades in the four areas." On an SF9 it prints as
+one row with the four indented beneath it, and for promotion it counts as
+**one** learning area.
+
+`subjects.parent_id` models that. NULL means a learning area (which is every
+subject that existed before this); non-NULL makes the row an area of one. It
+lives on `subjects` rather than as a third level inside `grading_structure`
+because each area needs its own Written Work / Performance Task / Assessment tree
+**and** its own score items, and both of those are keyed on `subject_id` already —
+so an area gets them for free, and the two-level tree builders, both weight
+validators and the category→component→item fold in `POST /api/scores` are all
+untouched. It is also general: EPP/TLE is shaped the same way, and it is the same
+mechanism DO 015's per-learning-area report-card grade will need.
+
+**The one rule everything follows: every analytic and reporting read counts
+learning areas; only score entry and the grading structure descend into areas.**
+
+**The learning area's grade is derived and stored.** `utils/subjectAreas.js` is
+the only place it is computed, and both writers of `grades` call it —
+`POST /api/scores` and `POST /api/grades`. Storing a real row is what lets the
+seven `AVG(grade)` sites across Node and FastAPI, the promotion wizard, the
+adviser's general average and the parent app keep working: they still see exactly
+one row per learning area. What they each had to gain is `parent_id IS NULL`, so
+the areas are not counted *beside* it.
+
+Three things about the roll-up that are easy to get wrong:
+
+- **It is never transmuted again.** The areas' grades were transmuted when they
+  were written, and DO 8 averages those *quarterly grades*. Transmuting the mean a
+  second time would inflate every MAPEH grade under `DO8_2015`'s floor and shift
+  bands under `DO15_2026`.
+- **A partial set is withheld, and withholding deletes the row.** MAPEH has no
+  grade for a period until all four areas have one. Skipping the write is not
+  enough: a figure computed while the set was complete must not be left behind
+  once it is not.
+- **The set of areas cannot change while grades exist**, which is why there is no
+  "re-roll everything" helper and the only roll-up that ever runs is the one after
+  a grade write. `ensureMapehAreas()` skips a MAPEH holding its own marks, an
+  area cannot be deleted on its own, and deleting the learning area is refused
+  while any member of the family carries a grade.
+- **A learning area with areas is not gradeable.** `POST /api/grades`,
+  `POST /api/scores`, `POST /api/scores/items` and
+  `PUT /api/curriculum/subjects/:id/grading` all refuse it with a 409 naming the
+  areas. A subject only takes areas while it holds no grading structure, score
+  items or hand-entered grades of its own.
+
+**One teacher handles the whole learning area**, so `teacher_assignments` keeps
+its single `'MAPEH'` row and the areas are never separately assigned. The only
+change is inside `verifyTeacherAssignment()`: when the subject being gated is an
+area, it matches on its **parent's** name. Holding MAPEH therefore gates all four
+areas, with no new rows and no second invariant. This is also why renaming an area
+is safe where renaming an ordinary subject is not — areas never appear in
+`teacher_assignments` (see the known gap in the node-api notes).
+
+**Attendance is one roll for the learning area.** The areas are graded separately
+but not attended separately — a learner sits in one MAPEH period — so
+`POST /api/attendance` refuses an area, and attendance dropdowns list learning
+areas only. Splitting the register four ways would make every attendance rate
+(the risk factor, the parent app's "X of Y days") a fraction of the days actually
+attended.
+
+**"Copy from" does carry areas**, unlike an adviser: a subject tree is a timetable
+that repeats. The copy runs in two passes so `parent_id` is remapped to the new
+year's rows, re-matched by `(school_year_id, grade_level, name)` — the same
+name-based re-match the grading-structure copy already uses.
+
+**The four areas are automatic and fixed.** MAPEH is graded through Music, Arts,
+Physical Education and Health wherever it exists — a DepEd fact, not a per-school
+choice — so nobody composes the list. `ensureMapehAreas()` in
+`utils/subjectAreas.js` is the **only** writer of an area row and runs wherever a
+MAPEH can come into existence: creating a subject, renaming one to MAPEH, and
+copying a school year. `2026_09_07_mapeh_areas.sql` is the same rule applied to
+rows that already existed. There is no endpoint that takes an area list and no UI
+for adding one: `POST /subjects` does not accept `parent_id`, and an area has no
+Delete (deleting the learning area takes its areas with it).
+
+`PUT /subjects/:id` still accepts a **rename** of an area — a school may write
+"P.E." — but no surface offers one, since the Subjects tab lists MAPEH as a single
+row and the grading modal's picker only selects. It is left open because it is the
+one change to an area that is harmless: `ensureMapehAreas()` fills in only a MAPEH
+with **no** areas at all, so a renamed one is never read as missing and replaced
+by a fifth. Any UI for it would have to keep that property.
+
+A MAPEH is matched case-insensitively on the whole word, so MAPEH / Mapeh / MaPeH
+and "MAPEH 4" all qualify while "Mapehematics" does not.
+
+**The areas are worked with in the grading modal, not on the Subjects tab.** That
+tab lists MAPEH as one ordinary row with an "N areas" pill; its grading-config
+button opens a picker of the four, and choosing one edits that area's weights with
+a back control to the list. Each area needs its own structure before Score Entry
+can be used for it, which is why the picker marks each Configured or Not set up
+and the tab's configured dot lights only when all four are.
+
+Two conditions leave a MAPEH deliberately flat, and both are silent skips rather
+than errors, since a subject write must not fail on account of this: it already
+carries **grades, score items or a grading structure of its own** (splitting would
+strand marks computed under rules that no longer apply), or one of the four names
+is **already taken** in that grade level and school year by an active subject, or
+by a dormant one that still holds work. All-or-nothing — three of four would leave
+MAPEH quietly averaging the wrong number.
+
+Subjects are soft-deleted while `subjects_sy_grade_name_unique` does not filter
+`is_active`, so a deleted MAPEH's areas go on owning their names. A dormant row
+with no work behind it is therefore **revived and repointed** rather than
+duplicated — the same choice the Students page makes for an archived learner —
+which is what stops the next MAPEH in that grade level from failing on a raw
+unique violation.
 
 ## Enrollment & school-year rollover
 

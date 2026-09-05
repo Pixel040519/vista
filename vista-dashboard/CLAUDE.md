@@ -971,6 +971,36 @@ Grading Sheet correctly headed 1st/2nd/3rd, on the same screen. The Grading Shee
 column heads were already `grading.ordinals`. Every other period selector in the app
 (Score Entry, ECE Competency, Student Detail) was already routed through `label()`/`abbr()`.
 
+### Composite learning areas — MAPEH, across the grade surfaces
+
+MAPEH is one learning area graded through four **areas** (Music, Arts, Physical
+Education, Health), modelled as `subjects.parent_id` — see the root `CLAUDE.md`.
+The frontend rule follows the backend's: **everything that reports counts learning
+areas; only Score Entry descends into areas.**
+
+`GET /curriculum/subjects` returns learning areas by default and needs
+`include_areas: true` to return the level below. Every row carries `parent_id`,
+`parent_name`, `area_count` and `school_year_id`. `area_count > 0` means "graded
+through its areas", which is the same thing as "not gradeable".
+`/curriculum/subjects/grouped` nests the tree: each learning area carries its
+`areas`, which is where the grading modal gets its picker without a second request.
+
+`school_year_id` was added to that projection for this work and fixes an older bug
+along the way: the grading modal's "Copy from" reached for `subject.school_year_id`,
+the tree never carried it, so `getSubjects({ sy_id: undefined })` fell back to the
+active year and offered the wrong year's subjects whenever another was selected.
+
+| Surface | What it does |
+|---|---|
+| **Curriculum → Subjects** | MAPEH is **one ordinary row** — the areas are not listed here. `EditableItem` shows an "N areas" pill off `area_count` and keeps its grading-config button, which is the way into them (see below). The configured dot means "ready for Score Entry", so on a composite it lights only when *every* area has a structure, never off `has_grading` (a learning area has none of its own). There is **no authoring UI for areas at all** — no Split, no Add, no Delete, no rename: the four are created server-side by `ensureMapehAreas()` whenever a MAPEH exists. A create or rename whose response carries `area_count` refetches rather than patching state, since the server may have just split the subject and the optimistic path cannot invent the areas. |
+| **Grading config modal** (`GradingConfigModal.jsx`) | For a composite subject it opens on an **area picker** instead of an editor: one row per area with a Configured / Not set up chip, because MAPEH has no weights of its own. Choosing one points `target` at that area and renders the normal editor with an `ArrowLeft` **back** control top-left ("All MAPEH areas"). Every read and write follows `target`, not `subject`. Saving an area returns to the picker rather than closing — MAPEH needs all four before it produces a grade, so finishing one is the middle of the job. `areaConfigured` is tracked in the modal so a chip updates the moment an area is saved, without waiting on a refetch. An ordinary subject is completely unaffected: no picker, no back control. |
+| **Score Entry** | the only page that works one level down. Asks for `include_areas`, drops learning areas that *have* areas, and keeps an area whose **parent** is in `allowedSubjects` — mirroring `verifyTeacherAssignment()`. Areas render in an `<optgroup>` under their learning area, and the sheet header reads "MAPEH — Music". A deep link carrying the learning area's own id (the class-health card resolves an assignment name, which for MAPEH is the parent) lands on its first area instead of clearing the selection. |
+| **Grades** | lists both, grouped. Selecting **MAPEH** shows the Grading Sheet of the roll-up with a banner naming the areas and explaining that a blank cell means one of them has no grade yet; `isComposite` hides the **Grade Summary** tab, since a learning area has no weighted categories of its own, and bounces a selection carried over from an ordinary subject. |
+| **Student Detail → Grades** | groups by `parent_subject_name ?? subject_name`. MAPEH is one row, marked "avg. of 4", that expands to show the areas indented. `expandedAreas` is keyed `"SY|||MAPEH"` so the same learning area opens independently per school year. The subject count in the school-year header still counts learning areas. |
+| **My Class** | unchanged — `/advisory/grades` returns learning-area columns, so MAPEH is one column and `general_average` is right without any client work. |
+| **Attendance**, **Accounts → teacher assignments** | unchanged, and deliberately: both take the default (learning areas only). One teacher handles MAPEH, so it stays one assignment row, and attendance is one roll for the whole learning area. |
+| **Grading config "Copy from"** | asks for `include_areas` and excludes subjects that *have* areas. Copying Music's structure to Arts is the most useful thing the picker does once a subject is split; the list labels an area "MAPEH — Music". |
+
 ### Score Entry (`ScoreEntry.jsx`)
 Teachers only. Class dropdown = `(grade_level, section)` pairs from active-SY assignments. Subject dropdown filtered to subjects the teacher is assigned to for that class. Passes `grade_level` + `section` to `scoreApi.getItems` / `scoreApi.saveItems` (items are section-scoped).
 

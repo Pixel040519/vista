@@ -111,11 +111,17 @@ async def extract_features(student_id: str, grade_level: Optional[str], db: Asyn
     attendance_rate = (present_days / total_days) if total_days > 0 else None
 
     # ── Average Grade ──
+    # Learning areas only (subjects.parent_id IS NULL). MAPEH is graded through
+    # four areas whose grades are stored alongside the MAPEH row the roll-up
+    # writes, so an unfiltered AVG would weight that one learning area 5x.
     grade_result = await db.execute(text("""
-        SELECT AVG(grade) as avg_grade
-        FROM grades
-        WHERE student_id = :sid AND quarter = (
-            SELECT MAX(quarter) FROM grades WHERE student_id = :sid
+        SELECT AVG(g.grade) as avg_grade
+        FROM grades g
+        JOIN subjects s ON s.id = g.subject_id
+        WHERE g.student_id = :sid AND s.parent_id IS NULL AND g.quarter = (
+            SELECT MAX(g2.quarter) FROM grades g2
+              JOIN subjects s2 ON s2.id = g2.subject_id
+             WHERE g2.student_id = :sid AND s2.parent_id IS NULL
         )
     """), {"sid": student_id})
     grade_row = grade_result.fetchone()
@@ -414,13 +420,18 @@ async def get_all_risk_levels(db: AsyncSession = Depends(get_db)):
     """))).fetchall()
     att_map = {str(r.student_id): (r.total or 0, r.present or 0) for r in att_rows}
 
-    # 3. Academic — average of each student's latest-quarter grades
+    # 3. Academic — average of each student's latest-quarter grades, counting
+    # learning areas only so MAPEH weighs the same as every other one.
     acad_rows = (await db.execute(text("""
         SELECT g.student_id, AVG(g.grade) AS avg_grade
           FROM grades g
+          JOIN subjects s ON s.id = g.subject_id
          WHERE g.grade IS NOT NULL
+           AND s.parent_id IS NULL
            AND g.quarter = (
-               SELECT MAX(quarter) FROM grades g2 WHERE g2.student_id = g.student_id
+               SELECT MAX(g2.quarter) FROM grades g2
+                 JOIN subjects s2 ON s2.id = g2.subject_id
+                WHERE g2.student_id = g.student_id AND s2.parent_id IS NULL
            )
          GROUP BY g.student_id
     """))).fetchall()

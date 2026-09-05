@@ -16,7 +16,51 @@ Entry point `main.py`. Port 8000. Role-agnostic — all access control lives in 
 
 ### `score_entry_progress` (in `/teacher-dashboard`)
 
-Array is **unrolled per `(subject, section)`** in Python. SQL aggregates per `(subject_id, section)` because `score_items` are section-scoped. `components_total` is still subject-wide (pulled from `grading_structure`). `total_items` and `components_with_items` are scoped to `latest_quarter` (the highest-numbered quarter with any items for that subject+section) — adding items in a new quarter resets those counters to reflect just that quarter's progress.
+Array is **unrolled per `(gradeable subject, section)`** in Python — see "Composite
+learning areas" below: a MAPEH assignment yields four rows, one per area, labelled
+`MAPEH — Music` and so on, because that is where the score items actually live.
+SQL aggregates per `(subject_id, section)` because `score_items` are section-scoped. `components_total` is still subject-wide (pulled from `grading_structure`). `total_items` and `components_with_items` are scoped to `latest_quarter` (the highest-numbered quarter with any items for that subject+section) — adding items in a new quarter resets those counters to reflect just that quarter's progress.
+
+## Composite learning areas (MAPEH)
+
+`subjects.parent_id` makes a subject an **area** of another: MAPEH is graded through
+Music, Arts, Physical Education and Health, each a subject row with its own grading
+structure and score items. The MAPEH grade is a **derived row stored in `grades`
+alongside the areas'** — written by the Node API (`utils/subjectAreas.js`), never
+here. See the root `CLAUDE.md` for the model.
+
+The consequence for this service is one line per query, and it goes in **both
+directions**:
+
+**Reads of `grades` count learning areas.** Every one of them joins `subjects` and
+filters `parent_id IS NULL`, or MAPEH is weighed five times over — once as itself
+and once per area:
+
+- `risk.py` — the academic factor, in **both** the single-student query and the
+  bulk `GET /classify/risk/all` one. Note the `MAX(quarter)` sub-select needs the
+  same filter as the outer query, or "latest quarter" is decided by rows the
+  average then excludes.
+- `prediction.py` — one forecast per learning area. An explicit `subject_id` still
+  wins, so a single area can be forecast on request; it is only the "all subjects"
+  default that narrows.
+- `dashboard.py` — academic decline alerts, inside the `ranked` CTE. Without it a
+  MAPEH slip alerts twice, once as MAPEH and again as whichever area moved.
+
+**`teacher_dashboard.py` goes the other way.** One teacher handles a whole learning
+area, so `teacher_assignments` names MAPEH and never its areas — but score items
+hang off the areas. So:
+
+- `subj_lookup` is built from **learning areas only**, since that is what an
+  assignment name resolves to.
+- `areas_by_parent` and the derived `gradeable` list expand an assignment into one
+  entry per area. `gradeable_subject_ids` feeds the score-entry progress queries.
+- `assignments` and `subject_ids` stay on learning areas, and the two lists are
+  kept apart deliberately: **attendance is one roll for the whole of MAPEH**, so
+  today's attendance rollup must not fan out to the areas. The `subjects` tile
+  count is off `subject_ids` for the same reason — MAPEH is one subject to teach.
+
+A missing `subj_lookup` key still yields `subject_id = None`, which silently drops
+that assignment from every rollup — so this is not optional bookkeeping.
 
 ## Attendance is year-scoped now; these queries are not
 

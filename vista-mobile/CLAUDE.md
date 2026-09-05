@@ -15,7 +15,7 @@ Parent-relevant endpoints introduced in Phase 1 of the mobile plan (`2026_04_22_
 - `POST /api/auth/login`, `POST /api/auth/refresh`, `GET /api/auth/me` — reused from the web dashboard.
 - `GET /api/students`, `GET /api/students/:id` — filtered server-side to linked students for `role=parent`.
 - `GET /api/attendance?student_id=` — `enforceParentLinked` on the Node side.
-- `GET /api/grades?student_id=` — `enforceParentLinked`; returns `423 Locked` with `{reason}` when `students.academic_access_suspended`.
+- `GET /api/grades?student_id=` — `enforceParentLinked`; returns `423 Locked` with `{reason}` when `students.academic_access_suspended`. Every row now carries `parent_subject_name`: non-null on one of MAPEH's four **areas** (Music, Arts, Physical Education, Health), null on a learning area. See "Composite learning areas" below.
 - `GET /api/ece/student-records?student_id=&quarter=&sy_id=` — same guards; returns `{ school_year, student, skills[], records[] }` for the ECE Academics tab.
 - `GET /api/behavior?student_id=` — `enforceParentLinked`.
 - `GET /api/dismissal/logs` — parent branch returns last 30 rows across every linked student.
@@ -34,6 +34,25 @@ Guard-relevant endpoints:
 - `POST /api/dismissal/verify` — Step 2. Body `{ qrPayload, authorized_by_id, fetcher_type, gate_label? }`. `authorized_by_id` is the UUID from the matching guardian object; `fetcher_type` is the `kind` field forwarded verbatim so the server validates against the right table (`parent_student` vs `authorized_pickup_persons`). For `'auth'` rows the server resolves the responsible parent and stamps `dismissal_logs.authorized_by = parent_id` + `fetcher_authorized_id = <auth row>` so the existing parent-notifications JOIN keeps working. `gate_label` is the guard's entrance setting persisted on the log row.
 - `GET /api/dismissal/logs?date=today` — powers the "Today's log" tab; the rows now include `gate_label` when present.
 - `POST /api/students/:id/generate-qr` — also stamps `students.qr_generated_by = req.user.id` so the guard-side `/scan` can identify the parent who pressed Generate.
+
+## Composite learning areas (MAPEH)
+
+MAPEH is one learning area graded through four areas, and `GET /api/grades`
+returns **all five rows** — the four areas plus the MAPEH grade averaged from
+them. `Grade.parentSubjectName` (null on a learning area) and its `isArea` getter
+are how the app tells them apart.
+
+**Anything that counts learning areas must use `!g.isArea`.** The Academics tab's
+quarter average is computed client-side in `child_detail_screen.dart`, so without
+that filter MAPEH would be weighed five times against every other subject. This is
+the only cross-subject average computed on the client — everything else
+(`ParentSummary.academicAvgGrade`, from `/api/ai/parent-summary`) is filtered
+server-side.
+
+`_QuarterGradesCard` renders one row per learning area with its areas indented
+directly beneath it, prefixed `›`. Showing them is deliberate: a parent
+reading "MAPEH 88" is entitled to see it is the average of four marks, and that is
+how an SF9 prints it. Showing them is not the same as counting them.
 
 ## Role rules
 

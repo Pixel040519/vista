@@ -855,9 +855,108 @@ now a routine state rather than an error.
 - Categories/components with recorded student scores cannot be deleted — backend blocks, frontend grays out.
 - Grading structures are copied when creating a new SY with "copy from".
 
+## Composite learning areas — MAPEH (`utils/subjectAreas.js`)
+
+`subjects.parent_id` (`2026_09_06_subject_areas.sql`) makes a subject an **area** of
+another (Music under MAPEH). NULL on every learning area, which is every subject
+that existed before this. See the root `CLAUDE.md` for the model and why it lives
+on `subjects` rather than as a third level in `grading_structure`.
+
+`utils/subjectAreas.js` is the **only** place `parent_id` is consulted for the
+roll-up. Do not re-inline it — subject scope is already written in five shapes
+across five routers and has drifted more than once.
+
+| Export | What it does |
+|---|---|
+| `MAPEH_AREAS` / `isMapeh(name)` | the fixed four, and the whole-word case-insensitive test |
+| `ensureMapehAreas(client, subject)` | **the only writer of an area row** — see below |
+| `areasOf(id)` / `parentOf(id)` | the two directions of the link |
+| `assertGradeable(id)` | 409 naming the areas when a learning area has them |
+| `rollUp(client, {...})` | recompute one learner's learning-area grade for one period |
+| `rollUpAfterGradeWrite(client, {...})` | the same, resolved from the subject just written; a no-op for an ordinary subject |
+
+**`ensureMapehAreas()` runs wherever a MAPEH can come into existence**:
+`POST /subjects` (inside the insert's transaction, so a MAPEH is never briefly
+flat), `PUT /subjects/:id` (a rename *to* MAPEH), and the copy-from-school-year
+block (so a new year is right even if the year it copied from was not).
+`2026_09_07_mapeh_areas.sql` is the same rule as a backfill. There is no endpoint
+that accepts an area list — `POST /subjects` does not take `parent_id` — and none
+that deletes one: `DELETE /subjects/:id` refuses an area outright and cascades the
+whole family when given the learning area, with the grade check covering every
+member (a mark under Music blocks deleting MAPEH).
+
+It is idempotent and safe to call on any subject, and skips silently rather than
+throwing, because a subject write must not fail on account of it. It fills in only
+a MAPEH that has **no areas at all** — which is what keeps a rename safe: the next
+call sees four and does nothing rather than deciding "Physical Education" is
+missing and adding a fifth. It skips a MAPEH holding grades, score items or a
+grading structure of its own, and skips entirely if any of the four names is taken
+(by an active subject, or by a dormant one that still holds work).
+
+`PUT /subjects/:id` therefore still accepts a rename of an area, though nothing in
+the web app offers one — the Subjects tab lists MAPEH as a single row and the
+grading modal's area picker only selects.
+
+**Soft deletes are the subtle part.** `subjects_sy_grade_name_unique` does not
+filter `is_active`, so a deleted MAPEH's areas keep owning their names and a plain
+INSERT for the next one raises a 23505 that reaches the admin as "Record already
+exists." A dormant row with no work behind it is revived and repointed instead of
+duplicated. One that *does* carry work counts as taken — a deleted standalone
+"Music" with grades must not be quietly adopted into MAPEH's average. The same
+trap on the ordinary subject create now answers with a sentence naming it rather
+than the raw constraint error.
+
+There is deliberately **no** "the set of areas changed, re-roll everything"
+helper. The set cannot change while grades exist, so the only roll-up that ever
+runs is the one after a grade write.
+
+**The roll-up is stored, not computed on read.** Both writers of `grades` call it:
+`POST /api/scores` (after its own upsert) and `POST /api/grades`. A real row is
+what lets everything that averages or counts learning areas keep working — what
+each of those had to gain is `parent_id IS NULL`, so the areas are not counted
+beside the parent. The sweep, in full:
+
+- `enrollment.routes.js` promotion review — **the load-bearing one.** DO 8 Table 10
+  counts learning areas below 75, so without it a learner weak in Music, Arts and
+  PE reads as three failed learning areas and is auto-retained, when DepEd counts
+  one — and passes, if the MAPEH average clears 75.
+- `advisory.routes.js` `/grades` (both the rows and the column union) and
+  `/class-list` — one MAPEH column, and a correct `general_average`.
+- `ai.routes.js` class health (single + bulk) and the student-summary `AVG(grade)`
+  that feeds the parent app's Overview card.
+- FastAPI: `risk.py` (both academic-factor queries), `prediction.py`,
+  `dashboard.py` decline alerts.
+- `teacher_dashboard.py` goes the **other** way: score items live on the areas, so
+  its `subj_lookup` expands a learning area into one `gradeable` entry per area for
+  the score-entry progress widget. `assignments` stays on learning areas, because
+  attendance is one roll for the whole of MAPEH.
+
+`GET /api/grades` returns every row with `parent_subject_id` / `parent_subject_name`
+so Student Detail and the parent app can nest the areas under their learning area
+**and** average only the learning areas, without a second request.
+
+**The refusals**, each a 409. Four reject a *learning area that has areas*, because
+its grade is derived and it has no weights of its own: `POST /api/grades`,
+`POST /api/scores`, `POST /api/scores/items` and
+`PUT /api/curriculum/subjects/:id/grading` — all naming the areas to record under
+instead. `POST /api/attendance` rejects the mirror image, an **area**, because the
+roll is taken for MAPEH as a whole. And `DELETE /subjects/:id` rejects an area on
+its own while cascading the whole family when given the learning area.
+
+Residual, worth knowing: a hand-written `psql` UPDATE of `grades` will not roll up.
+A trigger would be airtight, but `remarksFor` would need reimplementing in
+PL/pgSQL — a third copy of a policy that already lives in two hand-synced files.
+
 ## Score entry (`score.routes.js`)
 
 `verifyTeacherAssignment()` enforces assignment ownership on all score endpoints: GET/POST `/api/scores`, GET `/api/scores/breakdown`, GET/POST `/api/scores/items`.
+
+**One teacher handles a whole learning area**, so an assignment names MAPEH and
+never its areas. `verifyTeacherAssignment()` resolves `COALESCE(p.name, s.name)` —
+when the subject being gated is an area, it matches on its parent's name. Holding
+the MAPEH assignment therefore gates Music, Arts, PE and Health, with no extra
+`teacher_assignments` rows. `GET /api/grades/by-subject` resolves the same way,
+both for its own teacher check and for the "Subject Teacher" name it returns.
 
 **Score items are scoped per section** — `score_items` has a `section` column; unique index `(component_id, quarter, section, name) WHERE is_active=TRUE`. All queries filter by `section`. A teacher with the same subject in two sections maintains fully independent items per section — adding/removing an item in one section does not affect the other.
 

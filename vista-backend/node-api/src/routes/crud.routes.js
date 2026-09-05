@@ -23,6 +23,13 @@ const {
   isAdviserOfStudent,
   activeSchoolYear,
 } = require('../utils/advisory');
+// MAPEH and anything shaped like it: a learning area graded through its areas.
+// Reads here count learning areas; only Score Entry works one level down.
+const {
+  areasOf,
+  assertGradeable,
+  rollUpAfterGradeWrite,
+} = require('../utils/subjectAreas');
 
 // Build a "First Middle Surname" string from name parts (server-side users
 // have name parts but `full_name` is the authoritative display column already;
@@ -38,6 +45,28 @@ function composeFullName(row) {
 // rejected here. Parents of linked Grade 1–6 students are allowed (mobile app);
 // parents of Kinder pupils simply get no rows (they have no `grades` entries).
 const GRADE_ROLES = [ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM, ROLES.TEACHER, ROLES.PARENT];
+
+/**
+ * Attendance is taken against a **learning area**, never one of its areas.
+ *
+ * MAPEH's four areas each carry their own grade, but a learner sits in one
+ * MAPEH period — so one roll. Recording against Music instead would leave four
+ * partial registers where there should be one, and every attendance rate
+ * derived from them (the risk factor, the parent app's "X of Y days") would be
+ * computed off a fraction of the days the learner actually attended.
+ */
+const assertAttendanceTarget = async (subjectId) => {
+  const sub = await query(
+    `SELECT s.name, p.name AS parent_name
+       FROM subjects s LEFT JOIN subjects p ON p.id = s.parent_id
+      WHERE s.id = $1`, [subjectId]);
+  if (!sub.rows.length) throw new AppError('Subject not found.', 404);
+  if (sub.rows[0].parent_name) {
+    throw new AppError(
+      `Attendance is recorded for ${sub.rows[0].parent_name} as a whole, not for ` +
+      `${sub.rows[0].name} on its own.`, 409);
+  }
+};
 
 attendanceRouter.use(authenticate);
 
@@ -191,6 +220,11 @@ attendanceRouter.post('/', authorize('teacher'), async (req, res, next) => {
     const inserted = [];
     for (const record of records) {
       if (!record.subject_id) throw new AppError('subject_id is required for each record.', 400);
+      // Attendance is one roll per learning area per day. MAPEH's areas are
+      // graded separately but not attended separately — a learner sits in one
+      // MAPEH period, so recording against Music would split the register into
+      // four partial ones and make every attendance rate wrong.
+      await assertAttendanceTarget(record.subject_id);
       // `school_year_id` is derived from the subject, not from the date. Subjects
       // are scoped per school year, so the subject is the authoritative answer to
       // "which year is this attendance from" -- and the date is not: consecutive
@@ -252,7 +286,7 @@ gradeRouter.get('/', enforceParentLinked, async (req, res, next) => {
       // not its id, so the adviser's bound is the label.
       teacherFilter = `
          AND (
-           s.name IN (
+           COALESCE(par.name, s.name) IN (
              SELECT ta.subject
              FROM teacher_assignments ta
              JOIN students st ON st.id = $1
@@ -270,13 +304,20 @@ gradeRouter.get('/', enforceParentLinked, async (req, res, next) => {
          )`;
     }
 
+    // `parent_subject_id` / `parent_subject_name` are non-null on an area
+    // (Music under MAPEH) and null on a learning area. Both are returned so a
+    // consumer can nest the areas under their learning area — and, crucially,
+    // average only the learning areas. Student Detail and the parent app both
+    // do exactly that; returning one level only would force a second request.
     const result = await query(
-      `SELECT g.*, s.name as subject_name
+      `SELECT g.*, s.name as subject_name,
+              s.parent_id AS parent_subject_id, par.name AS parent_subject_name
        FROM grades g
        JOIN subjects s ON s.id = g.subject_id
+       LEFT JOIN subjects par ON par.id = s.parent_id
        WHERE g.student_id = $1
          AND ($2::text IS NULL OR g.school_year = $2)${teacherFilter}
-       ORDER BY g.quarter, s.name`,
+       ORDER BY g.quarter, COALESCE(par.name, s.name), s.parent_id NULLS FIRST, s.name`,
       params
     );
 
@@ -344,6 +385,11 @@ gradeRouter.post('/', authorize(ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM, ROLES.TEACH
       if (!r.student_id || !r.subject_id) {
         throw new AppError('student_id and subject_id are required on every record.', 422);
       }
+      // A learning area graded through its areas has no grade of its own to
+      // submit — its grade is the average of the areas, written by the roll-up
+      // below. Accepting one here would let a hand-entered MAPEH grade sit until
+      // the next area was saved and then silently vanish.
+      await assertGradeable(r.subject_id);
       const initial = Number(r.score);
       if (!Number.isFinite(initial) || initial < 0 || initial > 100) {
         throw new AppError('score must be a number between 0 and 100.', 422);
@@ -372,6 +418,12 @@ gradeRouter.post('/', authorize(ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM, ROLES.TEACH
         [r.student_id, r.subject_id, period, syRow.label, rounded, finalGrade, remarks, req.user.id]
       );
       inserted.push(result.rows[0]);
+
+      // Roll the write up into its learning area when the subject is an area.
+      await rollUpAfterGradeWrite(null, {
+        student_id: r.student_id, subject_id: r.subject_id, quarter: period,
+        school_year: syRow.label, policy, recorded_by: req.user.id,
+      });
     }
 
     res.status(201).json({ message: `${inserted.length} grade records saved.`, records: inserted });
@@ -387,9 +439,13 @@ gradeRouter.get('/by-subject', async (req, res, next) => {
     if (!subject_id || !grade_level || !section || !school_year)
       throw new AppError('subject_id, grade_level, section, and school_year are all required.', 400);
 
-    // Teacher authorization: must have matching assignment (admin bypasses)
+    // Teacher authorization: must have matching assignment (admin bypasses).
+    // One teacher handles a whole learning area, so an area (Music) is assigned
+    // under its parent's name (MAPEH) — see verifyTeacherAssignment().
     if (req.user.role === 'teacher') {
-      const subjectRow = await query('SELECT name FROM subjects WHERE id=$1', [subject_id]);
+      const subjectRow = await query(
+        `SELECT COALESCE(p.name, s.name) AS name FROM subjects s
+           LEFT JOIN subjects p ON p.id = s.parent_id WHERE s.id=$1`, [subject_id]);
       if (!subjectRow.rows.length) throw new AppError('Subject not found.', 404);
       const subjectName = subjectRow.rows[0].name;
       const assignCheck = await query(
@@ -429,9 +485,15 @@ gradeRouter.get('/by-subject', async (req, res, next) => {
       }
     }
 
-    // 3. Subject name
-    const subjectResult = await query('SELECT name FROM subjects WHERE id=$1', [subject_id]);
-    const subject_name = subjectResult.rows[0]?.name || '';
+    // 3. Subject name, plus what it is: an area names its learning area, and a
+    // learning area names the areas its grade is averaged from. The Grades page
+    // uses both to caption the sheet and to explain a blank cell.
+    const subjectResult = await query(
+      `SELECT s.name, s.parent_id, p.name AS parent_name FROM subjects s
+         LEFT JOIN subjects p ON p.id = s.parent_id WHERE s.id=$1`, [subject_id]);
+    const subject_name  = subjectResult.rows[0]?.name || '';
+    const parent_name   = subjectResult.rows[0]?.parent_name || null;
+    const areas         = (await areasOf(subject_id)).map(a => ({ id: a.id, name: a.name }));
 
     // 4. Teacher name
     const teacherResult = await query(
@@ -440,12 +502,12 @@ gradeRouter.get('/by-subject', async (req, res, next) => {
        JOIN users u ON u.id = ta.teacher_id
        WHERE ta.grade_level=$1 AND ta.section=$2 AND ta.subject=$3 AND ta.school_year=$4
        LIMIT 1`,
-      [grade_level, section, subject_name, school_year]
+      [grade_level, section, parent_name || subject_name, school_year]
     );
     const t = teacherResult.rows[0];
     const teacher_name = t ? `${t.surname}, ${t.first_name}${t.middle_name ? ' ' + t.middle_name : ''}` : null;
 
-    res.json({ students, grades: gradesMap, subject_name, teacher_name });
+    res.json({ students, grades: gradesMap, subject_name, teacher_name, parent_name, areas });
   } catch (err) {
     next(err);
   }

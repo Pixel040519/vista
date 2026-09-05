@@ -614,7 +614,12 @@ class _GradeAcademics extends ConsumerWidget {
               final q = quarters[i - 1];
               final rows = byQuarter[q]!
                 ..sort((a, b) => a.subjectName.compareTo(b.subjectName));
-              final graded = rows.where((g) => g.grade != null).toList();
+              // Learning areas only. MAPEH's four areas come back alongside the
+              // MAPEH grade averaged from them, so counting every row would
+              // weigh that one learning area five times against the others.
+              final graded = rows
+                  .where((g) => g.grade != null && !g.isArea)
+                  .toList();
               final avg = graded.isEmpty
                   ? null
                   : graded
@@ -647,6 +652,12 @@ class _QuarterGradesCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final learningAreas = rows.where((g) => !g.isArea).toList();
+    final areasByParent = <String, List<Grade>>{};
+    for (final g in rows.where((g) => g.isArea)) {
+      areasByParent.putIfAbsent(g.parentSubjectName!, () => []).add(g);
+    }
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -687,13 +698,19 @@ class _QuarterGradesCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Divider(height: 1),
-            ...rows.map((g) {
+            ...learningAreas.expand((g) {
               final pass = (g.remarks ?? '').toLowerCase() == 'passed';
               final fail = (g.remarks ?? '').toLowerCase() == 'failed';
               final gradeColor = fail
                   ? VistaColors.danger
                   : (pass ? VistaColors.success : VistaColors.navy950);
-              return Padding(
+              // MAPEH's areas, indented directly beneath it — a parent reading
+              // "MAPEH 88" is entitled to see it is the average of four marks.
+              // They are shown but never counted: the quarter average above and
+              // the report card both treat MAPEH as one learning area.
+              final areas = areasByParent[g.subjectName] ?? const <Grade>[];
+              return [
+              Padding(
                 padding: const EdgeInsets.symmetric(vertical: 10),
                 child: Row(
                   children: [
@@ -735,7 +752,30 @@ class _QuarterGradesCard extends StatelessWidget {
                     ),
                   ],
                 ),
-              );
+              ),
+              for (final area in areas)
+                Padding(
+                  padding: const EdgeInsets.only(left: 16, bottom: 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '› ${area.subjectName}',
+                          style: const TextStyle(
+                              fontSize: 13, color: Colors.black54),
+                        ),
+                      ),
+                      Text(
+                        area.grade?.toStringAsFixed(1) ?? '—',
+                        style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black54),
+                      ),
+                    ],
+                  ),
+                ),
+              ];
             }),
           ],
         ),

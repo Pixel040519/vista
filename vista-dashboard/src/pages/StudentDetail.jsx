@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { ArrowLeft, BookOpen, ClipboardCheck, Heart, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock, CalendarDays, Archive, ArchiveRestore, GraduationCap } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
@@ -68,6 +68,14 @@ export default function StudentDetail() {
   const [loading, setLoading]   = useState(true)
   const [tab, setTab]           = useState('Overview')
   const [expandedSYs, setExpandedSYs] = useState(() => new Set())
+  // Which learning areas have their areas open, keyed "SY|||MAPEH" so the same
+  // learning area can be expanded independently in each school year.
+  const [expandedAreas, setExpandedAreas] = useState(() => new Set())
+  const toggleAreas = (key) => setExpandedAreas(prev => {
+    const next = new Set(prev)
+    next.has(key) ? next.delete(key) : next.add(key)
+    return next
+  })
   const [expandedAttSYs, setExpandedAttSYs] = useState(() => new Set())
   const [expandedAttMonths, setExpandedAttMonths] = useState(() => new Set())
   const [expandedBehSYs, setExpandedBehSYs] = useState(() => new Set())
@@ -360,12 +368,23 @@ export default function StudentDetail() {
     return a
   }, {})
 
-  // Group grades by school year → subject (most recent SY first)
+  // Group grades by school year → learning area → period, with each learning
+  // area carrying its areas. MAPEH is one row whose grade is the average of
+  // Music, Arts, Physical Education and Health; those sit under it, revealed on
+  // click, which is how an SF9 prints them and how the ECE tab below already
+  // renders a subject with skills.
   const gradesBySY = grades.reduce((acc, g) => {
     const sy = g.school_year || '—'
+    const area = g.parent_subject_name || g.subject_name
     if (!acc[sy]) acc[sy] = {}
-    if (!acc[sy][g.subject_name]) acc[sy][g.subject_name] = {}
-    acc[sy][g.subject_name][g.quarter] = g.grade
+    if (!acc[sy][area]) acc[sy][area] = { periods: {}, areas: {} }
+    if (g.parent_subject_name) {
+      const sub = acc[sy][area].areas
+      if (!sub[g.subject_name]) sub[g.subject_name] = {}
+      sub[g.subject_name][g.quarter] = g.grade
+    } else {
+      acc[sy][area].periods[g.quarter] = g.grade
+    }
     return acc
   }, {})
   const sortedSYs = Object.keys(gradesBySY).sort().reverse()
@@ -917,14 +936,42 @@ export default function StudentDetail() {
                           </tr>
                         </thead>
                         <tbody>
-                          {subjects.map(([subject, quarters]) => (
-                            <tr key={subject}>
-                              <td className="font-medium">{subject}</td>
-                              {gradingForSY(sy).periods.map(q => (
-                                <td key={q}><GradeChip grade={quarters[q]} /></td>
-                              ))}
-                            </tr>
-                          ))}
+                          {subjects.map(([subject, entry]) => {
+                            const areas = Object.entries(entry.areas || {})
+                            const key = `${sy}|||${subject}`
+                            const open = expandedAreas.has(key)
+                            return (
+                              <Fragment key={subject}>
+                                <tr className={areas.length ? 'cursor-pointer hover:bg-slate-50' : undefined}
+                                  onClick={areas.length ? () => toggleAreas(key) : undefined}>
+                                  <td className="font-medium">
+                                    <span className="flex items-center gap-1.5">
+                                      {areas.length > 0 && (open
+                                        ? <ChevronDown size={13} className="text-slate-400"/>
+                                        : <ChevronRight size={13} className="text-slate-400"/>)}
+                                      {subject}
+                                      {areas.length > 0 && (
+                                        <span className="text-[10px] font-medium text-slate-400">
+                                          avg. of {areas.length}
+                                        </span>
+                                      )}
+                                    </span>
+                                  </td>
+                                  {gradingForSY(sy).periods.map(q => (
+                                    <td key={q}><GradeChip grade={entry.periods[q]} /></td>
+                                  ))}
+                                </tr>
+                                {open && areas.map(([areaName, quarters]) => (
+                                  <tr key={areaName} className="bg-slate-50/60">
+                                    <td className="pl-8 text-[13px] text-slate-500">{areaName}</td>
+                                    {gradingForSY(sy).periods.map(q => (
+                                      <td key={q}><GradeChip grade={quarters[q]} /></td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </Fragment>
+                            )
+                          })}
                         </tbody>
                       </table>
                     </div>

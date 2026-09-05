@@ -8,6 +8,7 @@ const { loadSection, sectionUsage, describeUsage, renameSectionEverywhere } = re
 const { gradeScopeForRole, canManageGrade, isScopedAdmin, isSuperAdmin } = require('../utils/roles')
 const { RATING_SCALES, resolveAssessment } = require('../utils/grading')
 const { loadAssessmentRows } = require('../utils/assessmentConfig')
+const { areasOf, assertGradeable, ensureMapehAreas } = require('../utils/subjectAreas')
 // The same predicate the Enrollment roster filters on — see `utils/rosterSql.js`.
 const { PREV_JOIN, BELONGS_TO_YEAR, withStudentAlias } = require('../utils/rosterSql')
 
@@ -661,10 +662,29 @@ router.post('/school-years', authorizeSuperAdmin, async (req, res, next) => {
 
       // Copy subjects & sections from another school year
       if (value.copy_from_id) {
+        // Two passes, because `parent_id` points at a row in the *source* year
+        // and has to be remapped to its copy. Learning areas first, then their
+        // areas, re-matched by (school_year_id, grade_level, name) — the same
+        // name-based re-match the grading-structure copy 40 lines below uses.
+        // Unlike an adviser, a subject tree is a timetable that repeats, so
+        // carrying MAPEH's four areas forward is exactly right.
         await client.query(
           `INSERT INTO subjects (name, grade_level, school_year_id)
            SELECT name, grade_level, $1 FROM subjects
-           WHERE school_year_id=$2 AND is_active=TRUE
+           WHERE school_year_id=$2 AND is_active=TRUE AND parent_id IS NULL
+           ON CONFLICT DO NOTHING`,
+          [newSY.id, value.copy_from_id]
+        )
+        await client.query(
+          `INSERT INTO subjects (name, grade_level, school_year_id, parent_id)
+           SELECT area.name, area.grade_level, $1, newparent.id
+             FROM subjects area
+             JOIN subjects oldparent ON oldparent.id = area.parent_id
+             JOIN subjects newparent ON newparent.school_year_id = $1
+                                    AND newparent.grade_level    = oldparent.grade_level
+                                    AND newparent.name           = oldparent.name
+                                    AND newparent.is_active      = TRUE
+            WHERE area.school_year_id=$2 AND area.is_active=TRUE AND area.parent_id IS NOT NULL
            ON CONFLICT DO NOTHING`,
           [newSY.id, value.copy_from_id]
         )
@@ -683,6 +703,16 @@ router.post('/school-years', authorizeSuperAdmin, async (req, res, next) => {
            ON CONFLICT DO NOTHING`,
           [newSY.id, value.copy_from_id]
         )
+
+        // A MAPEH the source year never had areas for (one created before this
+        // rule, or one that was blocked then) still arrives split, so the new
+        // year is correct regardless of the state of the year it came from.
+        const newMapeh = await client.query(
+          `SELECT id, name, grade_level, school_year_id, parent_id FROM subjects
+            WHERE school_year_id=$1 AND is_active=TRUE AND parent_id IS NULL`,
+          [newSY.id]
+        )
+        for (const sub of newMapeh.rows) await ensureMapehAreas(client, sub)
 
         // Copy grading structures: fetch old categories, insert as new, then copy children
         const oldCats = await client.query(
@@ -912,70 +942,140 @@ router.delete('/school-years/:id', authorizeSuperAdmin, async (req, res, next) =
 // ════════════════════════════════════════════════════════════
 // SUBJECTS  (all filtered by school_year_id)
 // ════════════════════════════════════════════════════════════
+//
+// A subject with `parent_id IS NULL` is a **learning area** — which is every
+// subject that existed before MAPEH was split. A non-NULL `parent_id` makes it
+// an **area** of one (Music, Arts, Physical Education, Health).
+//
+// These reads default to learning areas only, because "the subjects of Grade 4"
+// means the learning areas in every existing caller: the Grades page dropdown,
+// the Attendance dropdown, the grading-structure "copy from" picker. Score
+// Entry and the Subjects tab are the two surfaces that need the level below,
+// and they ask for it — see `include_areas` and `/subjects/grouped`.
+
+// Columns every subject read returns. `area_count` is what tells a caller a
+// learning area is graded through its areas and so is not itself gradeable.
+const SUBJECT_COLS = `s.id, s.name, s.grade_level, s.parent_id, s.school_year_id, s.created_at,
+              p.name AS parent_name,
+              (SELECT COUNT(*)::int FROM subjects a
+                WHERE a.parent_id = s.id AND a.is_active = TRUE) AS area_count,
+              EXISTS(SELECT 1 FROM grading_structure gs
+                      WHERE gs.subject_id = s.id AND gs.is_active = TRUE) AS has_grading`
 
 router.get('/subjects', async (req, res, next) => {
   try {
     const sy_id = await resolveSYId(req.query.sy_id)
-    const conditions = ['school_year_id=$1', 'is_active=TRUE']
+    const conditions = ['s.school_year_id=$1', 's.is_active=TRUE']
     const params = [sy_id]
-    if (req.query.grade_level) { params.push(req.query.grade_level); conditions.push(`grade_level=$${params.length}`) }
+    if (req.query.grade_level) { params.push(req.query.grade_level); conditions.push(`s.grade_level=$${params.length}`) }
     if (isScopedAdmin(req.user.role)) {
       params.push(gradeScopeForRole(req.user.role))
-      conditions.push(`grade_level = ANY($${params.length}::text[])`)
+      conditions.push(`s.grade_level = ANY($${params.length}::text[])`)
     }
+    // Opt in to the areas; every caller that does not ask means learning areas.
+    if (String(req.query.include_areas) !== 'true') conditions.push('s.parent_id IS NULL')
 
     const result = await query(
-      `SELECT id, name, grade_level, created_at,
-              EXISTS(SELECT 1 FROM grading_structure gs WHERE gs.subject_id=subjects.id AND gs.is_active=TRUE) AS has_grading
-       FROM subjects WHERE ${conditions.join(' AND ')}
-       ORDER BY ${GRADE_ORDER}, name`, params
+      `SELECT ${SUBJECT_COLS}
+       FROM subjects s LEFT JOIN subjects p ON p.id = s.parent_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY ${GRADE_ORDER.replace(/grade_level/g, 's.grade_level')},
+                COALESCE(p.name, s.name), s.parent_id NULLS FIRST, s.name`, params
     )
     res.json({ subjects: result.rows })
   } catch (err) { next(err) }
 })
 
+// The Subjects tab's read. Returns the tree: one entry per learning area, each
+// carrying its `areas` — so the tab can render MAPEH with its four indented
+// beneath it without a second request.
 router.get('/subjects/grouped', async (req, res, next) => {
   try {
     const sy_id = await resolveSYId(req.query.sy_id)
     const scope = gradeScopeForRole(req.user.role)
     const result = await query(
-      `SELECT id, name, grade_level,
-              EXISTS(SELECT 1 FROM grading_structure gs WHERE gs.subject_id=subjects.id AND gs.is_active=TRUE) AS has_grading
-       FROM subjects WHERE school_year_id=$1 AND is_active=TRUE
-         AND grade_level = ANY($2::text[])
-       ORDER BY ${GRADE_ORDER}, name`, [sy_id, scope]
+      `SELECT ${SUBJECT_COLS}
+       FROM subjects s LEFT JOIN subjects p ON p.id = s.parent_id
+       WHERE s.school_year_id=$1 AND s.is_active=TRUE
+         AND s.grade_level = ANY($2::text[])
+       ORDER BY ${GRADE_ORDER.replace(/grade_level/g, 's.grade_level')}, s.name`, [sy_id, scope]
     )
     const grouped = {}
     for (const gl of scope) grouped[gl] = []
-    for (const row of result.rows) { if (grouped[row.grade_level]) grouped[row.grade_level].push(row) }
+    const byId = new Map()
+    for (const row of result.rows) {
+      if (row.parent_id) continue
+      row.areas = []
+      byId.set(row.id, row)
+      if (grouped[row.grade_level]) grouped[row.grade_level].push(row)
+    }
+    for (const row of result.rows) {
+      if (!row.parent_id) continue
+      const parent = byId.get(row.parent_id)
+      if (parent) parent.areas.push(row)
+    }
     res.json({ grouped })
   } catch (err) { next(err) }
 })
 
+// Re-read one subject in the shape every subject endpoint returns.
+const loadSubjectRow = async (id) => {
+  const r = await query(
+    `SELECT ${SUBJECT_COLS}
+       FROM subjects s LEFT JOIN subjects p ON p.id = s.parent_id
+      WHERE s.id = $1`, [id])
+  return r.rows[0] || null
+}
+
 router.post('/subjects', authorizeAnyAdmin, async (req, res, next) => {
   try {
+    // No `parent_id`. Areas are not composed by hand — MAPEH's four are created
+    // for it by `ensureMapehAreas()`, which is the only writer of an area row.
     const { error, value } = Joi.object({
       name:         Joi.string().min(1).max(100).required(),
       grade_level:  Joi.string().valid(...GRADE_LEVELS).required(),
       sy_id:        Joi.string().uuid().optional(),
-    }).validate(req.body)
+    }).validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
 
     enforceGradeScope(req, value.grade_level)
 
     const sy_id = await resolveSYId(value.sy_id)
+
+    // Subjects are soft-deleted but `subjects_sy_grade_name_unique` does not
+    // filter `is_active`, so a dormant row of the same name still owns it. Say
+    // so instead of letting the constraint surface as "Record already exists."
     const dup = await query(
-      'SELECT id FROM subjects WHERE school_year_id=$1 AND grade_level=$2 AND name=$3 AND is_active=TRUE',
+      'SELECT id, is_active FROM subjects WHERE school_year_id=$1 AND grade_level=$2 AND name=$3',
       [sy_id, value.grade_level, value.name]
     )
-    if (dup.rows.length) throw new AppError(`"${value.name}" already exists in ${value.grade_level} for this school year.`, 409)
+    if (dup.rows.length) {
+      throw new AppError(dup.rows[0].is_active
+        ? `"${value.name}" already exists in ${value.grade_level} for this school year.`
+        : `"${value.name}" was removed from ${value.grade_level} earlier this school year and still holds the name. Rename this one, or restore the original.`,
+        409)
+    }
 
-    const result = await query(
-      `INSERT INTO subjects (name, grade_level, school_year_id)
-       VALUES ($1,$2,$3) RETURNING id, name, grade_level, created_at`,
-      [value.name, value.grade_level, sy_id]
-    )
-    res.status(201).json({ message: 'Subject added.', subject: result.rows[0] })
+    const created = await withTransaction(async (client) => {
+      const result = await client.query(
+        `INSERT INTO subjects (name, grade_level, school_year_id)
+         VALUES ($1,$2,$3) RETURNING id, name, grade_level, school_year_id, parent_id`,
+        [value.name, value.grade_level, sy_id]
+      )
+      // A new MAPEH arrives already graded through Music, Arts, Physical
+      // Education and Health — in the same transaction, so it is never briefly
+      // a flat subject someone could start entering marks against.
+      await ensureMapehAreas(client, result.rows[0])
+      return result.rows[0].id
+    })
+
+    const subject = await loadSubjectRow(created)
+    res.status(201).json({
+      message: subject.area_count
+        ? `Subject added, graded through its ${subject.area_count} areas.`
+        : 'Subject added.',
+      subject,
+    })
   } catch (err) { next(err) }
 })
 
@@ -990,6 +1090,27 @@ router.put('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
     await assertCurriculumRowInScope(req, 'subjects', req.params.id)
     if (value.grade_level) enforceGradeScope(req, value.grade_level)
 
+    const existing = await query(
+      'SELECT id, name, grade_level, school_year_id, parent_id FROM subjects WHERE id=$1 AND is_active=TRUE',
+      [req.params.id])
+    if (!existing.rows.length) throw new AppError('Subject not found.', 404)
+    const cur = existing.rows[0]
+
+    // An area sits in its learning area's grade level by construction.
+    if (value.grade_level && cur.parent_id && value.grade_level !== cur.grade_level) {
+      throw new AppError('An area follows its learning area — move the learning area instead.', 422)
+    }
+    // Without this a rename onto an existing name raises a raw 23505.
+    if (value.name && value.name !== cur.name) {
+      const dup = await query(
+        `SELECT id FROM subjects
+          WHERE school_year_id=$1 AND grade_level=$2 AND name=$3 AND is_active=TRUE AND id<>$4`,
+        [cur.school_year_id, value.grade_level || cur.grade_level, value.name, cur.id])
+      if (dup.rows.length) {
+        throw new AppError(`"${value.name}" already exists in ${value.grade_level || cur.grade_level} for this school year.`, 409)
+      }
+    }
+
     const sets=[]; const params=[]
     if (value.name)        { params.push(value.name);        sets.push(`name=$${params.length}`) }
     if (value.grade_level) { params.push(value.grade_level); sets.push(`grade_level=$${params.length}`) }
@@ -999,28 +1120,64 @@ router.put('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
 
     const result = await query(
       `UPDATE subjects SET ${sets.join(',')}
-       WHERE id=$${params.length} AND is_active=TRUE
-       RETURNING id, name, grade_level, created_at`, params
+       WHERE id=$${params.length} AND is_active=TRUE RETURNING id, name, grade_level, school_year_id, parent_id`, params
     )
     if (!result.rows.length) throw new AppError('Subject not found.', 404)
-    res.json({ message: 'Subject updated.', subject: result.rows[0] })
+    // A subject renamed to MAPEH is a MAPEH, and gets its areas like any other.
+    // Renaming one of the four (Physical Education -> P.E.) is a no-op here:
+    // ensureMapehAreas only fills in a MAPEH that has none at all.
+    await ensureMapehAreas(null, result.rows[0])
+    res.json({ message: 'Subject updated.', subject: await loadSubjectRow(req.params.id) })
   } catch (err) { next(err) }
 })
 
 router.delete('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
-    const sub = await query('SELECT name, grade_level FROM subjects WHERE id=$1', [req.params.id])
+    const sub = await query(
+      'SELECT id, name, grade_level, school_year_id, parent_id FROM subjects WHERE id=$1', [req.params.id])
     if (!sub.rows.length) throw new AppError('Subject not found.', 404)
-    if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, sub.rows[0].grade_level)) {
+    const row = sub.rows[0]
+    if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, row.grade_level)) {
       throw new AppError('Subject is outside your grade scope.', 403)
     }
 
-    const inUse = await query('SELECT COUNT(*) FROM grades WHERE subject_id=$1', [req.params.id])
-    if (parseInt(inUse.rows[0].count) > 0) {
-      throw new AppError('Cannot delete: this subject has existing grade records.', 409)
+    // An area is structural, not something an admin assembled: MAPEH is graded
+    // through exactly its four wherever it exists. Removing one on its own would
+    // leave the learning area quietly averaging three, and nothing would put it
+    // back — `ensureMapehAreas()` only fills in a MAPEH that has *no* areas.
+    // Deleting the learning area takes them with it (below); renaming one is
+    // always allowed, since a school may write "P.E.".
+    if (row.parent_id) {
+      const parent = await loadSubjectRow(row.parent_id)
+      throw new AppError(
+        `"${row.name}" is one of ${parent ? parent.name : 'its learning area'}'s areas ` +
+        `and cannot be removed on its own — its grade is part of that average. ` +
+        `Delete ${parent ? `"${parent.name}"` : 'the learning area'} to remove all of ` +
+        `them, or rename this one if the school calls it something else.`, 409)
     }
-    await query('UPDATE subjects SET is_active=FALSE, updated_at=NOW() WHERE id=$1', [req.params.id])
-    res.json({ message: `"${sub.rows[0].name}" removed from ${sub.rows[0].grade_level}.` })
+
+    // A learning area goes with its areas: they exist only for it, which is what
+    // the FK's ON DELETE CASCADE already says. So the usage check has to cover
+    // the whole family — a grade recorded under Music blocks deleting MAPEH,
+    // exactly as a grade under MAPEH itself would.
+    const areas = await areasOf(row.id)
+    const family = [row.id, ...areas.map(a => a.id)]
+    const inUse = await query(
+      `SELECT s.name, COUNT(*)::int AS n FROM grades g
+         JOIN subjects s ON s.id = g.subject_id
+        WHERE g.subject_id = ANY($1::uuid[]) GROUP BY s.name ORDER BY s.name`, [family])
+    if (inUse.rows.length) {
+      const where = inUse.rows.map(r => `${r.n} under ${r.name}`).join(', ')
+      throw new AppError(`Cannot delete: this subject has existing grade records (${where}).`, 409)
+    }
+    await query(
+      'UPDATE subjects SET is_active=FALSE, updated_at=NOW() WHERE id = ANY($1::uuid[])', [family])
+
+    res.json({
+      message: areas.length
+        ? `"${row.name}" and its ${areas.length} areas removed from ${row.grade_level}.`
+        : `"${row.name}" removed from ${row.grade_level}.`,
+    })
   } catch (err) { next(err) }
 })
 
@@ -1446,6 +1603,9 @@ router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) =>
     if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, sub.rows[0].grade_level)) {
       throw new AppError('Subject is outside your grade scope.', 403)
     }
+    // A learning area graded through its areas has no weights of its own —
+    // each area carries its own Written Work / Performance Task / Assessment.
+    await assertGradeable(req.params.id)
 
     const catSchema = Joi.object({
       id:         Joi.string().uuid().optional(),

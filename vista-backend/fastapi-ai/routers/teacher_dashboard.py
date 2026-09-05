@@ -55,14 +55,28 @@ async def get_teacher_dashboard_summary(
     subj_rows = await db.execute(
         text(
             """
-            SELECT id, grade_level, name
+            SELECT id, grade_level, name, parent_id
             FROM subjects
-            WHERE school_year_id = CAST(:syid AS UUID)
+            WHERE school_year_id = CAST(:syid AS UUID) AND is_active = TRUE
             """
         ),
         {"syid": sy_id},
     )
-    subj_lookup = {(r.grade_level, r.name): str(r.id) for r in subj_rows.fetchall()}
+    subj_all = subj_rows.fetchall()
+    subj_lookup = {
+        (r.grade_level, r.name): str(r.id) for r in subj_all if r.parent_id is None
+    }
+    # Areas of a learning area, keyed by the parent's id. MAPEH is assigned as
+    # one subject but graded through four, so anything that reaches score items
+    # has to walk down to them -- see "gradeable" below.
+    areas_by_parent = {}
+    for r in subj_all:
+        if r.parent_id is not None:
+            areas_by_parent.setdefault(str(r.parent_id), []).append(
+                {"id": str(r.id), "name": r.name}
+            )
+    for v in areas_by_parent.values():
+        v.sort(key=lambda x: x["name"])
 
     assignments = []
     for a in assignments_raw:
@@ -73,8 +87,31 @@ async def get_teacher_dashboard_summary(
                 "section": a.section,
                 "subject": a.subject,
                 "subject_id": subject_id,
+                "area_count": len(areas_by_parent.get(subject_id or "", [])),
             }
         )
+
+    # The assignments as **gradeable** subjects. Identical to `assignments` for an
+    # ordinary subject; a learning area with areas expands into one entry per
+    # area, because grading structures and score items hang off the areas. The
+    # two lists are kept apart on purpose: attendance is one roll for the whole
+    # learning area, so it must keep using `assignments`.
+    gradeable = []
+    for a in assignments:
+        areas = areas_by_parent.get(a["subject_id"] or "", [])
+        if not areas:
+            gradeable.append(a)
+            continue
+        for area in areas:
+            gradeable.append(
+                {
+                    "grade_level": a["grade_level"],
+                    "section": a["section"],
+                    "subject": f"{a['subject']} — {area['name']}",
+                    "subject_id": area["id"],
+                    "area_count": 0,
+                }
+            )
 
     grade_section_pairs = sorted(
         {(a["grade_level"], a["section"]) for a in assignments}
@@ -255,7 +292,8 @@ async def get_teacher_dashboard_summary(
     # quarter that has any items, so adding items in a new quarter resets
     # those counts to reflect just that quarter's progress.
     score_progress = []
-    if subject_ids:
+    gradeable_subject_ids = list({a["subject_id"] for a in gradeable if a["subject_id"]})
+    if gradeable_subject_ids:
         # Subject-wide component totals (grading_structure is per subject).
         comp_rows = await db.execute(
             text(
@@ -267,7 +305,7 @@ async def get_teacher_dashboard_summary(
                 GROUP BY subject_id
                 """
             ),
-            {"subids": subject_ids},
+            {"subids": gradeable_subject_ids},
         )
         comp_total_by_subject = {
             str(r.subject_id): r.components_total or 0 for r in comp_rows.fetchall()
@@ -298,7 +336,7 @@ async def get_teacher_dashboard_summary(
                 GROUP BY l.subject_id, l.section, l.latest_quarter
                 """
             ),
-            {"subids": subject_ids},
+            {"subids": gradeable_subject_ids},
         )
         agg_by_subject_section = {
             (str(r.subject_id), r.section): {
@@ -309,7 +347,7 @@ async def get_teacher_dashboard_summary(
             for r in sp_rows.fetchall()
         }
 
-        for a in assignments:
+        for a in gradeable:
             sid = a["subject_id"]
             if not sid:
                 continue

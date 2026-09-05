@@ -249,6 +249,11 @@ router.get('/class-health', authorize('teacher'), async (req, res, next) => {
     // 3. Academic metric — latest quarter per subject, averaged across subjects.
     // DISTINCT ON (subject_id) + ORDER BY subject_id, quarter DESC picks the
     // highest-quarter row per subject in a single scan.
+    //
+    // `s.parent_id IS NULL` keeps this on learning areas. `subjectNames` comes
+    // from teacher_assignments, which name MAPEH and never its areas, so this is
+    // already where the match lands — but subject names are only unique within a
+    // grade level, and this query is not narrowed by one.
     const acadRes = await query(
       `SELECT latest.subject_id, sub.name AS subject_name, latest.quarter, latest.grade
          FROM (
@@ -258,6 +263,7 @@ router.get('/class-health', authorize('teacher'), async (req, res, next) => {
             WHERE g.student_id = $1
               AND g.school_year = $2
               AND s.name = ANY($3::text[])
+              AND s.parent_id IS NULL
               AND g.grade IS NOT NULL
             ORDER BY g.subject_id, g.quarter DESC
          ) latest
@@ -853,6 +859,7 @@ router.get('/class-health/all', authorize('teacher'), async (req, res, next) => 
               WHERE g.student_id = ANY($1::uuid[])
                 AND g.school_year = $2
                 AND s.name = ANY($3::text[])
+                AND s.parent_id IS NULL
                 AND g.grade IS NOT NULL
               ORDER BY g.student_id, g.subject_id, g.quarter DESC
            ) latest`,
@@ -1220,15 +1227,22 @@ router.get('/parent-summary/:student_id', enforceParentLinked, async (req, res, 
     // Academic rollup: non-ECE = latest-quarter avg grade; ECE = rated/total for latest quarter.
     let academic = null;
     if (!isEce && syLabel) {
+      // Learning areas only. MAPEH's grade is stored alongside its areas', so
+      // an unfiltered AVG would count the learning area five times over.
       const gRes = await query(
-        `SELECT MAX(quarter) AS q FROM grades WHERE student_id=$1 AND school_year=$2`,
+        `SELECT MAX(g.quarter) AS q FROM grades g
+            JOIN subjects s ON s.id = g.subject_id
+           WHERE g.student_id=$1 AND g.school_year=$2 AND s.parent_id IS NULL`,
         [studentId, syLabel]
       );
       const q = gRes.rows[0]?.q || null;
       if (q) {
         const avgRes = await query(
-          `SELECT AVG(grade)::float AS avg_grade
-             FROM grades WHERE student_id=$1 AND school_year=$2 AND quarter=$3`,
+          `SELECT AVG(g.grade)::float AS avg_grade
+             FROM grades g
+             JOIN subjects s ON s.id = g.subject_id
+            WHERE g.student_id=$1 AND g.school_year=$2 AND g.quarter=$3
+              AND s.parent_id IS NULL`,
           [studentId, syLabel, q]
         );
         academic = {

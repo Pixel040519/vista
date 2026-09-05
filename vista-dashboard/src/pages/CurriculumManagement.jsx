@@ -61,6 +61,12 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig, onAdviser
   const [saving, setSaving]     = useState(false)
   const [deleting, setDeleting] = useState(false)
 
+  const areaCount = item.area_count || 0
+  const areas = item.areas || []
+  const configured = areaCount > 0
+    ? areas.length === areaCount && areas.every(a => a.has_grading)
+    : item.has_grading
+
   const handleSave = async () => {
     if (!name.trim()) return
     setSaving(true)
@@ -111,8 +117,20 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig, onAdviser
       <div className="min-w-0">
         <div className="flex items-center gap-1.5">
           <p className="text-sm font-medium text-slate-700 truncate">{item.name}</p>
-          {type === 'subject' && item.has_grading && onGradingConfig && (
-            <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-brand-400" title="Grading structure configured" />
+          {type === 'subject' && configured && onGradingConfig && (
+            <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-brand-400"
+              title={areaCount ? 'Every area has a grading structure' : 'Grading structure configured'} />
+          )}
+          {/* MAPEH stays one row — its areas are not listed here. The pill is
+              the only hint they exist, because the place they are actually
+              worked with is the grading modal, which opens on a picker for
+              them. Listing four sub-rows here was noise on a tab whose job is
+              the curriculum, not the grading structure. */}
+          {areaCount > 0 && (
+            <span className="flex-shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-brand-50 text-brand-600"
+              title={`Graded through ${areaCount} areas — configure them from the grading button`}>
+              {areaCount} area{areaCount === 1 ? '' : 's'}
+            </span>
           )}
         </div>
         {/* The adviser is a second line rather than a chip beside the name:
@@ -140,7 +158,9 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig, onAdviser
         {type === 'subject' && onGradingConfig && (
           <button onClick={() => onGradingConfig(item)}
             className="p-1.5 rounded-lg text-slate-400 hover:text-brand-500 hover:bg-brand-50 transition-colors"
-            title="Configure grading structure">
+            title={areaCount
+              ? `Configure grading structure for each of the ${areaCount} areas`
+              : 'Configure grading structure'}>
             <SlidersHorizontal size={12}/>
           </button>
         )}
@@ -972,20 +992,35 @@ export default function CurriculumManagement() {
   useEffect(() => { fetchContent() }, [fetchContent])
 
   // ── Subject handlers ───────────────────────────────────────
+  //
+  // `subjects` is a tree now: each learning area carries its `areas`. Adding or
+  // removing one changes the parent's own state (its area count, and whether it
+  // is gradeable at all), so those two refetch rather than patching in place.
+  // A rename changes nothing structural, so it stays optimistic.
   const handleAddSubject = async (payload) => {
     const res = await curriculumApi.createSubject(payload)
+    // A new MAPEH comes back already graded through its four areas, and the
+    // append below cannot invent them — refetch so the tree is right.
+    if (res.data.subject?.area_count) { await fetchContent(); return }
     setSubjects(prev => ({
       ...prev,
-      [payload.grade_level]: [...(prev[payload.grade_level] || []), res.data.subject]
+      [payload.grade_level]: [...(prev[payload.grade_level] || []), { ...res.data.subject, areas: [] }]
     }))
   }
 
   const handleUpdateSubject = async (id, payload) => {
     const res = await curriculumApi.updateSubject(id, payload)
     const updated = res.data.subject
+    // Renaming a subject to MAPEH gives it its four areas server-side, so the
+    // in-place map below would leave a learning area with nothing under it.
+    const known = Object.values(subjects).flat().find(s => s.id === id)
+    if (updated?.area_count && !known?.areas?.length) { await fetchContent(); return }
     setSubjects(prev => {
       const next = { ...prev }
-      for (const gl of GRADE_LEVELS) next[gl] = (next[gl]||[]).map(s => s.id === id ? updated : s)
+      for (const gl of GRADE_LEVELS) {
+        next[gl] = (next[gl] || []).map(s =>
+          s.id === id ? { ...updated, areas: s.areas || [] } : s)
+      }
       return next
     })
   }
@@ -993,11 +1028,7 @@ export default function CurriculumManagement() {
   const handleDeleteSubject = async (id) => {
     const res = await curriculumApi.deleteSubject(id)
     toast.success(res.data.message)
-    setSubjects(prev => {
-      const next = { ...prev }
-      for (const gl of GRADE_LEVELS) next[gl] = (next[gl]||[]).filter(s => s.id !== id)
-      return next
-    })
+    await fetchContent()
   }
 
   // ── Section handlers ───────────────────────────────────────

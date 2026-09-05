@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, ChevronDown, ChevronRight, Loader2, SlidersHorizontal, GripVertical, Copy } from 'lucide-react'
+import { Plus, Trash2, ChevronDown, ChevronRight, ArrowLeft, Loader2, SlidersHorizontal, GripVertical, Copy } from 'lucide-react'
 import { curriculumApi } from '../api/client'
 import { Modal } from './UI'
 import toast from 'react-hot-toast'
@@ -21,13 +21,35 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
   const [loadingCopy, setLoadingCopy] = useState(false)
   const [copyFilter, setCopyFilter] = useState('')
 
+  // MAPEH has no weights of its own — its grade is the average of its areas, and
+  // each area carries a full Written Work / Performance Task / Assessment tree.
+  // So for a composite subject this modal opens on a picker and then edits one
+  // area at a time; `target` is whichever subject the editor below is pointed at.
+  const areas = subject?.areas || []
+  const isComposite = areas.length > 0
+  const [activeArea, setActiveArea] = useState(null)
+  const [areaConfigured, setAreaConfigured] = useState({})
+  const target = activeArea || subject
+
+  // Reopening on a different subject must never inherit the last one's area.
+  // `areaConfigured` is tracked here rather than re-read from the server so the
+  // picker's chips update the moment an area is saved, without a round trip.
+  useEffect(() => {
+    setActiveArea(null)
+    setShowCopy(false)
+    setAreaConfigured(Object.fromEntries(
+      (subject?.areas || []).map(a => [a.id, !!a.has_grading])))
+  }, [open, subject?.id])
+
   // Load existing grading structure + scores check
   useEffect(() => {
-    if (!open || !subject) return
+    if (!open || !target) return
+    // The picker has nothing to load: a composite subject has no structure.
+    if (isComposite && !activeArea) { setCategories([]); setCompsWithScores(new Set()); return }
     setLoading(true)
     Promise.all([
-      curriculumApi.getGrading(subject.id),
-      curriculumApi.checkGradingScores(subject.id),
+      curriculumApi.getGrading(target.id),
+      curriculumApi.checkGradingScores(target.id),
     ])
       .then(([gradingRes, scoresRes]) => {
         const cats = gradingRes.data.categories || []
@@ -46,7 +68,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
       })
       .catch(() => { setCategories([]); setCompsWithScores(new Set()) })
       .finally(() => setLoading(false))
-  }, [open, subject])
+  }, [open, target?.id])
 
   const compHasScores = (compId) => compsWithScores.has(compId)
   const categoryHasScores = (cat) => (cat.components || []).some(c => c.id && compHasScores(c.id))
@@ -171,10 +193,18 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
           })),
         }))
       }
-      await curriculumApi.saveGrading(subject.id, payload)
+      await curriculumApi.saveGrading(target.id, payload)
       toast.success('Grading structure saved.')
       onSaved?.()
-      onClose()
+      // An area saved sends you back to the picker rather than closing, because
+      // MAPEH needs all four before it can produce a grade at all — finishing
+      // one is the middle of the job, not the end of it.
+      if (isComposite) {
+        setAreaConfigured(prev => ({ ...prev, [target.id]: true }))
+        setActiveArea(null)
+      } else {
+        onClose()
+      }
     } catch (err) {
       toast.error(err?.response?.data?.error || 'Failed to save grading structure.')
     } finally { setSaving(false) }
@@ -188,9 +218,10 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
     if (!window.confirm('Remove all grading structure for this subject?')) return
     setSaving(true)
     try {
-      await curriculumApi.clearGrading(subject.id)
+      await curriculumApi.clearGrading(target.id)
       toast.success('Grading structure cleared.')
       setCategories([])
+      if (isComposite) setAreaConfigured(prev => ({ ...prev, [target.id]: false }))
       onSaved?.()
     } catch (err) {
       toast.error(err?.response?.data?.error || 'Failed to clear.')
@@ -203,8 +234,9 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
     setCopyFilter('')
     setLoadingCopy(true)
     try {
-      const res = await curriculumApi.getSubjects({ sy_id: subject.school_year_id })
-      const list = (res.data.subjects || []).filter(s => s.id !== subject.id)
+      const res = await curriculumApi.getSubjects({ sy_id: target.school_year_id, include_areas: true })
+      const list = (res.data.subjects || [])
+        .filter(s => s.id !== target.id && !s.area_count)
       setCopySubjects(list)
     } catch { setCopySubjects([]) }
     setLoadingCopy(false)
@@ -244,13 +276,49 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
 
   return (
     <Modal open={open} onClose={onClose} size="lg"
-      title={`Grading Structure \u2014 ${subject.name}`}>
-      {loading ? (
+      title={`Grading Structure \u2014 ${activeArea ? `${subject.name} \u203A ${activeArea.name}` : subject.name}`}>
+      {isComposite && !activeArea ? (
+        <div className="space-y-4">
+          <p className="text-sm text-slate-500">
+            Pick the area to configure.
+          </p>
+          <div className="space-y-2">
+            {areas.map(a => (
+              <button key={a.id} type="button" onClick={() => setActiveArea(a)}
+                className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-slate-200 hover:border-brand-300 hover:bg-brand-50/40 transition-colors text-left">
+                <span className="flex items-center gap-2 min-w-0">
+                  <SlidersHorizontal size={14} className="flex-shrink-0 text-slate-300" />
+                  <span className="text-sm font-medium text-slate-700 truncate">{a.name}</span>
+                </span>
+                <span className="flex items-center gap-2 flex-shrink-0">
+                  <span className={clsx('text-[11px] font-medium px-2 py-0.5 rounded-full',
+                    areaConfigured[a.id] ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400')}>
+                    {areaConfigured[a.id] ? 'Configured' : 'Not set up'}
+                  </span>
+                  <ChevronRight size={15} className="text-slate-300" />
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-slate-400">
+            {subject.name} has no grade for a period until all {areas.length} areas have one, so each
+            needs a structure before Score Entry can be used for it.
+          </p>
+        </div>
+      ) : loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 size={24} className="animate-spin text-brand-500" />
         </div>
       ) : (
         <div className="space-y-4">
+          {/* Top-left way back to the area list. Only a composite subject has
+              one — an ordinary subject opens straight into its own structure. */}
+          {isComposite && (
+            <button type="button" onClick={() => setActiveArea(null)}
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-brand-600 transition-colors">
+              <ArrowLeft size={14} /> All {subject.name} areas
+            </button>
+          )}
           {/* Validation summary */}
           <div className={clsx(
             'flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium',
@@ -293,7 +361,9 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                     ) : filtered.map(s => (
                       <button key={s.id} type="button" onClick={() => copyFrom(s.id)}
                         className="w-full text-left px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-blue-100 transition-colors">
-                        <span className="font-medium">{s.name}</span>
+                        <span className="font-medium">
+                          {s.parent_name ? `${s.parent_name} — ${s.name}` : s.name}
+                        </span>
                         <span className="text-xs text-slate-400 ml-2">{s.grade_level}</span>
                       </button>
                     ))}

@@ -621,11 +621,19 @@ router.get('/promotion-review', async (req, res, next) => {
     // ── Numeric evidence: final grade per subject, per DO 015 §52 — the mean of
     // the period grades. Missing periods are skipped, so a partial year still
     // reports something rather than nothing.
+    //
+    // `sub.parent_id IS NULL` is load-bearing, not tidying. DO 8 Table 10 counts
+    // **learning areas** below 75, and MAPEH is one of them however many areas it
+    // is graded through. Counting the areas as well would read a learner weak in
+    // Music, Arts and PE as three failed learning areas and retain them, when
+    // DepEd counts one — and would pass, if the MAPEH average clears 75. The
+    // roll-up in utils/subjectAreas.js has already written that MAPEH row.
     const gradeRows = await query(
       `SELECT g.student_id, g.subject_id, sub.name AS subject_name, g.quarter, g.grade
          FROM grades g
          JOIN subjects sub ON sub.id = g.subject_id
-        WHERE g.school_year=$1 AND g.student_id = ANY($2::uuid[])`,
+        WHERE g.school_year=$1 AND g.student_id = ANY($2::uuid[])
+          AND sub.parent_id IS NULL`,
       [source.label, ids]
     )
     const bySubject = new Map()   // student -> subject_id -> { name, periods[] }

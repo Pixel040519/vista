@@ -365,7 +365,7 @@ export function Grades() {
     setSubjectId('')
     setSubjects([])
     setData(null)
-    curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel }).then(res => {
+    curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel, include_areas: true }).then(res => {
       setSubjects(res.data.subjects || res.data)
     }).catch(() => {})
   }, [isTeacher, syId, gradeLevel])
@@ -376,14 +376,24 @@ export function Grades() {
     setSubjectId('')
     setSubjects([])
     setData(null)
-    curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel }).then(res => {
+    curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel, include_areas: true }).then(res => {
       const all = res.data.subjects || res.data
-      setSubjects(all.filter(s => allowedSubjects.includes(s.name)))
+      setSubjects(all.filter(s => allowedSubjects.includes(s.parent_name || s.name)))
     }).catch(() => {})
   }, [isTeacher, syId, gradeLevel, allowedSubjects])
 
   // Reset downstream when class changes
   useEffect(() => { setSubjectId(''); setData(null) }, [selectedClass])
+
+  // A learning area graded through its areas (MAPEH): its sheet is the roll-up,
+  // so it is read-only and has no weighted-category breakdown to summarise.
+  const isComposite = !!(data?.areas?.length)
+
+  // Grade Summary does not exist for one, so a selection carried over from an
+  // ordinary subject must not strand the user on an empty tab.
+  useEffect(() => {
+    if (isComposite && activeTab === 'class') setActiveTab('grading')
+  }, [isComposite, activeTab])
 
   // ── Resolve SY label ──────────────────────────────────────
   const selectedSY = schoolYears.find(sy => sy.id === syId)
@@ -525,7 +535,14 @@ export function Grades() {
             <label className="block text-xs font-medium text-slate-500 mb-1">Subject</label>
             <select className="input" value={subjectId} onChange={e => setSubjectId(e.target.value)} disabled={!gradeLevel || !section}>
               <option value="">— Select —</option>
-              {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {subjects.filter(s => !s.parent_id).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {[...new Set(subjects.filter(s => s.parent_id).map(s => s.parent_name))].map(parent => (
+                <optgroup key={parent} label={parent}>
+                  {subjects.filter(s => s.parent_name === parent).map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
           </div>
         </div>
@@ -536,7 +553,8 @@ export function Grades() {
         <div className="card overflow-hidden">
           {/* Tab bar */}
           <div className="flex border-b border-slate-200">
-            {[{ key: 'grading', label: 'Grading Sheet' }, { key: 'class', label: 'Grade Summary' }].map(tab => (
+            {[{ key: 'grading', label: 'Grading Sheet' },
+              ...(isComposite ? [] : [{ key: 'class', label: 'Grade Summary' }])].map(tab => (
               <button key={tab.key} onClick={() => setActiveTab(tab.key)}
                 className={clsx('px-5 py-3 text-sm font-medium transition-colors relative',
                   activeTab === tab.key
@@ -557,11 +575,20 @@ export function Grades() {
               the summary needs no request of its own to say what it is showing. */}
           <div className="px-5 pt-4 pb-3 border-b border-slate-200">
             <div className="flex flex-wrap items-center justify-between gap-y-2 text-[11px] text-slate-500 uppercase tracking-wider">
-              <span><span className="font-semibold">Learning Area:</span> <span className="normal-case text-slate-700 text-xs font-medium">{data.subject_name}</span></span>
+              <span><span className="font-semibold">Learning Area:</span> <span className="normal-case text-slate-700 text-xs font-medium">
+                {data.parent_name ? `${data.parent_name} — ${data.subject_name}` : data.subject_name}</span></span>
               <span><span className="font-semibold">Grade & Section:</span> <span className="normal-case text-slate-700 text-xs font-medium">{gradeLevel} - {section}</span></span>
               <span><span className="font-semibold">Subject Teacher:</span> <span className="normal-case text-slate-700 text-xs font-medium">{data.teacher_name || '—'}</span></span>
             </div>
           </div>
+
+          {isComposite && (
+            <div className="px-5 py-2.5 bg-brand-50/60 border-b border-brand-100 text-xs text-brand-800">
+              These are averages of <strong className="font-medium">{data.areas.map(a => a.name).join(', ')}</strong>.
+              A blank means one of the {data.areas.length} areas has no grade yet for that {grading.periodNoun.toLowerCase()} —
+              enter marks under each area in Score Entry.
+            </div>
+          )}
 
           {activeTab === 'grading' ? (
             <>

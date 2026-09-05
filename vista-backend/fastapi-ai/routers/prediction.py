@@ -131,8 +131,12 @@ async def predict_performance(
     period_row = period_result.fetchone()
     periods_per_year = 3 if (period_row and period_row.period_model == "3T") else 4
 
-    # 3. Fetch grade history
-    subject_filter = "AND g.subject_id = CAST(:subject_id AS uuid)" if request.subject_id else ""
+    # 3. Fetch grade history.
+    # One forecast per **learning area**. MAPEH's areas each carry a grade, but
+    # the parent is what a report card and a parent's app show, so predicting
+    # per area would produce four cards where the reader expects one. An explicit
+    # subject_id still wins, so an area can be forecast on request.
+    subject_filter = "AND g.subject_id = CAST(:subject_id AS uuid)" if request.subject_id else "AND s.parent_id IS NULL"
     grade_query = f"""
         SELECT g.subject_id, s.name as subject_name,
                g.quarter, g.school_year, g.grade

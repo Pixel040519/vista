@@ -6,6 +6,7 @@ const { authenticate, authorize } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
 const { ANY_ADMIN, isAnyAdmin, canManageGrade } = require('../utils/roles')
 const { resolveGradingPolicy } = require('../utils/grading')
+const { assertGradeable, rollUpAfterGradeWrite } = require('../utils/subjectAreas')
 
 router.use(authenticate)
 
@@ -58,11 +59,18 @@ const verifyTeacherAssignment = async (req, subjectId, gradeLevel, section) => {
     }
     return
   }
-  // Look up the subject name, grade_level, and school year from subjects table
+  // Look up the subject name, grade_level, and school year from subjects table.
+  //
+  // `COALESCE(p.name, s.name)` is the MAPEH rule: one teacher handles a whole
+  // learning area, so the assignment names MAPEH and never its areas. When the
+  // subject being gated is an **area**, match on its parent's name — holding
+  // MAPEH therefore gates Music, Arts, PE and Health, with no extra assignment
+  // rows and no second invariant to keep in step.
   const subRes = await query(
-    `SELECT s.name, s.grade_level, sy.label AS school_year
+    `SELECT COALESCE(p.name, s.name) AS name, s.grade_level, sy.label AS school_year
      FROM subjects s
      JOIN school_years sy ON sy.id = s.school_year_id
+     LEFT JOIN subjects p ON p.id = s.parent_id
      WHERE s.id=$1`, [subjectId]
   )
   if (!subRes.rows.length) throw new AppError('Subject not found.', 404)
@@ -196,6 +204,9 @@ router.post('/items', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next)
 
     // Verify teacher is assigned to this class/subject
     await verifyTeacherAssignment(req, value.subject_id, value.grade_level, value.section)
+    // A learning area graded through its areas has no assessments of its own —
+    // each area carries its own score items.
+    await assertGradeable(value.subject_id)
 
     const itemPolicy = await policyForSubject(value.subject_id, value.grade_level)
     assertPeriodInRange(value.quarter, itemPolicy)
@@ -372,6 +383,7 @@ router.post('/', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
 
     // Verify teacher is assigned to this class/subject
     await verifyTeacherAssignment(req, value.subject_id, value.grade_level, value.section)
+    await assertGradeable(value.subject_id)
 
     // Validate scores don't exceed HPS
     const itemIds = [...new Set(value.scores.map(s => s.score_item_id))]
@@ -462,6 +474,16 @@ router.post('/', authorize(...ANY_ADMIN, 'teacher'), async (req, res, next) => {
            DO UPDATE SET score = EXCLUDED.score, grade = EXCLUDED.grade, remarks = EXCLUDED.remarks, updated_at = NOW()`,
           [studentId, value.subject_id, value.quarter, schoolYear, roundedInitial, transmutedGrade, remarks, req.user.id]
         )
+      }
+
+      // If this subject is an area of a learning area (Music under MAPEH), the
+      // learning area's own grade is the average of its areas — recomputed here
+      // and withheld until every one of them is in. See utils/subjectAreas.js.
+      if (schoolYear) {
+        await rollUpAfterGradeWrite(null, {
+          student_id: studentId, subject_id: value.subject_id, quarter: value.quarter,
+          school_year: schoolYear, policy, recorded_by: req.user.id,
+        })
       }
     }
 

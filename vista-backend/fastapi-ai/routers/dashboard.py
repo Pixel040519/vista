@@ -172,7 +172,11 @@ async def get_dashboard_summary(db: AsyncSession = Depends(get_db)):
                        ORDER BY g.school_year DESC, g.quarter DESC
                    ) AS rn
             FROM grades g
+            JOIN subjects gsub ON gsub.id = g.subject_id
             WHERE g.grade IS NOT NULL
+              -- Learning areas only: a MAPEH slip would otherwise alert twice,
+              -- once as MAPEH and again as whichever area moved.
+              AND gsub.parent_id IS NULL
         )
         SELECT s.id AS student_id,
                s.full_name AS student_name,

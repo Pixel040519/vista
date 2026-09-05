@@ -136,13 +136,24 @@ export default function ScoreEntry() {
   // ── Load subjects when class or sy changes, filtered to assignments ──
   useEffect(() => {
     if (!syId || !gradeLevel) { setSubjects([]); return }
-    curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel })
+    // `include_areas` because scores live one level below a learning area that
+    // has them: MAPEH is assigned as one subject but graded as Music, Arts,
+    // Physical Education and Health, each with its own weights and score items.
+    curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel, include_areas: true })
       .then(res => {
         const list = res.data.subjects || []
-        // Filter to only subjects the teacher is assigned to for this class
-        const filtered = list.filter(s => allowedSubjects.includes(s.name))
+        // Filter to only subjects the teacher is assigned to for this class. An
+        // assignment names the learning area, so an area qualifies through its
+        // parent — the same rule verifyTeacherAssignment() applies server-side.
+        // A learning area that HAS areas is dropped: it is not gradeable, its
+        // grade is the average of the four.
+        const filtered = list.filter(s =>
+          s.area_count > 0 ? false : allowedSubjects.includes(s.parent_name || s.name))
         setSubjects(filtered)
-        if (subjectId && !filtered.find(s => s.id === subjectId)) setSubjectId('')
+        if (subjectId && !filtered.find(s => s.id === subjectId)) {
+          const firstArea = filtered.find(s => s.parent_id === subjectId)
+          setSubjectId(firstArea ? firstArea.id : '')
+        }
       })
       .catch(() => setSubjects([]))
   }, [syId, gradeLevel, allowedSubjects])
@@ -377,7 +388,10 @@ export default function ScoreEntry() {
   }
 
   // ── Subject name lookup ───────────────────────────────────
-  const subjectName = subjects.find(s => s.id === subjectId)?.name || ''
+  const selectedSubject = subjects.find(s => s.id === subjectId)
+  const subjectName = selectedSubject
+    ? (selectedSubject.parent_name ? `${selectedSubject.parent_name} — ${selectedSubject.name}` : selectedSubject.name)
+    : ''
   const syLabel = activeSYLabel
   const periodSheetLabel = grading.sheetLabels[Number(quarter) - 1] || ''
 
@@ -762,7 +776,18 @@ export default function ScoreEntry() {
             <label className="block text-xs font-medium text-slate-500 mb-1">Subject</label>
             <select className="input" value={subjectId} onChange={e => setSubjectId(e.target.value)} disabled={!subjects.length}>
               <option value="">Subject</option>
-              {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {subjects.filter(s => !s.parent_id).map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+              {/* MAPEH's areas, grouped under it — one entry per area, because
+                  each carries its own class record. */}
+              {[...new Set(subjects.filter(s => s.parent_id).map(s => s.parent_name))].map(parent => (
+                <optgroup key={parent} label={parent}>
+                  {subjects.filter(s => s.parent_name === parent).map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
           </div>
 
