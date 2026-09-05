@@ -13,8 +13,14 @@ __pycache__/
 # Build output
 vista-dashboard/dist/
 
+# Uploaded media — profile photos and authorized-pickup photos are pictures of
+# real people. The docs already said this was ignored; the rule was missing.
+vista-backend/node-api/uploads/
+
 # Claude Code
-CLAUDE.md
+# CLAUDE.md files are tracked on purpose — they are the project's architecture
+# notes, not local scratch. `.claude/` stays ignored: that is per-machine session
+# and settings state.
 .claude/
 
 # OS
