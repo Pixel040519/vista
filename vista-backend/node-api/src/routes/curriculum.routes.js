@@ -948,10 +948,12 @@ router.delete('/school-years/:id', authorizeSuperAdmin, async (req, res, next) =
 // an **area** of one (Music, Arts, Physical Education, Health).
 //
 // These reads default to learning areas only, because "the subjects of Grade 4"
-// means the learning areas in every existing caller: the Grades page dropdown,
-// the Attendance dropdown, the grading-structure "copy from" picker. Score
-// Entry and the Subjects tab are the two surfaces that need the level below,
-// and they ask for it — see `include_areas` and `/subjects/grouped`.
+// means the learning areas in every existing caller: the Attendance dropdown,
+// the teacher-assignment picker, the grading-structure "copy from" picker. The
+// surfaces that need the level below ask for it — Score Entry and the Grades
+// page, whose Subject dropdowns list learning areas while their area tab strips
+// need the areas, and the Subjects tab — see `include_areas` and
+// `/subjects/grouped`.
 
 // Columns every subject read returns. `area_count` is what tells a caller a
 // learning area is graded through its areas and so is not itself gradeable.

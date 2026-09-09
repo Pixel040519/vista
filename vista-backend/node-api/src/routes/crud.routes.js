@@ -495,6 +495,27 @@ gradeRouter.get('/by-subject', async (req, res, next) => {
     const parent_name   = subjectResult.rows[0]?.parent_name || null;
     const areas         = (await areasOf(subject_id)).map(a => ({ id: a.id, name: a.name }));
 
+    // 3b. For a learning area graded through areas, the grade in each area for
+    // the same class. The roll-up sheet says what MAPEH's grade *is*; this says
+    // what it was averaged from, which is the summary the Grades page shows
+    // beside it. One extra query on a page that already knows the area ids —
+    // the alternative was four more round trips from the client.
+    const area_grades = {};
+    if (areas.length && studentIds.length) {
+      const areaResult = await query(
+        `SELECT student_id, subject_id, quarter, grade
+         FROM grades
+         WHERE subject_id = ANY($1) AND school_year=$2 AND student_id = ANY($3)`,
+        [areas.map(a => a.id), school_year, studentIds]
+      );
+      for (const row of areaResult.rows) {
+        if (!area_grades[row.student_id]) area_grades[row.student_id] = {};
+        if (!area_grades[row.student_id][row.subject_id]) area_grades[row.student_id][row.subject_id] = {};
+        area_grades[row.student_id][row.subject_id][row.quarter] =
+          row.grade != null ? parseFloat(row.grade) : null;
+      }
+    }
+
     // 4. Teacher name
     const teacherResult = await query(
       `SELECT u.surname, u.first_name, u.middle_name
@@ -507,7 +528,7 @@ gradeRouter.get('/by-subject', async (req, res, next) => {
     const t = teacherResult.rows[0];
     const teacher_name = t ? `${t.surname}, ${t.first_name}${t.middle_name ? ' ' + t.middle_name : ''}` : null;
 
-    res.json({ students, grades: gradesMap, subject_name, teacher_name, parent_name, areas });
+    res.json({ students, grades: gradesMap, subject_name, teacher_name, parent_name, areas, area_grades });
   } catch (err) {
     next(err);
   }

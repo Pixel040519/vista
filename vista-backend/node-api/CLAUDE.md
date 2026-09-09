@@ -935,6 +935,14 @@ beside the parent. The sweep, in full:
 so Student Detail and the parent app can nest the areas under their learning area
 **and** average only the learning areas, without a second request.
 
+`GET /api/grades/by-subject` does the same one level down. Asked for a learning
+area that has areas it already returned `areas`; it now also returns
+**`area_grades`** — `{ student_id: { area_id: { quarter: grade } } }` — so the
+Grades page can show what the roll-up was averaged from beside the roll-up itself.
+It is one extra query on a request that has already resolved the area ids and the
+class's students; the alternative was four more round trips from the client, one
+per area. Empty for every ordinary subject, so nothing else pays for it.
+
 **The refusals**, each a 409. Four reject a *learning area that has areas*, because
 its grade is derived and it has no weights of its own: `POST /api/grades`,
 `POST /api/scores`, `POST /api/scores/items` and

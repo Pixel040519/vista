@@ -331,8 +331,16 @@ validators and the category→component→item fold in `POST /api/scores` are al
 untouched. It is also general: EPP/TLE is shaped the same way, and it is the same
 mechanism DO 015's per-learning-area report-card grade will need.
 
-**The one rule everything follows: every analytic and reporting read counts
-learning areas; only score entry and the grading structure descend into areas.**
+**The one rule everything follows: every analytic and reporting read *counts*
+learning areas; only score entry and the grading structure *write* one level down.**
+
+Counting is the part that must not drift — an average, a promotion count, a risk
+factor, a report-card row all mean "one learning area", so they filter
+`parent_id IS NULL` and MAPEH is never weighed five times. **Displaying the areas
+beside the learning area they roll into is a different thing and is encouraged**:
+Score Entry, the Grades page, Student Detail and the parent app all show the four
+under MAPEH, because a mark of 88 is not self-explanatory without them. The test
+is whether the areas are added *to* the learning area or shown *under* it.
 
 **The learning area's grade is derived and stored.** `utils/subjectAreas.js` is
 the only place it is computed, and both writers of `grades` call it —

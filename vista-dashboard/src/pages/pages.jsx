@@ -283,7 +283,7 @@ export function Attendance() {
 // ============================================================
 import { gradesApi, scoreApi } from '../api/client'
 import { resolveGradingPolicy, finalGradeFrom } from '../utils/grading'
-import { BookOpen, Filter } from 'lucide-react'
+import { BookOpen, Filter, Layers } from 'lucide-react'
 import { Fragment } from 'react'
 import clsx from 'clsx'
 
@@ -299,7 +299,13 @@ export function Grades() {
   const [syId, setSyId]                     = useState('')
   const [schoolYears, setSchoolYears]       = useState([])
   const [selectedClass, setSelectedClass]   = useState('')
+  // `subjectId` names a **learning area**; `areaId` is the area of a composite
+  // one (MAPEH → Music / Arts / Physical Education / Health), or '' for the
+  // learning area's own roll-up sheet. Both are real views here, unlike Score
+  // Entry where a composite learning area is not gradeable — the roll-up is
+  // the grade that goes on the report card, so it is the tab strip's first tab.
   const [subjectId, setSubjectId]           = useState('')
+  const [areaId, setAreaId]                 = useState('')
   const [subjects, setSubjects]             = useState([])
   const [sectionsGrouped, setSectionsGrouped] = useState({})
   const [loading, setLoading]               = useState(false)
@@ -354,6 +360,7 @@ export function Grades() {
     setSectionsGrouped({})
     setSelectedClass('')
     setSubjectId('')
+    setAreaId('')
     setSubjects([])
     setData(null)
     curriculumApi.getSectionsGrouped(syId).then(res => setSectionsGrouped(res.data.grouped || {})).catch(() => {})
@@ -363,6 +370,7 @@ export function Grades() {
   useEffect(() => {
     if (isTeacher || !syId || !gradeLevel) return
     setSubjectId('')
+    setAreaId('')
     setSubjects([])
     setData(null)
     curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel, include_areas: true }).then(res => {
@@ -374,6 +382,7 @@ export function Grades() {
   useEffect(() => {
     if (!isTeacher || !syId || !gradeLevel) return
     setSubjectId('')
+    setAreaId('')
     setSubjects([])
     setData(null)
     curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel, include_areas: true }).then(res => {
@@ -383,17 +392,29 @@ export function Grades() {
   }, [isTeacher, syId, gradeLevel, allowedSubjects])
 
   // Reset downstream when class changes
-  useEffect(() => { setSubjectId(''); setData(null) }, [selectedClass])
+  useEffect(() => { setSubjectId(''); setAreaId(''); setData(null) }, [selectedClass])
 
-  // A learning area graded through its areas (MAPEH): its sheet is the roll-up,
-  // so it is read-only and has no weighted-category breakdown to summarise.
-  const isComposite = !!(data?.areas?.length)
+  // ── Subject / area selection ──────────────────────────────
+  // The dropdown offers learning areas only. MAPEH's four areas are the tab
+  // strip below it, alongside MAPEH itself — the roll-up is the grade that
+  // reaches the report card, so it is a view in its own right and stays the
+  // default. A stale `areaId` falls back to the roll-up rather than to nothing.
+  const learningAreas = useMemo(() => subjects.filter(s => !s.parent_id), [subjects])
+  const selectedLearningArea = learningAreas.find(s => s.id === subjectId) || null
+  const areas = useMemo(
+    () => subjects.filter(s => s.parent_id === subjectId),
+    [subjects, subjectId]
+  )
+  const hasAreas = !!selectedLearningArea && selectedLearningArea.area_count > 0
+  const activeSubjectId = hasAreas && areas.some(a => a.id === areaId) ? areaId : subjectId
 
-  // Grade Summary does not exist for one, so a selection carried over from an
-  // ordinary subject must not strand the user on an empty tab.
-  useEffect(() => {
-    if (isComposite && activeTab === 'class') setActiveTab('grading')
-  }, [isComposite, activeTab])
+  // A learning area graded through its areas (MAPEH) *while its own roll-up is
+  // on screen*: that sheet is the average of the four, so it is read-only and
+  // has no weighted-category breakdown to summarise. An individual area is an
+  // ordinary gradeable subject and keeps both tabs.
+  const viewingRollup = hasAreas && activeSubjectId === subjectId
+  // '' is the roll-up's tab id, so it is what the strip compares against.
+  const activeAreaTab = viewingRollup ? '' : activeSubjectId
 
   // ── Resolve SY label ──────────────────────────────────────
   const selectedSY = schoolYears.find(sy => sy.id === syId)
@@ -415,11 +436,11 @@ export function Grades() {
   useEffect(() => {
     if (!filtersReady) { setData(null); return }
     setLoading(true)
-    gradesApi.getBySubject({ subject_id: subjectId, grade_level: gradeLevel, section, school_year: syLabel })
+    gradesApi.getBySubject({ subject_id: activeSubjectId, grade_level: gradeLevel, section, school_year: syLabel })
       .then(res => setData(res.data))
       .catch(() => setData(null))
       .finally(() => setLoading(false))
-  }, [subjectId, gradeLevel, section, syLabel])
+  }, [activeSubjectId, gradeLevel, section, syLabel])
 
   // Reset the selected period when the school year's period model changes.
   useEffect(() => {
@@ -428,13 +449,15 @@ export function Grades() {
 
   // ── Fetch breakdown for Class Record tab ───────────────────
   useEffect(() => {
-    if (activeTab !== 'class' || !filtersReady) { setBreakdownData(null); return }
+    // The roll-up has no weighted categories of its own — its summary is the
+    // four areas, which arrive with the sheet — so it fetches nothing here.
+    if (activeTab !== 'class' || !filtersReady || viewingRollup) { setBreakdownData(null); return }
     setBreakdownLoading(true)
-    scoreApi.getBreakdown({ subject_id: subjectId, quarter: classQuarter, grade_level: gradeLevel, section })
+    scoreApi.getBreakdown({ subject_id: activeSubjectId, quarter: classQuarter, grade_level: gradeLevel, section })
       .then(res => setBreakdownData(res.data))
       .catch(() => setBreakdownData(null))
       .finally(() => setBreakdownLoading(false))
-  }, [activeTab, classQuarter, subjectId, gradeLevel, section])
+  }, [activeTab, classQuarter, activeSubjectId, gradeLevel, section, viewingRollup])
 
   // ── Breakdown gender groups ───────────────────────────────
   const breakdownGroups = useMemo(() => {
@@ -533,20 +556,54 @@ export function Grades() {
           {/* Subject */}
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Subject</label>
-            <select className="input" value={subjectId} onChange={e => setSubjectId(e.target.value)} disabled={!gradeLevel || !section}>
+            {/* Learning areas only. MAPEH is one entry — the learning area the
+                report card carries — and its four areas are the tab strip below
+                the filters, beside the roll-up itself. */}
+            <select className="input" value={subjectId}
+              onChange={e => { setSubjectId(e.target.value); setAreaId('') }}
+              disabled={!gradeLevel || !section}>
               <option value="">— Select —</option>
-              {subjects.filter(s => !s.parent_id).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              {[...new Set(subjects.filter(s => s.parent_id).map(s => s.parent_name))].map(parent => (
-                <optgroup key={parent} label={parent}>
-                  {subjects.filter(s => s.parent_name === parent).map(s => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </optgroup>
+              {learningAreas.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.name}{s.area_count > 0 ? ` (${s.area_count} areas)` : ''}
+                </option>
               ))}
             </select>
           </div>
         </div>
       </div>
+
+      {/* ── Area tabs — only a composite learning area has them ──
+          MAPEH is one learning area on the report card and four separately
+          graded areas underneath. Both are worth reading, so the strip carries
+          the roll-up as its first tab and the four areas after it: one subject
+          selection, five sheets. */}
+      {hasAreas && (
+        <div className="card p-4 space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Layers size={15} className="text-slate-400" />
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+              {selectedLearningArea.name} areas
+            </span>
+          </div>
+          <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
+            {[{ id: '', name: `${selectedLearningArea.name}` }, ...areas].map(t => (
+              <button
+                key={t.id || 'rollup'}
+                onClick={() => setAreaId(t.id)}
+                className={clsx(
+                  'px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap',
+                  t.id === activeAreaTab
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                )}
+              >
+                {t.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Tabs ────────────────────────────────────────────── */}
       {loading ? <LoadingSpinner /> : data ? (
@@ -554,7 +611,7 @@ export function Grades() {
           {/* Tab bar */}
           <div className="flex border-b border-slate-200">
             {[{ key: 'grading', label: 'Grading Sheet' },
-              ...(isComposite ? [] : [{ key: 'class', label: 'Grade Summary' }])].map(tab => (
+              { key: 'class', label: 'Grade Summary' }].map(tab => (
               <button key={tab.key} onClick={() => setActiveTab(tab.key)}
                 className={clsx('px-5 py-3 text-sm font-medium transition-colors relative',
                   activeTab === tab.key
@@ -582,7 +639,7 @@ export function Grades() {
             </div>
           </div>
 
-          {isComposite && (
+          {viewingRollup && !!data.areas?.length && (
             <div className="px-5 py-2.5 bg-brand-50/60 border-b border-brand-100 text-xs text-brand-800">
               These are averages of <strong className="font-medium">{data.areas.map(a => a.name).join(', ')}</strong>.
               A blank means one of the {data.areas.length} areas has no grade yet for that {grading.periodNoun.toLowerCase()} —
@@ -673,7 +730,81 @@ export function Grades() {
                 ))}
               </div>
 
-              {breakdownLoading ? <div className="py-8"><LoadingSpinner /></div> : breakdownGroups.length > 0 ? (
+              {/* The roll-up's summary is its areas, not weighted categories:
+                  MAPEH has no Written Work of its own, its grade for a period
+                  is the average of the four areas' grades for that period. So
+                  this tab answers the same question one level up — what the
+                  grade beside it was made of. The numbers come from the sheet's
+                  own `area_grades`, which is why nothing is fetched for it. */}
+              {viewingRollup ? (
+                data.students.length === 0 ? (
+                  <div className="py-8">
+                    <EmptyState icon={BookOpen} title="No students enrolled" description="No students found in this class." />
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="table-base">
+                      <thead>
+                        <tr>
+                          <th className="whitespace-nowrap w-10 text-center">#</th>
+                          <th className="whitespace-nowrap">Name of Students</th>
+                          {data.areas.map(a => (
+                            <th key={a.id} className="whitespace-nowrap text-center">{a.name}</th>
+                          ))}
+                          <th className="whitespace-nowrap text-center">Final</th>
+                          <th className="whitespace-nowrap text-center">Remarks</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {genderGroups.map(group => (
+                          <Fragment key={group.label}>
+                            <tr>
+                              <td colSpan={data.areas.length + 4} className="bg-slate-50 px-5 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-widest border-y border-slate-200">
+                                {group.label}
+                              </td>
+                            </tr>
+                            {group.students.map((student, idx) => {
+                              const ag = data.area_grades?.[student.id] || {}
+                              const fg = data.grades[student.id]?.[classQuarter]?.grade
+                              const final = fg != null ? Number(fg) : null
+                              const passed = final !== null && final >= grading.passingGrade
+                              return (
+                                <tr key={student.id} className="hover:bg-slate-50/60">
+                                  <td className="text-xs text-slate-400 text-center">{idx + 1}</td>
+                                  <td className="font-medium text-sm whitespace-nowrap">{formatName(student)}</td>
+                                  {data.areas.map(a => {
+                                    const g = ag[a.id]?.[classQuarter]
+                                    const v = g != null ? Number(g) : null
+                                    return (
+                                      <td key={a.id} className="text-center font-mono text-sm"
+                                        style={{ color: v !== null && v < grading.passingGrade ? '#ef4444' : v !== null ? '#334155' : '#cbd5e1' }}>
+                                        {v !== null ? v : '—'}
+                                      </td>
+                                    )
+                                  })}
+                                  <td className="text-center font-mono text-sm font-bold"
+                                    style={{ color: final !== null && !passed ? '#ef4444' : final !== null ? '#0d9488' : '#cbd5e1' }}>
+                                    {final !== null ? final : '—'}
+                                  </td>
+                                  <td className="text-center">
+                                    {final !== null ? (
+                                      <span className={clsx('inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
+                                        passed ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'
+                                      )}>
+                                        {passed ? 'PASSED' : 'FAILED'}
+                                      </span>
+                                    ) : <span className="text-slate-300 text-xs">—</span>}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              ) : breakdownLoading ? <div className="py-8"><LoadingSpinner /></div> : breakdownGroups.length > 0 ? (
                 <div className="overflow-x-auto">
                   <table className="table-base">
                     <thead>

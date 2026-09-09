@@ -135,7 +135,7 @@ Action-oriented. Fetches `aiApi.teacherDashboard()` AND `aiApi.classHealthAll()`
 - **Needs Attention** stat card (was "At-Risk Students"), **My Classes** grid, and **Students to Watch** list all derive from the class-health payload. Band counts come from `chSummary.urgent/watch/ok/insufficient`. `mySectionsHealth` groups `classHealth.students` by `(grade_level, section)` and merges with `classHealth.scope.sections` for subject lists. `studentsToWatch` filters to urgent + watch and caps at 5 (rows link to Student Detail).
 - Everything else (attendance rollup, today's action items, score-entry progress, recent behavior, sentiment mini) still comes from FastAPI `/teacher-dashboard/summary` proxy.
 - **ECE Competency Tracker card** (`EceCompetencyCard.jsx`) — rendered when the teacher has any assignment in a grade level configured as descriptive. Self-contained: fetches `eceApi.getSummary()` (`GET /ece/summary`, Node API — not FastAPI) independently on mount. Shows per-class completion progress (rated cells / total cells with progress bar; emerald=100%, amber=partial, slate=0%) with "X / Y skills rated across N students" label, plus **one rating-distribution stacked bar per scale** in play (from `distributions[]`). The period auto-detects as the latest one with records and falls back to period 1; its label comes from `gradingFromAuth(user)`, so it reads `T1` on a three-term year. Links to `/ece-competency` via a View button.
-- **Score Entry Progress widget** shows **one row per (subject, section)**. Each row has its own Resume button calling `goToScoreEntry(sp.grade_level, sp.section, sp.subject_id, sp.latest_quarter)`. Handler writes `selectedClass`, `subjectId`, `quarter` into the `vista_score_entry_filters` sessionStorage blob (same key `ScoreEntry.jsx` reads via `usePersistedFilter`) so Score Entry mounts with class + subject + quarter preselected (falls back to Q1 if `latest_quarter` is null). React keys use `${subject_id}-${section}` to stay stable across multi-section duplicates. Refetches on `window` focus so adding items in another tab updates the count when the user tabs back.
+- **Score Entry Progress widget** shows **one row per (subject, section)** — and for MAPEH, one row per **area** (`MAPEH — Music`), because that is where the score items live. Each row has its own Resume button calling `goToScoreEntry(sp.grade_level, sp.section, sp.subject_id, sp.latest_quarter)`. Handler writes `selectedClass`, `subjectId`, `quarter` into the `vista_score_entry_filters` sessionStorage blob (same key `ScoreEntry.jsx` reads via `usePersistedFilter`) so Score Entry mounts with class + subject + quarter preselected (falls back to Q1 if `latest_quarter` is null). It writes an **area** id into `subjectId` for MAPEH and does not set `areaId`; that is deliberate, since Score Entry promotes such an id to (learning area, area) on load — one place knows the mapping. Do not "fix" it here. React keys use `${subject_id}-${section}` to stay stable across multi-section duplicates. Refetches on `window` focus so adding items in another tab updates the count when the user tabs back.
 - **Today's Action Items** "Take attendance" / "Review" buttons use `goToAttendance(gradeLevel, section, subjectId)` which passes the deep-link through **React Router location state** (`navigate('/attendance', { state: { deepLink: { selectedSection, selectedSubject, ts: Date.now() } } })`), **not** sessionStorage. The Attendance page reads `location.state.deepLink` in `useEffect([location.state])` and re-applies selection whenever a fresh `ts` arrives. Reason: React Router may keep Attendance mounted across repeat trips, so a mount-only read would miss the second click. `appliedDeepLinkTs` ensures each timestamp is applied once; the target subject is stashed in a `useRef` and consumed by the subject-load effect once the subject list arrives.
 
 Split rationale: class-health is the single source of truth for teacher-scoped band numbers across Student Detail → Risk Overview → TeacherDashboard.
@@ -951,6 +951,37 @@ Two tabs over one filter set (school year, class, subject): **Grading Sheet** (p
 grades + average from `gradesApi.getBySubject`) and **Grade Summary** (weighted category
 breakdown for one period from `scoreApi.getBreakdown`).
 
+**A composite learning area adds a third control**, between the filters and the tabs:
+the **area tab strip** — `MAPEH (average)` plus one tab per area. The Subject filter
+lists learning areas only; the strip picks which of the five sheets underneath it is on
+screen. It is the same idiom Score Entry uses (see that section) with **one difference:
+here the roll-up is a tab, and the default one.** Score Entry cannot offer MAPEH itself —
+a learning area with areas is not gradeable and `POST /api/scores` refuses it — but this
+page reads, and the roll-up is the grade that reaches the report card, so it leads the
+strip and `areaId: ''` means it. A stale `areaId` falls back to the roll-up rather than
+to nothing, and there is no unsaved-work confirm: the page only reads.
+
+**`viewingRollup` replaced `isComposite`** — the distinction is *the roll-up is on
+screen*, not *the subject has areas*, because an individual area is an ordinary gradeable
+subject and behaves exactly like Math. It drives the averages banner and which **Grade
+Summary** the tab renders:
+
+| Selected | Grade Summary shows |
+|---|---|
+| an ordinary subject, or one area | weighted categories → Initial → Final (`scoreApi.getBreakdown`) |
+| the roll-up (`MAPEH (average)`) | one column per **area** → Final → Remarks, for the selected period |
+
+The second is the answer to "what is this grade made of" one level up: MAPEH has no
+Written Work of its own, its grade for a period *is* the average of the four areas'
+grades for that period. Its numbers come from **`area_grades` on the sheet response**
+(see the node-api notes) rather than a request of its own, so the roll-up fetches no
+breakdown at all — that effect returns early on `viewingRollup`. A blank area column
+beside a blank Final is the withheld case the banner explains: MAPEH has no grade for a
+period until all four areas have one.
+
+Everything else in this section describes an ordinary subject, which an individual area
+also is.
+
 The **sheet header** — Learning Area, Grade & Section, Subject Teacher — sits above the tab
 switch, not inside a branch, so both tabs carry it. It used to live in the Grading Sheet
 branch only, which left Grade Summary as the one view with no caption saying whose marks
@@ -976,7 +1007,10 @@ column heads were already `grading.ordinals`. Every other period selector in the
 MAPEH is one learning area graded through four **areas** (Music, Arts, Physical
 Education, Health), modelled as `subjects.parent_id` — see the root `CLAUDE.md`.
 The frontend rule follows the backend's: **everything that reports counts learning
-areas; only Score Entry descends into areas.**
+areas.** Showing the areas *under* the learning area is a different thing and is
+what several pages do — Score Entry and Grades through a tab strip, Student Detail
+and the parent app through an expandable row. What none of them may do is count an
+area beside its learning area in an average, a subject count or a band.
 
 `GET /curriculum/subjects` returns learning areas by default and needs
 `include_areas: true` to return the level below. Every row carries `parent_id`,
@@ -994,19 +1028,56 @@ active year and offered the wrong year's subjects whenever another was selected.
 |---|---|
 | **Curriculum → Subjects** | MAPEH is **one ordinary row** — the areas are not listed here. `EditableItem` shows an "N areas" pill off `area_count` and keeps its grading-config button, which is the way into them (see below). The configured dot means "ready for Score Entry", so on a composite it lights only when *every* area has a structure, never off `has_grading` (a learning area has none of its own). There is **no authoring UI for areas at all** — no Split, no Add, no Delete, no rename: the four are created server-side by `ensureMapehAreas()` whenever a MAPEH exists. A create or rename whose response carries `area_count` refetches rather than patching state, since the server may have just split the subject and the optimistic path cannot invent the areas. |
 | **Grading config modal** (`GradingConfigModal.jsx`) | For a composite subject it opens on an **area picker** instead of an editor: one row per area with a Configured / Not set up chip, because MAPEH has no weights of its own. Choosing one points `target` at that area and renders the normal editor with an `ArrowLeft` **back** control top-left ("All MAPEH areas"). Every read and write follows `target`, not `subject`. Saving an area returns to the picker rather than closing — MAPEH needs all four before it produces a grade, so finishing one is the middle of the job. `areaConfigured` is tracked in the modal so a chip updates the moment an area is saved, without waiting on a refetch. An ordinary subject is completely unaffected: no picker, no back control. |
-| **Score Entry** | the only page that works one level down. Asks for `include_areas`, drops learning areas that *have* areas, and keeps an area whose **parent** is in `allowedSubjects` — mirroring `verifyTeacherAssignment()`. Areas render in an `<optgroup>` under their learning area, and the sheet header reads "MAPEH — Music". A deep link carrying the learning area's own id (the class-health card resolves an assignment name, which for MAPEH is the parent) lands on its first area instead of clearing the selection. |
-| **Grades** | lists both, grouped. Selecting **MAPEH** shows the Grading Sheet of the roll-up with a banner naming the areas and explaining that a blank cell means one of them has no grade yet; `isComposite` hides the **Grade Summary** tab, since a learning area has no weighted categories of its own, and bounces a selection carried over from an ordinary subject. |
+| **Score Entry** | the page that *writes* one level down. Asks for `include_areas` and keeps both levels: the **learning areas** fill the Subject dropdown, the areas fill a **tab strip** under the filters (see that page's section below). An area qualifies through its **parent** being in `allowedSubjects` — mirroring `verifyTeacherAssignment()`. The sheet header and the export filename still read "MAPEH — Music". |
+| **Grades** | the Subject filter lists **learning areas only**; a composite one's areas are a **tab strip** under the filters whose **first tab is the roll-up itself** — MAPEH's average is the grade that reaches the report card, so it is a view in its own right and stays the default. The roll-up sheet keeps its banner naming the areas and explaining that a blank cell means one of them has no grade yet. Both inner tabs work on it: **Grading Sheet** is the roll-up per period, and **Grade Summary** becomes an *area* breakdown — one column per area, then Final and Remarks — since MAPEH has no weighted categories of its own (`viewingRollup` picks which summary to render). |
 | **Student Detail → Grades** | groups by `parent_subject_name ?? subject_name`. MAPEH is one row, marked "avg. of 4", that expands to show the areas indented. `expandedAreas` is keyed `"SY|||MAPEH"` so the same learning area opens independently per school year. The subject count in the school-year header still counts learning areas. |
 | **My Class** | unchanged — `/advisory/grades` returns learning-area columns, so MAPEH is one column and `general_average` is right without any client work. |
 | **Attendance**, **Accounts → teacher assignments** | unchanged, and deliberately: both take the default (learning areas only). One teacher handles MAPEH, so it stays one assignment row, and attendance is one roll for the whole learning area. |
 | **Grading config "Copy from"** | asks for `include_areas` and excludes subjects that *have* areas. Copying Music's structure to Arts is the most useful thing the picker does once a subject is split; the list labels an area "MAPEH — Music". |
 
 ### Score Entry (`ScoreEntry.jsx`)
-Teachers only. Class dropdown = `(grade_level, section)` pairs from active-SY assignments. Subject dropdown filtered to subjects the teacher is assigned to for that class. Passes `grade_level` + `section` to `scoreApi.getItems` / `scoreApi.saveItems` (items are section-scoped).
+Teachers only. Class dropdown = `(grade_level, section)` pairs from active-SY assignments. Subject dropdown filtered to the **learning areas** the teacher is assigned to for that class (a composite one's areas are the tab strip below it — see below). Passes `grade_level` + `section` to `scoreApi.getItems` / `scoreApi.saveItems` (items are section-scoped).
 
 Teachers create score items (Quiz 1, etc.) under grading components via a modal, then enter raw scores in a spreadsheet-like grid. Auto-computes T (total) → PS (`T/HPS×100`) → WS (`PS×weight/100`) per component, rolls up to category totals, and saves the final quarterly grade. Adding an item requires a name AND a valid HPS (>0) — validated on frontend before save.
 
-Filter selections (class, subject, quarter) and expanded component state persist in `sessionStorage` under `vista_score_entry_filters` via `usePersistedFilter`. School year is locked to active SY. The **period dropdown and the transmutation table both come from the selected school year** via `resolveGradingPolicy()` in `src/utils/grading.js` (mirror of the backend module) — there is no local `QUARTERS` array or `transmuteGrade()` any more.
+Filter selections (class, subject, area, quarter) and expanded component state persist in `sessionStorage` under `vista_score_entry_filters` via `usePersistedFilter`. School year is locked to active SY. The **period dropdown and the transmutation table both come from the selected school year** via `resolveGradingPolicy()` in `src/utils/grading.js` (mirror of the backend module) — there is no local `QUARTERS` array or `transmuteGrade()` any more.
+
+**The Subject filter picks a learning area; a composite one's areas are tabs.** MAPEH
+is assigned, timetabled and attended as one subject, so that is what the dropdown
+offers — listing Music, Arts, Physical Education and Health there put four entries in
+front of the teacher for one thing they teach, and made switching between them a trip
+back through a select. It is *graded* through the four, each with its own weights,
+score items and class record, so a **tab strip between the filter card and the sheet**
+switches which one is on screen: one filter selection, four sheets, one click apart.
+An ordinary subject renders no strip at all.
+
+The split in state is `subjectId` (always a learning area) + `areaId` (an area of a
+composite one), with **`activeSubjectId` the one thing the sheet reads** — every
+`scoreApi` call, the sheet header, the export and the item modal go through it. It
+resolves to `''` when an `areaId` names no area of the current subject, so a stale
+selection leaves the page waiting rather than loading another class's scores.
+
+Three rules the strip turns on:
+
+- **A composite subject always lands on an area** (the first, if the stored one does
+  not belong to it), so the strip never renders with no active tab. The effect that
+  does this returns early until `subjects` has loaded — clearing a persisted area on
+  the first render would undo the selection the page was reopened on.
+- **A stored `subjectId` naming an area is promoted to (learning area, area)** rather
+  than dropped. That covers a filter blob persisted before this change *and* both deep
+  links into the page: TeacherDashboard's Resume reports score progress per area (the
+  FastAPI `gradeable` list expands MAPEH into four), while Student Detail's DSS action
+  can carry the learning area's own id. Neither writes `areaId`, and neither needs to —
+  the mapping lives in one place here.
+- **Switching tabs with unsaved scores confirms first.** The class, subject and period
+  above the strip do not change, so the sheet swapping underneath is the only sign
+  anything happened; scores belong to the area they were typed in and cannot follow.
+
+Each tab carries an amber dot when that area has no grading structure (`has_grading`
+off the subjects read), because MAPEH has no grade for a period until all four are set
+up and the tab is where a missing one is visible without opening it.
+
+The **Grades page** has a strip of its own, shaped differently — see its section above.
 
 Grading config button (sliders icon) shows for Grade 1–6 subjects only — Kinder hides it since it uses competency tracking. The modal has a "Copy from" button that copies another subject's grading structure (filtered by grade level).
 

@@ -5,7 +5,7 @@ import { formatName } from '../utils/nameHelper'
 import { useAuth } from '../context/AuthContext'
 import {
   PenLine, ChevronDown, ChevronRight, Plus, Trash2, Save,
-  Settings, Loader2, ClipboardList, GripVertical, Filter, Download
+  Settings, Loader2, ClipboardList, GripVertical, Filter, Download, Layers
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
@@ -51,7 +51,13 @@ export default function ScoreEntry() {
   // ── Filter state (persisted in sessionStorage) ────────────
   const [syId, setSyId]             = usePersistedFilter('syId')
   const [selectedClass, setSelectedClass] = usePersistedFilter('selectedClass')
+  // `subjectId` always names a **learning area** — what the teacher is assigned
+  // and what the class list calls the subject. `areaId` is the area of a
+  // composite one (MAPEH → Music / Arts / Physical Education / Health), chosen
+  // through the tab strip below the filters. Score items and grading
+  // structures hang off the area, so `activeSubjectId` is what the sheet reads.
   const [subjectId, setSubjectId]   = usePersistedFilter('subjectId')
+  const [areaId, setAreaId]         = usePersistedFilter('areaId')
   const [quarter, setQuarter]       = usePersistedFilter('quarter')
 
   const [schoolYears, setSchoolYears] = useState([])
@@ -107,8 +113,24 @@ export default function ScoreEntry() {
   const [itemDragOverIdx, setItemDragOverIdx] = useState(null)
   const [itemGripHeld, setItemGripHeld]   = useState(false)
 
+  // ── Subject / area selection ──────────────────────────────
+  // The dropdown offers learning areas only; a composite one resolves to the
+  // area on the active tab. An `areaId` left over from another class or school
+  // year names no area of the current subject, so it resolves to nothing and
+  // the sheet waits rather than loading someone else's scores.
+  const learningAreas = useMemo(() => subjects.filter(s => !s.parent_id), [subjects])
+  const selectedLearningArea = learningAreas.find(s => s.id === subjectId) || null
+  const areas = useMemo(
+    () => subjects.filter(s => s.parent_id === subjectId),
+    [subjects, subjectId]
+  )
+  const isComposite = !!selectedLearningArea && selectedLearningArea.area_count > 0
+  const activeSubjectId = isComposite
+    ? (areas.some(a => a.id === areaId) ? areaId : '')
+    : subjectId
+
   // All filters selected?
-  const filtersReady = syId && gradeLevel && section && subjectId && quarter
+  const filtersReady = syId && gradeLevel && section && activeSubjectId && quarter
 
   // ── Load school years on mount — lock to active SY ────────
   useEffect(() => {
@@ -139,24 +161,44 @@ export default function ScoreEntry() {
     // `include_areas` because scores live one level below a learning area that
     // has them: MAPEH is assigned as one subject but graded as Music, Arts,
     // Physical Education and Health, each with its own weights and score items.
+    // Both levels are kept — the learning areas fill the dropdown, the areas
+    // fill the tab strip under it.
     curriculumApi.getSubjects({ sy_id: syId, grade_level: gradeLevel, include_areas: true })
       .then(res => {
         const list = res.data.subjects || []
         // Filter to only subjects the teacher is assigned to for this class. An
         // assignment names the learning area, so an area qualifies through its
         // parent — the same rule verifyTeacherAssignment() applies server-side.
-        // A learning area that HAS areas is dropped: it is not gradeable, its
-        // grade is the average of the four.
-        const filtered = list.filter(s =>
-          s.area_count > 0 ? false : allowedSubjects.includes(s.parent_name || s.name))
+        const filtered = list.filter(s => allowedSubjects.includes(s.parent_name || s.name))
         setSubjects(filtered)
-        if (subjectId && !filtered.find(s => s.id === subjectId)) {
-          const firstArea = filtered.find(s => s.parent_id === subjectId)
-          setSubjectId(firstArea ? firstArea.id : '')
+        // Reconcile the stored selection with the list that just arrived. The
+        // filter holds a learning area now, so an id naming one of MAPEH's
+        // areas — a filter blob persisted before this, or the dashboard's
+        // Resume deep link, which reports score progress per area — is
+        // promoted to (learning area, area) rather than dropped.
+        const stored = filtered.find(s => s.id === subjectId)
+        if (stored?.parent_id) {
+          setSubjectId(stored.parent_id)
+          setAreaId(stored.id)
+        } else if (subjectId && !stored) {
+          setSubjectId('')
+          setAreaId('')
         }
       })
       .catch(() => setSubjects([]))
   }, [syId, gradeLevel, allowedSubjects])
+
+  // ── Keep the area tabs in step with the selected subject ──
+  // A composite learning area always lands on one of its areas, so the strip
+  // never renders with no active tab and the sheet below it is never
+  // ambiguous. Nothing is decided until the subject is known: `subjects` is
+  // empty on the first render, and clearing a persisted area there would undo
+  // the selection this page was reopened on.
+  useEffect(() => {
+    if (!selectedLearningArea) return
+    if (!isComposite) { if (areaId) setAreaId(''); return }
+    if (areas.length && !areas.some(a => a.id === areaId)) setAreaId(areas[0].id)
+  }, [selectedLearningArea, isComposite, areas, areaId])
 
   // ── Load data when all filters are set ────────────────────
   const loadData = useCallback(async () => {
@@ -164,8 +206,8 @@ export default function ScoreEntry() {
     setLoading(true)
     try {
       const [itemsRes, scoresRes] = await Promise.all([
-        scoreApi.getItems({ subject_id: subjectId, quarter, grade_level: gradeLevel, section }),
-        scoreApi.getScores({ subject_id: subjectId, quarter, grade_level: gradeLevel, section }),
+        scoreApi.getItems({ subject_id: activeSubjectId, quarter, grade_level: gradeLevel, section }),
+        scoreApi.getScores({ subject_id: activeSubjectId, quarter, grade_level: gradeLevel, section }),
       ])
       setCategories(itemsRes.data.categories || [])
       setStudents(scoresRes.data.students || [])
@@ -182,7 +224,7 @@ export default function ScoreEntry() {
       // Preserve expanded state from sessionStorage; don't reset
     } catch { }
     setLoading(false)
-  }, [filtersReady, subjectId, quarter, gradeLevel, section])
+  }, [filtersReady, activeSubjectId, quarter, gradeLevel, section])
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -256,7 +298,7 @@ export default function ScoreEntry() {
     setSaving(true)
     try {
       await scoreApi.saveScores({
-        subject_id: subjectId,
+        subject_id: activeSubjectId,
         quarter: parseInt(quarter),
         grade_level: gradeLevel,
         section,
@@ -267,6 +309,20 @@ export default function ScoreEntry() {
       setOriginalScores(JSON.parse(JSON.stringify(scores)))
     } catch { }
     setSaving(false)
+  }
+
+  // ── Switch to another area of the selected learning area ──
+  // The tab strip keeps the page around it identical — same class, same
+  // subject, same period — so the sheet swapping underneath is the only sign
+  // that anything changed. Unsaved scores belong to the area they were typed
+  // in and cannot follow, so a switch that would drop them asks first.
+  const switchArea = (id) => {
+    if (id === areaId) return
+    const target = areas.find(a => a.id === id)
+    if (hasChanges() && !window.confirm(
+      `Unsaved scores for ${subjectName} will be discarded. Switch to ${target?.name}?`
+    )) return
+    setAreaId(id)
   }
 
   // ── Score item manager ────────────────────────────────────
@@ -358,7 +414,7 @@ export default function ScoreEntry() {
     try {
       await scoreApi.saveItems({
         component_id: editingComp.id,
-        subject_id: subjectId,
+        subject_id: activeSubjectId,
         grade_level: gradeLevel,
         section,
         quarter: parseInt(quarter),
@@ -388,7 +444,7 @@ export default function ScoreEntry() {
   }
 
   // ── Subject name lookup ───────────────────────────────────
-  const selectedSubject = subjects.find(s => s.id === subjectId)
+  const selectedSubject = subjects.find(s => s.id === activeSubjectId)
   const subjectName = selectedSubject
     ? (selectedSubject.parent_name ? `${selectedSubject.parent_name} — ${selectedSubject.name}` : selectedSubject.name)
     : ''
@@ -762,7 +818,8 @@ export default function ScoreEntry() {
 
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Class</label>
-            <select className="input truncate" value={selectedClass} onChange={e => { setSelectedClass(e.target.value); setSubjectId('') }}>
+            <select className="input truncate" value={selectedClass}
+              onChange={e => { setSelectedClass(e.target.value); setSubjectId(''); setAreaId('') }}>
               {classOptions.length === 0 && <option value="">No assigned classes</option>}
               {classOptions.map(c => (
                 <option key={`${c.grade_level}|||${c.section}`} value={`${c.grade_level}|||${c.section}`}>
@@ -774,19 +831,17 @@ export default function ScoreEntry() {
 
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Subject</label>
-            <select className="input" value={subjectId} onChange={e => setSubjectId(e.target.value)} disabled={!subjects.length}>
+            {/* Learning areas only. MAPEH is one entry here — the name the
+                teacher is assigned and the class list uses — and the areas it
+                is graded through are picked from the tab strip below. */}
+            <select className="input" value={subjectId}
+              onChange={e => { setSubjectId(e.target.value); setAreaId('') }}
+              disabled={!learningAreas.length}>
               <option value="">Subject</option>
-              {subjects.filter(s => !s.parent_id).map(s => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-              {/* MAPEH's areas, grouped under it — one entry per area, because
-                  each carries its own class record. */}
-              {[...new Set(subjects.filter(s => s.parent_id).map(s => s.parent_name))].map(parent => (
-                <optgroup key={parent} label={parent}>
-                  {subjects.filter(s => s.parent_name === parent).map(s => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </optgroup>
+              {learningAreas.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.name}{s.area_count > 0 ? ` (${s.area_count} areas)` : ''}
+                </option>
               ))}
             </select>
           </div>
@@ -803,13 +858,60 @@ export default function ScoreEntry() {
         </div>
       </div>
 
+      {/* Area tabs — only a composite learning area has them.
+          MAPEH is assigned, timetabled and attended as one subject, so the
+          filter above names it; but it is *graded* through four areas, each
+          with its own weights, score items and class record. The tabs are the
+          seam between the two: one filter selection, four sheets. */}
+      {isComposite && (
+        <div className="card p-4 space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Layers size={15} className="text-slate-400" />
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+              {selectedLearningArea.name} areas
+            </span>
+            <span className="text-xs text-slate-400">
+              Scored separately.
+            </span>
+          </div>
+          {areas.length ? (
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
+              {areas.map(a => (
+                <button
+                  key={a.id}
+                  onClick={() => switchArea(a.id)}
+                  className={clsx(
+                    'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap',
+                    a.id === activeSubjectId ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  )}
+                >
+                  {a.name}
+                  {/* An area with no grading structure has no sheet to show. The
+                      dot says which tab that is before it is opened — MAPEH has
+                      no grade for a period until all four are set up. */}
+                  {!a.has_grading && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"
+                      title="No grading structure yet — set one up in Curriculum Management." />
+                  )}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400">
+              None of this subject&apos;s areas are available for {gradeLevel} this school year.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Content */}
       {!filtersReady ? (
         <EmptyState icon={PenLine} title="Select Filters" message="Choose school year, grade level, section, subject, and quarter to begin." />
       ) : loading ? (
         <LoadingSpinner />
       ) : !categories.length ? (
-        <EmptyState icon={ClipboardList} title="No Grading Structure" message="Configure a grading structure for this subject in Curriculum Management first." />
+        <EmptyState icon={ClipboardList} title="No Grading Structure"
+          message={`Configure a grading structure for ${subjectName} in Curriculum Management first.`} />
       ) : !students.length ? (
         <EmptyState icon={PenLine} title="No Students" message="No students found in this section." />
       ) : (

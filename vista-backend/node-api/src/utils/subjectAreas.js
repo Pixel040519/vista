@@ -14,10 +14,13 @@
  * ## The one rule everything follows
  *
  * **Every analytic and reporting read counts learning areas; only score entry
- * and the grading structure descend into areas.** A promotion count, a general
+ * and the grading structure write one level down.** A promotion count, a general
  * average, a risk factor, a report-card row — all of them mean "one learning
  * area", so all of them filter `parent_id IS NULL`. Score Entry is the only
- * surface that works one level down.
+ * surface that *writes* an area's marks; several *display* the areas under the
+ * learning area they roll into (the Grades page's tab strip and its area
+ * summary, Student Detail, the parent app), which is a different thing — the
+ * rule is that an area is never counted beside its learning area.
  *
  * ## Why the roll-up is stored rather than computed on read
  *
