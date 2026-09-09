@@ -638,14 +638,7 @@ export function Grades() {
               <span><span className="font-semibold">Subject Teacher:</span> <span className="normal-case text-slate-700 text-xs font-medium">{data.teacher_name || '—'}</span></span>
             </div>
           </div>
-
-          {viewingRollup && !!data.areas?.length && (
-            <div className="px-5 py-2.5 bg-brand-50/60 border-b border-brand-100 text-xs text-brand-800">
-              These are averages of <strong className="font-medium">{data.areas.map(a => a.name).join(', ')}</strong>.
-              A blank means one of the {data.areas.length} areas has no grade yet for that {grading.periodNoun.toLowerCase()} —
-              enter marks under each area in Score Entry.
-            </div>
-          )}
+          
 
           {activeTab === 'grading' ? (
             <>

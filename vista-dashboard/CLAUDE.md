@@ -952,32 +952,32 @@ grades + average from `gradesApi.getBySubject`) and **Grade Summary** (weighted 
 breakdown for one period from `scoreApi.getBreakdown`).
 
 **A composite learning area adds a third control**, between the filters and the tabs:
-the **area tab strip** — `MAPEH (average)` plus one tab per area. The Subject filter
-lists learning areas only; the strip picks which of the five sheets underneath it is on
-screen. It is the same idiom Score Entry uses (see that section) with **one difference:
-here the roll-up is a tab, and the default one.** Score Entry cannot offer MAPEH itself —
-a learning area with areas is not gradeable and `POST /api/scores` refuses it — but this
-page reads, and the roll-up is the grade that reaches the report card, so it leads the
-strip and `areaId: ''` means it. A stale `areaId` falls back to the roll-up rather than
-to nothing, and there is no unsaved-work confirm: the page only reads.
+the **area tab strip** — a **roll-up tab carrying the learning area's own name**
+(`MAPEH`) plus one tab per area. The Subject filter lists learning areas only; the strip
+picks which of the five sheets underneath it is on screen. Score Entry uses the same idiom and also carries a roll-up tab; the difference is
+which tab a subject **lands on** (see that section). Here it is the roll-up: this page
+reads, and the roll-up is the grade that reaches the report card. `areaId: ''` means it,
+and a stale `areaId` falls back to it rather than to nothing. There is no unsaved-work
+confirm on this strip: the page only reads.
 
 **`viewingRollup` replaced `isComposite`** — the distinction is *the roll-up is on
 screen*, not *the subject has areas*, because an individual area is an ordinary gradeable
-subject and behaves exactly like Math. It drives the averages banner and which **Grade
-Summary** the tab renders:
+subject and behaves exactly like Math. What it drives is which **Grade Summary** the tab
+renders:
 
 | Selected | Grade Summary shows |
 |---|---|
 | an ordinary subject, or one area | weighted categories → Initial → Final (`scoreApi.getBreakdown`) |
-| the roll-up (`MAPEH (average)`) | one column per **area** → Final → Remarks, for the selected period |
+| the roll-up (the `MAPEH` tab) | one column per **area** → Final → Remarks, for the selected period |
 
 The second is the answer to "what is this grade made of" one level up: MAPEH has no
 Written Work of its own, its grade for a period *is* the average of the four areas'
 grades for that period. Its numbers come from **`area_grades` on the sheet response**
 (see the node-api notes) rather than a request of its own, so the roll-up fetches no
 breakdown at all — that effect returns early on `viewingRollup`. A blank area column
-beside a blank Final is the withheld case the banner explains: MAPEH has no grade for a
-period until all four areas have one.
+beside a blank Final is the withheld case: MAPEH has no grade for a period until all four
+areas have one, and this table is where the Grading Sheet's empty cell gets its
+explanation — the column that is blank names the area still missing a grade.
 
 Everything else in this section describes an ordinary subject, which an individual area
 also is.
@@ -1028,8 +1028,8 @@ active year and offered the wrong year's subjects whenever another was selected.
 |---|---|
 | **Curriculum → Subjects** | MAPEH is **one ordinary row** — the areas are not listed here. `EditableItem` shows an "N areas" pill off `area_count` and keeps its grading-config button, which is the way into them (see below). The configured dot means "ready for Score Entry", so on a composite it lights only when *every* area has a structure, never off `has_grading` (a learning area has none of its own). There is **no authoring UI for areas at all** — no Split, no Add, no Delete, no rename: the four are created server-side by `ensureMapehAreas()` whenever a MAPEH exists. A create or rename whose response carries `area_count` refetches rather than patching state, since the server may have just split the subject and the optimistic path cannot invent the areas. |
 | **Grading config modal** (`GradingConfigModal.jsx`) | For a composite subject it opens on an **area picker** instead of an editor: one row per area with a Configured / Not set up chip, because MAPEH has no weights of its own. Choosing one points `target` at that area and renders the normal editor with an `ArrowLeft` **back** control top-left ("All MAPEH areas"). Every read and write follows `target`, not `subject`. Saving an area returns to the picker rather than closing — MAPEH needs all four before it produces a grade, so finishing one is the middle of the job. `areaConfigured` is tracked in the modal so a chip updates the moment an area is saved, without waiting on a refetch. An ordinary subject is completely unaffected: no picker, no back control. |
-| **Score Entry** | the page that *writes* one level down. Asks for `include_areas` and keeps both levels: the **learning areas** fill the Subject dropdown, the areas fill a **tab strip** under the filters (see that page's section below). An area qualifies through its **parent** being in `allowedSubjects` — mirroring `verifyTeacherAssignment()`. The sheet header and the export filename still read "MAPEH — Music". |
-| **Grades** | the Subject filter lists **learning areas only**; a composite one's areas are a **tab strip** under the filters whose **first tab is the roll-up itself** — MAPEH's average is the grade that reaches the report card, so it is a view in its own right and stays the default. The roll-up sheet keeps its banner naming the areas and explaining that a blank cell means one of them has no grade yet. Both inner tabs work on it: **Grading Sheet** is the roll-up per period, and **Grade Summary** becomes an *area* breakdown — one column per area, then Final and Remarks — since MAPEH has no weighted categories of its own (`viewingRollup` picks which summary to render). |
+| **Score Entry** | the page that *writes* one level down. Asks for `include_areas` and keeps both levels: the **learning areas** fill the Subject dropdown, the areas fill a **tab strip** under the filters (see that page's section below), led by a **read-only roll-up tab** showing the four areas' grades, the MAPEH average and the remark. An area qualifies through its **parent** being in `allowedSubjects` — mirroring `verifyTeacherAssignment()`. The sheet header and the export filename still read "MAPEH — Music". |
+| **Grades** | the Subject filter lists **learning areas only**; a composite one's areas are a **tab strip** under the filters whose **first tab is the roll-up itself** — MAPEH's average is the grade that reaches the report card, so it is a view in its own right and stays the default. Both inner tabs work on it: **Grading Sheet** is the roll-up per period, and **Grade Summary** becomes an *area* breakdown — one column per area, then Final and Remarks — since MAPEH has no weighted categories of its own (`viewingRollup` picks which summary to render). The area breakdown is also where a blank roll-up cell is explained: the empty column beside it names the area that has no grade yet. |
 | **Student Detail → Grades** | groups by `parent_subject_name ?? subject_name`. MAPEH is one row, marked "avg. of 4", that expands to show the areas indented. `expandedAreas` is keyed `"SY|||MAPEH"` so the same learning area opens independently per school year. The subject count in the school-year header still counts learning areas. |
 | **My Class** | unchanged — `/advisory/grades` returns learning-area columns, so MAPEH is one column and `general_average` is right without any client work. |
 | **Attendance**, **Accounts → teacher assignments** | unchanged, and deliberately: both take the default (learning areas only). One teacher handles MAPEH, so it stays one assignment row, and attendance is one roll for the whole learning area. |
@@ -1048,21 +1048,23 @@ offers — listing Music, Arts, Physical Education and Health there put four ent
 front of the teacher for one thing they teach, and made switching between them a trip
 back through a select. It is *graded* through the four, each with its own weights,
 score items and class record, so a **tab strip between the filter card and the sheet**
-switches which one is on screen: one filter selection, four sheets, one click apart.
-An ordinary subject renders no strip at all.
+switches which one is on screen: one filter selection, four sheets plus the overview
+they add up to, one click apart. An ordinary subject renders no strip at all.
 
 The split in state is `subjectId` (always a learning area) + `areaId` (an area of a
 composite one), with **`activeSubjectId` the one thing the sheet reads** — every
 `scoreApi` call, the sheet header, the export and the item modal go through it. It
-resolves to `''` when an `areaId` names no area of the current subject, so a stale
-selection leaves the page waiting rather than loading another class's scores.
+resolves to `''` in the two cases where there is no sheet to load: an `areaId` that
+names no area of the current subject (a stale selection leaves the page waiting rather
+than loading another class's scores) and the roll-up tab, which has none by design.
 
 Three rules the strip turns on:
 
-- **A composite subject always lands on an area** (the first, if the stored one does
-  not belong to it), so the strip never renders with no active tab. The effect that
-  does this returns early until `subjects` has loaded — clearing a persisted area on
-  the first render would undo the selection the page was reopened on.
+- **A composite subject always lands on a tab** — the first *area* unless the stored
+  `areaId` is one of the strip's own tabs (an area of this subject, or its roll-up), so
+  the strip never renders with nothing active. The effect that does this returns early
+  until `subjects` has loaded — clearing a persisted tab on the first render would undo
+  the selection the page was reopened on.
 - **A stored `subjectId` naming an area is promoted to (learning area, area)** rather
   than dropped. That covers a filter blob persisted before this change *and* both deep
   links into the page: TeacherDashboard's Resume reports score progress per area (the
@@ -1075,9 +1077,38 @@ Three rules the strip turns on:
 
 Each tab carries an amber dot when that area has no grading structure (`has_grading`
 off the subjects read), because MAPEH has no grade for a period until all four are set
-up and the tab is where a missing one is visible without opening it.
+up and the tab is where a missing one is visible without opening it. The roll-up tab
+never carries one — it has no structure of its own and never will.
 
-The **Grades page** has a strip of its own, shaped differently — see its section above.
+**The strip leads with a read-only roll-up tab** carrying the learning area's own name
+(`MAPEH`), with the four areas after it. A teacher typing Music scores can otherwise only
+see Music: the learning area's grade — the one that reaches the report card and the one a
+parent asks about — was visible nowhere on the page that produces it. The tab shows one column per area, the MAPEH grade averaged from them,
+and the remark, for the period already selected in the filters.
+
+Three things about it:
+
+- **Nothing is entered there.** MAPEH is not gradeable, so `activeSubjectId` stays empty
+  on the tab, `filtersReady` is false, and no sheet, save button or export is rendered —
+  the read-only promise is the absence of a sheet, not a disabled one.
+- **It is the first tab but not the landing tab.** Selecting MAPEH still opens on the
+  first *area*: this is the page a teacher comes to in order to type, and the roll-up has
+  nothing to type. It leads the strip because it is what the four add up to.
+- **It reads `/grades/by-subject`**, whose response already carries the learning area's
+  stored grades, its `areas` and their `area_grades`, and which authorizes a teacher
+  through the parent's name — the MAPEH assignment they hold. So the overview needed no
+  new endpoint and no second way to arrive at the average. MAPEH's grade is **stored** by
+  `utils/subjectAreas.js` at write time; this page must never recompute it.
+
+The learning area's own id in `areaId` is what selects that tab — a real id rather than a
+sentinel, so the strip needs no special value and `areaTabs` is just the roll-up prepended
+to `areas`. One consequence worth knowing: while the roll-up is open, `categories` and
+`scores` still hold the last area's data, so the unsaved-work confirm is gated on
+`filtersReady` as well as `hasChanges()`, or leaving the roll-up would warn about edits
+that are no longer on screen.
+
+The **Grades page** has the same strip, and lands on the roll-up rather than an area —
+see its section above.
 
 Grading config button (sliders icon) shows for Grade 1–6 subjects only — Kinder hides it since it uses competency tracking. The modal has a "Copy from" button that copies another subject's grading structure (filtered by grade level).
 

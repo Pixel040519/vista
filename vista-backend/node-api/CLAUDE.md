@@ -943,6 +943,13 @@ It is one extra query on a request that has already resolved the area ids and th
 class's students; the alternative was four more round trips from the client, one
 per area. Empty for every ordinary subject, so nothing else pays for it.
 
+Two frontend surfaces read it, and both are read-only views of a **stored** grade:
+the Grades page's roll-up Grade Summary, and Score Entry's roll-up tab — which is
+also why Score Entry can show a MAPEH overview without a second endpoint. The
+teacher check on this route resolves `COALESCE(p.name, s.name)`, so asking it for
+MAPEH itself matches the single `MAPEH` row in `teacher_assignments` that the
+teacher already holds.
+
 **The refusals**, each a 409. Four reject a *learning area that has areas*, because
 its grade is derived and it has no weights of its own: `POST /api/grades`,
 `POST /api/scores`, `POST /api/scores/items` and

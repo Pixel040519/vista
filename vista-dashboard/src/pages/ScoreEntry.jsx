@@ -1,5 +1,5 @@
 import { useState, useEffect, useReducer, useCallback, useRef, useMemo, Fragment } from 'react'
-import { curriculumApi, scoreApi } from '../api/client'
+import { curriculumApi, scoreApi, gradesApi } from '../api/client'
 import { LoadingSpinner, EmptyState, Modal } from '../components/UI'
 import { formatName } from '../utils/nameHelper'
 import { useAuth } from '../context/AuthContext'
@@ -105,6 +105,13 @@ export default function ScoreEntry() {
     try { return new Set(JSON.parse(sessionStorage.getItem('vista_score_entry_expanded')) || []) } catch { return new Set() }
   })
 
+  // ── MAPEH roll-up state ───────────────────────────────────
+  // The learning area's own grades and the four areas they average, straight
+  // from the grading sheet's endpoint: MAPEH's grade is stored, not computed
+  // here, so this page reads it rather than adding a second way to arrive at it.
+  const [rollup, setRollup]               = useState(null)
+  const [rollupLoading, setRollupLoading] = useState(false)
+
   // ── Score item manager state ──────────────────────────────
   const [editingComp, setEditingComp]     = useState(null) // { comp, subjectId }
   const [editItems, setEditItems]         = useState([])
@@ -128,6 +135,16 @@ export default function ScoreEntry() {
   const activeSubjectId = isComposite
     ? (areas.some(a => a.id === areaId) ? areaId : '')
     : subjectId
+
+  // The learning area's **own** id in `areaId` means its roll-up tab — the
+  // read-only overview of the four areas and the MAPEH grade averaged from
+  // them. It is a real tab and not a sentinel, so the strip needs no special
+  // value, and `activeSubjectId` stays empty on it: MAPEH is not gradeable, so
+  // there is no sheet to load and no score to save while it is open.
+  const viewingRollup = isComposite && areaId === subjectId
+  const areaTabs = useMemo(() => isComposite
+    ? [{ id: subjectId, name: `${selectedLearningArea.name}`, rollup: true }, ...areas]
+    : [], [isComposite, subjectId, selectedLearningArea, areas])
 
   // All filters selected?
   const filtersReady = syId && gradeLevel && section && activeSubjectId && quarter
@@ -197,8 +214,29 @@ export default function ScoreEntry() {
   useEffect(() => {
     if (!selectedLearningArea) return
     if (!isComposite) { if (areaId) setAreaId(''); return }
-    if (areas.length && !areas.some(a => a.id === areaId)) setAreaId(areas[0].id)
-  }, [selectedLearningArea, isComposite, areas, areaId])
+    // The **first area**, not the roll-up, is where a composite subject lands:
+    // this is the page a teacher opens to type scores, and the roll-up has none
+    // to type. It is the first tab because it is the thing the four add up to,
+    // not because it is where the work starts.
+    if (areas.length && !areaTabs.some(t => t.id === areaId)) setAreaId(areas[0].id)
+  }, [selectedLearningArea, isComposite, areas, areaTabs, areaId])
+
+  // ── Load the roll-up when its tab is open ─────────────────
+  // `/grades/by-subject` already returns the learning area's stored grades,
+  // its areas and each area's grades, and it authorizes a teacher through the
+  // parent's name -- exactly the MAPEH assignment they hold. So the overview
+  // costs one request and no new endpoint.
+  useEffect(() => {
+    // `activeSYLabel`, not the `syLabel` alias further down -- the dependency
+    // array is evaluated during render, so a const declared below this line is
+    // still in its temporal dead zone and would throw.
+    if (!viewingRollup || !gradeLevel || !section || !activeSYLabel) { setRollup(null); return }
+    setRollupLoading(true)
+    gradesApi.getBySubject({ subject_id: subjectId, grade_level: gradeLevel, section, school_year: activeSYLabel })
+      .then(res => setRollup(res.data))
+      .catch(() => setRollup(null))
+      .finally(() => setRollupLoading(false))
+  }, [viewingRollup, subjectId, gradeLevel, section, activeSYLabel])
 
   // ── Load data when all filters are set ────────────────────
   const loadData = useCallback(async () => {
@@ -318,8 +356,12 @@ export default function ScoreEntry() {
   // in and cannot follow, so a switch that would drop them asks first.
   const switchArea = (id) => {
     if (id === areaId) return
-    const target = areas.find(a => a.id === id)
-    if (hasChanges() && !window.confirm(
+    const target = areaTabs.find(t => t.id === id)
+    // `filtersReady` guards the check as much as `hasChanges()` does: the
+    // roll-up tab loads no sheet, so `categories`/`scores` still hold the last
+    // area's data while it is open, and leaving it would otherwise warn about
+    // edits that are no longer on screen and no longer reachable.
+    if (filtersReady && hasChanges() && !window.confirm(
       `Unsaved scores for ${subjectName} will be discarded. Switch to ${target?.name}?`
     )) return
     setAreaId(id)
@@ -876,20 +918,22 @@ export default function ScoreEntry() {
           </div>
           {areas.length ? (
             <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
-              {areas.map(a => (
+              {areaTabs.map(t => (
                 <button
-                  key={a.id}
-                  onClick={() => switchArea(a.id)}
+                  key={t.id}
+                  onClick={() => switchArea(t.id)}
                   className={clsx(
                     'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap',
-                    a.id === activeSubjectId ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                    t.id === areaId ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
                   )}
                 >
-                  {a.name}
+                  {t.name}
                   {/* An area with no grading structure has no sheet to show. The
                       dot says which tab that is before it is opened — MAPEH has
-                      no grade for a period until all four are set up. */}
-                  {!a.has_grading && (
+                      no grade for a period until all four are set up. The
+                      roll-up tab carries no dot: it has no structure of its own
+                      and never will. */}
+                  {!t.rollup && !t.has_grading && (
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"
                       title="No grading structure yet — set one up in Curriculum Management." />
                   )}
@@ -905,7 +949,96 @@ export default function ScoreEntry() {
       )}
 
       {/* Content */}
-      {!filtersReady ? (
+      {viewingRollup ? (
+        /* The roll-up tab. MAPEH is not gradeable, so there is nothing to type
+           here and nothing to save — this is the overview the four sheets add
+           up to: each area's grade for the period, the MAPEH grade averaged
+           from them, and the remark. It answers the question the tabs beside
+           it cannot, which is where a learner stands in the learning area as a
+           whole. */
+        !quarter ? (
+          <EmptyState icon={PenLine} title={`Select a ${grading.periodNoun.toLowerCase()}`}
+            message={`Choose a ${grading.periodNoun.toLowerCase()} to see ${selectedLearningArea.name} grades for this class.`} />
+        ) : rollupLoading ? (
+          <LoadingSpinner />
+        ) : !rollup?.students?.length ? (
+          <EmptyState icon={PenLine} title="No Students" message="No students found in this section." />
+        ) : (
+          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-sm font-bold text-slate-700 tracking-wide">
+                Grade Summary
+              </h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50/80">
+                    <th className="whitespace-nowrap sticky left-0 z-10 bg-slate-50/80 text-left px-5 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider min-w-[200px]">#</th>
+                    {(rollup.areas || []).map(a => (
+                      <th key={a.id} className="text-center px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider min-w-[100px]">
+                        <div className="truncate">{a.name}</div>
+                      </th>
+                    ))}
+                    <th className="whitespace-nowrap text-center px-4 py-2.5 text-xs font-semibold text-brand-600 uppercase tracking-wider">Final</th>
+                    <th className="whitespace-nowrap text-center px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">Remarks</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {['Male', 'Female'].map(gender => {
+                    const group = rollup.students.filter(s => s.gender === gender)
+                    if (!group.length) return null
+                    return (
+                      <Fragment key={gender}>
+                        <tr>
+                          <td colSpan={(rollup.areas?.length || 0) + 3} className="sticky left-0 z-10 bg-slate-50 px-5 py-2 text-[11px] font-bold text-slate-400 uppercase tracking-widest border-y border-slate-200">
+                            {gender}
+                          </td>
+                        </tr>
+                        {group.map(student => {
+                          const ag = rollup.area_grades?.[student.id] || {}
+                          const raw = rollup.grades?.[student.id]?.[quarter]?.grade
+                          const final = raw != null ? Number(raw) : null
+                          const passed = final !== null && final >= grading.passingGrade
+                          return (
+                            <tr key={student.id} className="hover:bg-slate-50/50 transition-colors">
+                              <td className="whitespace-nowrap sticky left-0 z-10 bg-white px-5 py-2.5">
+                                <div className="text-sm font-medium text-slate-700">{formatName(student)}</div>
+                              </td>
+                              {(rollup.areas || []).map(a => {
+                                const g = ag[a.id]?.[quarter]
+                                const v = g != null ? Number(g) : null
+                                return (
+                                  <td key={a.id} className={clsx('text-center px-4 py-2.5 text-sm tabular-nums',
+                                    v === null ? 'text-slate-300' : v < grading.passingGrade ? 'text-red-500' : 'text-slate-600')}>
+                                    {v !== null ? v : '—'}
+                                  </td>
+                                )
+                              })}
+                              <td className={clsx('text-center px-4 py-2.5 text-sm tabular-nums font-bold',
+                                final === null ? 'text-slate-300' : passed ? 'text-emerald-600' : 'text-red-500')}>
+                                {final !== null ? final : '—'}
+                              </td>
+                              <td className="text-center px-4 py-2.5">
+                                {final !== null ? (
+                                  <span className={clsx('inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
+                                    passed ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500')}>
+                                    {passed ? 'Passed' : 'Failed'}
+                                  </span>
+                                ) : <span className="text-slate-300 text-xs">—</span>}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </Fragment>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      ) : !filtersReady ? (
         <EmptyState icon={PenLine} title="Select Filters" message="Choose school year, grade level, section, subject, and quarter to begin." />
       ) : loading ? (
         <LoadingSpinner />
