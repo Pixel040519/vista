@@ -5,14 +5,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `vista-backend/node-api/CLAUDE.md` — Node API conventions (AI proxy, class-health, behavior, ECE, grading, score entry, profile, student stripping).
 - `vista-backend/fastapi-ai/CLAUDE.md` — FastAPI routers, `/teacher-dashboard` internals, SQLAlchemy caveats.
 - `vista-dashboard/CLAUDE.md` — Frontend layout, sidebar, responsive patterns, per-page notes, TeacherDashboard data flow.
+- `vista-landingpage/CLAUDE.md` — Public marketing site: design system, the cross-origin link into the dashboard, scroll handling, handbook-sourced content.
+- `vista-mobile/CLAUDE.md` — Flutter parent and guard apps plus the shared `vista_api` package.
 
 ## Project Overview
 
-VISTA is a Student Monitoring System for elementary schools. Monorepo with three services:
+VISTA is a Student Monitoring System for elementary schools. Monorepo with four web/back-end
+services plus the Flutter mobile apps:
 
 - **`vista-backend/node-api/`** — Express.js REST API (port 5000)
 - **`vista-backend/fastapi-ai/`** — Python FastAPI AI microservice (port 8000)
 - **`vista-dashboard/`** — React + Vite frontend (port 5173, proxies `/api` → 5000)
+- **`vista-landingpage/`** — React + Vite **public marketing site** (port 5174). Static; no auth, no API calls.
+- **`vista-mobile/`** — Flutter apps (`vista_parent`, `vista_guard`) against the Node API.
+
+The landing page is **not** part of the application. It is the school's brochure site and must
+keep rendering with the backend down; it reaches VISTA only by linking to the dashboard's
+`/login` at `VITE_VISTA_URL`. The two Vite apps pin different ports on purpose — they both
+defaulted to 5173 and silently fought over it.
 
 ## Development Commands
 
@@ -56,11 +66,18 @@ Copy `vista-backend/.env.example` to `vista-backend/node-api/.env`. Required var
 ## Architecture
 
 ```
+Landing page (:5174) ──link──▶ Dashboard /login        (no API traffic of its own)
+
 React Dashboard → Node.js API (/api/*) → PostgreSQL
-                                        → FastAPI (/api/ai/* proxied to :8000)
+Flutter apps    ↗                       → FastAPI (/api/ai/* proxied to :8000)
 ```
 
 The frontend **never calls FastAPI directly** — all AI endpoints go through Node's `ai.routes.js` where JWT + role checks live. The FastAPI service stays role-agnostic.
+
+The landing page sits outside this entirely: it is a static site whose only connection to
+VISTA is an `<a href>` into the dashboard's login. Adding API calls to it would mean new
+**public, unauthenticated** endpoints in Node, where every route is currently JWT-gated — that
+is a deliberate decision, not a small one.
 
 ## Database
 

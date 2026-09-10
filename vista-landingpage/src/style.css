@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+@variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+}
+
+/* The logo and the campus photography are page furniture, not content to drag out.
+   Every <img> also carries draggable="false", which is what actually stops the drag
+   in Firefox; -webkit-user-drag additionally suppresses the drag ghost in Chromium
+   and covers any image added later without the attribute. */
+img {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* This is a brochure site, not a document to edit: no I-beam, and nothing is
+   selectable by default. Content a visitor may genuinely need to copy opts back
+   in with `.selectable` — see the exceptions listed there. */
+body {
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Opt back in: the address, every contact detail, the admission requirements,
+   and the About page's preface, history, vision, mission, guiding principles
+   and school hymn. */
+.selectable,
+.selectable * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+button,
+a[href],
+[role='button'] {
+  cursor: pointer;
+}
