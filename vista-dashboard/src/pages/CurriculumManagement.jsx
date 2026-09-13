@@ -1206,12 +1206,19 @@ export default function CurriculumManagement() {
 
       </div>
 
-      {/* Hint */}
-      <p className="text-xs text-slate-400">
-        Click the <span className="font-semibold text-slate-500">✏️</span> icon to edit an item inline,
-        the <span className="font-semibold text-slate-500">sliders</span> icon to configure grading weights,
-        or click <span className="font-semibold text-slate-500">+ Add</span> on any grade card to add a new one.
-      </p>
+      {/* Hint. The middle clause is per-tab: a row's second button is the
+          grading structure on Subjects and the class adviser on Sections, and
+          Assessment has no per-row buttons at all. The icons are drawn rather
+          than named so the sentence matches what the row actually shows. */}
+      {tab !== 'assessment' && (
+        <p className="flex flex-wrap items-center gap-x-1 gap-y-0.5 text-xs text-slate-400">
+          Click the <Pencil size={11} className="text-slate-500"/> icon to edit an item inline, the
+          {tab === 'sections'
+            ? <><GraduationCap size={11} className="text-slate-500"/> icon to assign a class adviser,</>
+            : <><SlidersHorizontal size={11} className="text-slate-500"/> icon to configure grading weights,</>}
+          or click <span className="font-semibold text-slate-500">+ Add</span> on any grade card to add a new one.
+        </p>
+      )}
 
       {/* Content */}
       {!selectedSY ? (
