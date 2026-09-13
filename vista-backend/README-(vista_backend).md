@@ -93,8 +93,12 @@ uvicorn main:app --reload --port 8000
 ### Behavior Endpoints
 | Method | Endpoint | Description | Role |
 |--------|----------|-------------|------|
-| GET | /api/behavior?student_id= | Get behavior logs | All |
-| POST | /api/behavior | Log observation (auto-sentiment) | Admin/Teacher |
+| GET | /api/behavior | Get behavior logs (teachers/parents pass `student_id`; admins may filter by grade level, section, category, sentiment, date range, `school_year_id`) | All |
+| GET | /api/behavior/summary | Positive / neutral / negative counts for the same filters | Admin |
+| GET | /api/behavior/class-roster?grade_level=&section= | Class roster with each learner's observation counts | Teacher |
+| POST | /api/behavior | Log observation (auto-sentiment) | Teacher |
+| PUT | /api/behavior/:id | Edit own observation | Teacher |
+| DELETE | /api/behavior/:id | Delete own observation | Teacher |
 
 ### Dismissal Endpoints (SecurePass)
 | Method | Endpoint | Description | Role |

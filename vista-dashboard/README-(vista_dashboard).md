@@ -27,7 +27,7 @@ npm run dev
 | `/students/:id` | Student profile + QR + AI insights | All |
 | `/attendance` | Daily attendance marking | All (save: admin/teacher) |
 | `/grades` | Grade viewer | All |
-| `/behavior` | Behavior log + sentiment preview | All (log: admin/teacher) |
+| `/behavior` | Teachers: class roster + per-learner observation timeline, log with live tone preview. Admins: school-wide read-only log | Admin, Teacher (log: teacher) |
 | `/securepass` | QR dismissal verifier | Admin, Teacher |
 | `/risk` | AI risk overview | Admin |
 | `/announcements` | Announcements | All (post: admin) |
@@ -56,7 +56,7 @@ src/
     ├── StudentDetail.jsx   ← Full profile + 5 tabs
     ├── Attendance.jsx
     ├── Grades.jsx
-    ├── Behavior.jsx        ← VADER sentiment preview
+    ├── Behavior.jsx        ← re-exports Behavior from pages.jsx (teacher roster / admin log)
     ├── SecurePass.jsx      ← QR verifier + dismissal log
     ├── RiskOverview.jsx    ← Risk distribution
     └── Announcements.jsx

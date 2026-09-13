@@ -115,6 +115,7 @@ export const gradesApi = {
 export const behaviorApi = {
   get:     (params)    => api.get('/behavior', { params }),
   summary: (params)    => api.get('/behavior/summary', { params }),
+  classRoster: (params) => api.get('/behavior/class-roster', { params }),
   log:     (data)      => api.post('/behavior', data),
   update:  (id, data)  => api.put(`/behavior/${id}`, data),
   delete:  (id)        => api.delete(`/behavior/${id}`),
@@ -146,7 +147,9 @@ export const aiApi = {
   predict:     (data)    => api.post('/ai/predict-performance', data),
   risk:        (data)    => api.post('/ai/risk-assessment', data),
   riskAll:     ()        => api.get('/ai/risk-all'),
-  sentiment:   (text)    => api.post('/ai/sentiment', { text }),
+  // Silent: Behavior's live tone preview fires while a teacher types, and says
+  // so inline when the analyzer is unavailable rather than toasting each pause.
+  sentiment:   (text)    => api.post('/ai/sentiment', { text }, { silent: true }),
   // 404 here means "you teach this learner no subject", which is a normal state
   // rather than a failure — routine for a class adviser, who opens advisory
   // learners they teach nothing to. Student Detail renders it as an inline card,

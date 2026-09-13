@@ -61,8 +61,8 @@ Competency-based equivalent of `/class-health`. Replaces the academic tile with 
 Writes are **teacher-only**: `POST/PUT/DELETE /api/behavior[/:id]` use `authorize('teacher')`. PUT/DELETE WHERE clauses include `teacher_id = req.user.id`. POST validates that `student_id` is in one of the teacher's active-SY `teacher_assignments` sections via the file-scope `teacherOwnsStudent` helper — 403s otherwise.
 
 `GET /api/behavior` branches by role:
-- Teachers pass `student_id` and see only their own logs. If the student isn't in their classes, returns `{logs:[], total:0}` so `StudentDetail` doesn't break.
-- Admins may omit `student_id` and pass any combination of `student_id`, `teacher_id`, `grade_level`, `section`, `category`, `sentiment`, `date_from`, `date_to`, `limit`, `offset`. Response `{logs, total}` — logs join `students` for name/grade/section plus a correlated `subject` field from `STRING_AGG(DISTINCT ta.subject)` on `teacher_assignments` joined via `(teacher_id, s.grade_level, s.section)`. Both list AND count queries JOIN `students s` so grade/section filters resolve.
+- Teachers pass `student_id` and see their own logs — plus every teacher's logs for the active year when they advise the learner (see "The three widened reads"). If the student isn't in their classes, returns `{logs:[], total:0}` so `StudentDetail` doesn't break.
+- Admins may omit `student_id` and pass any combination of `student_id`, `teacher_id`, `grade_level`, `section`, `category`, `sentiment`, `date_from`, `date_to`, `school_year_id`, `limit`, `offset`. `school_year_id` matches the year a log was **stamped with** on write (`bl.school_year_id`), never a date range — it is what the admin page's "This school year" tab sends. Response `{logs, total}` — logs join `students` for name/grade/section/`lrn` plus a correlated `subject` field from `STRING_AGG(DISTINCT ta.subject)` on `teacher_assignments` joined via `(teacher_id, s.grade_level, s.section)`. Both list AND count queries JOIN `students s` so grade/section filters resolve.
 
 Both write and read carry a **school year**. `POST` stamps `school_year_id` from the year that is
 `is_active` when the log is recorded — there is no subject to derive it from as attendance has, and
@@ -73,7 +73,9 @@ year. `2026_08_31_behavior_school_year.sql` added the column and backfilled hist
 the learner's attendance that same day (authoritative: attendance derives its year from the
 subject), then from the date — leaving NULL where neither could answer.
 
-`GET /api/behavior/summary` (any admin) takes the same filter set and returns `{total, positive, neutral, negative, this_week}`. Scoped admins filter by their `gradeScopeForRole` on `students.grade_level`.
+`GET /api/behavior/class-roster?grade_level=&section=` (teacher-only) feeds the teacher Behavior page's roster: every learner in the class (the `advisoryClassList` predicate — `is_active` + `enrolled`) with `total` / `positive` / `neutral` / `negative` / `last_observed_at`. It 403s unless the caller holds an active-SY `teacher_assignments` row for the class or advises it, and it tallies exactly the logs `GET /api/behavior` shows per learner — their own from any year, plus every teacher's for the active year when they advise the section — so a roster count never disagrees with the timeline it opens. Change the two visibility rules together.
+
+`GET /api/behavior/summary` (any admin) takes the same filter set (including `school_year_id`) and returns `{total, positive, neutral, negative, this_week}`. Scoped admins filter by their `gradeScopeForRole` on `students.grade_level`.
 
 ## Competency tracking (`ece.routes.js` — `/api/ece`)
 

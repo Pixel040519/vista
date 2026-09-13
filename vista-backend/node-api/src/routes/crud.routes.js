@@ -586,13 +586,14 @@ const teacherOwnsStudent = async (teacherId, studentId) => {
 // GET /api/behavior
 // Teacher: requires student_id, scoped to own logs for students in own classes.
 // Parent:  requires student_id; must be linked to the student (enforceParentLinked).
-// Admin:   student_id optional; supports teacher_id, category, sentiment, date_from, date_to, limit, offset.
+// Admin:   student_id optional; supports teacher_id, category, sentiment, date_from, date_to,
+//          school_year_id, limit, offset.
 behaviorRouter.get('/', enforceParentLinked, async (req, res, next) => {
   try {
     const isAdmin = isAnyAdmin(req.user.role);
     const {
       student_id, teacher_id, category, sentiment,
-      date_from, date_to, grade_level, section,
+      date_from, date_to, grade_level, section, school_year_id,
     } = req.query;
     const limit = Math.min(parseInt(req.query.limit, 10) || (isAdmin ? 50 : 30), 200);
     const offset = parseInt(req.query.offset, 10) || 0;
@@ -612,6 +613,8 @@ behaviorRouter.get('/', enforceParentLinked, async (req, res, next) => {
     if (section)    add('s.section = ?', section);
     if (date_from)  add('bl.observed_at >= ?::date', date_from);
     if (date_to)    add('bl.observed_at <  (?::date + INTERVAL \'1 day\')', date_to);
+    // The year a log was stamped with on write — never inferred from the date.
+    if (school_year_id) add('bl.school_year_id = ?::uuid', school_year_id);
 
     if (req.user.role === 'teacher') {
       // Two independent ways in, and they grant different things.
@@ -655,7 +658,7 @@ behaviorRouter.get('/', enforceParentLinked, async (req, res, next) => {
       SELECT bl.*,
              u.full_name AS teacher_name,
              sy.label AS school_year,
-             s.first_name, s.middle_name, s.surname,
+             s.first_name, s.middle_name, s.surname, s.lrn,
              s.grade_level, s.section,
              (
                SELECT STRING_AGG(DISTINCT ta.subject, ', ' ORDER BY ta.subject)
@@ -693,12 +696,67 @@ behaviorRouter.get('/', enforceParentLinked, async (req, res, next) => {
   }
 });
 
+// GET /api/behavior/class-roster — the teacher's Behavior page roster.
+// Every learner in one of the caller's classes, each with the tally of the logs
+// `GET /api/behavior` would show them for that learner. Visibility is the same
+// rule, applied class-wide: the teacher's own logs from any year, plus every
+// teacher's logs for this year when they also advise the section. Keeping the
+// two in step is what stops a roster count disagreeing with the timeline it opens.
+behaviorRouter.get('/class-roster', authorize('teacher'), async (req, res, next) => {
+  try {
+    const { grade_level, section } = req.query;
+    if (!grade_level || !section) {
+      throw new AppError('grade_level and section are required.', 400);
+    }
+
+    const sy = await activeSchoolYear();
+    const access = await query(
+      `SELECT
+         EXISTS (SELECT 1 FROM teacher_assignments ta
+                  WHERE ta.teacher_id = $1 AND ta.grade_level = $2
+                    AND ta.section = $3 AND ta.school_year = $4) AS teaches,
+         EXISTS (SELECT 1 FROM sections sec
+                  WHERE sec.adviser_id = $1 AND sec.grade_level = $2
+                    AND sec.name = $3 AND sec.is_active = TRUE
+                    AND sec.school_year_id = $5::uuid) AS advises`,
+      [req.user.id, grade_level, section, sy?.label || null, sy?.id || null]
+    );
+    const { teaches, advises } = access.rows[0];
+    if (!teaches && !advises) {
+      throw new AppError('You are not assigned to this class.', 403);
+    }
+
+    // Same roster predicate as every other class list (see advisoryClassList).
+    const r = await query(
+      `SELECT st.id, st.lrn, st.surname, st.first_name, st.middle_name,
+              COUNT(bl.id)::int                                          AS total,
+              COUNT(bl.id) FILTER (WHERE bl.sentiment = 'Positive')::int AS positive,
+              COUNT(bl.id) FILTER (WHERE bl.sentiment = 'Neutral')::int  AS neutral,
+              COUNT(bl.id) FILTER (WHERE bl.sentiment = 'Negative')::int AS negative,
+              MAX(bl.observed_at)                                        AS last_observed_at
+         FROM students st
+         LEFT JOIN behavior_logs bl
+           ON bl.student_id = st.id
+          AND (bl.teacher_id = $1 OR ($4 AND bl.school_year_id = $5::uuid))
+        WHERE st.grade_level = $2 AND st.section = $3
+          AND st.is_active = TRUE AND st.enrollment_status = 'enrolled'
+        GROUP BY st.id
+        ORDER BY st.surname, st.first_name`,
+      [req.user.id, grade_level, section, advises, sy?.id || null]
+    );
+
+    res.json({ students: r.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/behavior/summary — admin-only aggregate counts for the current filters.
 behaviorRouter.get('/summary', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const {
       student_id, teacher_id, category, sentiment,
-      date_from, date_to, grade_level, section,
+      date_from, date_to, grade_level, section, school_year_id,
     } = req.query;
 
     const where = [];
@@ -711,6 +769,8 @@ behaviorRouter.get('/summary', authorizeAnyAdmin, async (req, res, next) => {
     if (sentiment)  add('bl.sentiment = ?', sentiment);
     if (date_from)  add('bl.observed_at >= ?::date', date_from);
     if (date_to)    add('bl.observed_at <  (?::date + INTERVAL \'1 day\')', date_to);
+    // The year a log was stamped with on write — never inferred from the date.
+    if (school_year_id) add('bl.school_year_id = ?::uuid', school_year_id);
     if (grade_level) add('s.grade_level = ?', grade_level);
     if (section)    add('s.section = ?', section);
 
