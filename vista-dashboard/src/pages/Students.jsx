@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Search, Plus, Filter, ChevronRight, Pencil, Trash2, Archive, ArchiveRestore,
-  UserPlus, X, Users, ShieldCheck, Phone, Mail, Eye, EyeOff, Upload
+  UserPlus, Users, ShieldCheck, Phone, Mail, Eye, EyeOff, Upload
 } from 'lucide-react'
 import { studentApi, curriculumApi } from '../api/client'
 import { LoadingSpinner, EmptyState, Modal, PhoneInput } from '../components/UI'
 import BatchUploadModal from '../components/BatchUploadModal'
+import AddStudentWizard from '../components/AddStudentWizard'
 import { useAuth } from '../context/AuthContext'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -27,247 +28,6 @@ const emptyGuardian = () => ({
   is_authorized_pickup:true, is_emergency_contact:false, create_account:false, password:'', home_address:'', link_parent_id:null
 })
 
-// ── Guardian Row ──────────────────────────────────────────────
-function GuardianRow({ g, index, onChange, onRemove }) {
-  const [showPw, setShowPw]         = useState(false)
-  const [mode, setMode]             = useState('new')   // 'new' | 'link'
-  const [searchQ, setSearchQ]       = useState('')
-  const [searchResults, setResults] = useState([])
-  const [searching, setSearching]   = useState(false)
-
-  const set = (k, v) => onChange(index, { ...g, [k]: v })
-
-  const handleSearch = async (q) => {
-    setSearchQ(q)
-    if (!q.trim()) { setResults([]); return }
-    setSearching(true)
-    try {
-      const res = await studentApi.searchParents(q)
-      setResults(res.data.parents || [])
-    } catch {} finally { setSearching(false) }
-  }
-
-  const selectParent = (p) => {
-    onChange(index, {
-      ...g,
-      surname:     p.surname     || '',
-      first_name:  p.first_name  || '',
-      middle_name: p.middle_name || '',
-      email:       p.email       || '',
-      phone:       p.phone       || '',
-      home_address: p.home_address || '',
-      // link to existing account — no need to create a new one
-      link_parent_id:  p.id,
-      create_account:  false,
-      password:        '',
-    })
-    setSearchQ(p.full_name || '')
-    setResults([])
-  }
-
-  const switchMode = (m) => {
-    setMode(m)
-    setSearchQ('')
-    setResults([])
-    // Reset link fields when switching back to new
-    if (m === 'new') {
-      onChange(index, { ...g, link_parent_id: null })
-    }
-  }
-
-  return (
-    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Guardian {index+1}</p>
-        <button type="button" onClick={() => onRemove(index)}
-          className="p-1 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
-          <X size={14}/>
-        </button>
-      </div>
-
-      {/* Mode switcher */}
-      <div className="flex gap-1 bg-white border border-slate-200 p-1 rounded-lg">
-        {[['new','New Guardian'],['link','Link Existing Guardian']].map(([m,l]) => (
-          <button key={m} type="button" onClick={() => switchMode(m)}
-            className={clsx('flex-1 py-1.5 rounded-md text-xs font-medium transition-all',
-              mode === m ? 'bg-brand-500 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
-            {l}
-          </button>
-        ))}
-      </div>
-
-      {/* Link existing parent search */}
-      {mode === 'link' && (
-        <div className="space-y-2">
-          {/* Only show search when no guardian is linked yet */}
-          {!g.link_parent_id && (
-            <>
-              <div className="relative">
-                <input className="input text-sm py-2 pr-8"
-                  placeholder="Search by name or email..."
-                  value={searchQ}
-                  onChange={e => handleSearch(e.target.value)}
-                  autoComplete="off"/>
-                {searching && (
-                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400">⏳</span>
-                )}
-              </div>
-
-              {searchResults.length > 0 && (
-                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                  {searchResults.map(p => (
-                    <button key={p.id} type="button" onClick={() => selectParent(p)}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-brand-50 transition-colors text-left border-b border-slate-100 last:border-0">
-                      <div className="w-7 h-7 rounded-full bg-brand-100 flex items-center justify-center text-xs font-bold text-brand-700 flex-shrink-0">
-                        {p.surname?.[0] || '?'}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-slate-800 truncate">{p.full_name}</p>
-                        <p className="text-xs text-slate-400 truncate">{p.email} · {p.linked_students} student{p.linked_students !== '1' ? 's' : ''} linked</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {searchQ && !searching && searchResults.length === 0 && (
-                <p className="text-xs text-slate-400 text-center py-2">No existing guardians found for "{searchQ}"</p>
-              )}
-            </>
-          )}
-
-          {/* Show selected guardian with X to clear */}
-          {g.link_parent_id && (
-            <div className="flex items-center justify-between gap-2 p-2.5 bg-brand-50 border border-brand-200 rounded-lg">
-              <span className="text-xs text-brand-700 font-medium">✓ Linked: {formatName(g)}</span>
-              <button type="button"
-                onClick={() => {
-                  onChange(index, { ...g,
-                    link_parent_id: null, surname: '', first_name: '', middle_name: '',
-                    email: '', phone: '', home_address: ''
-                  })
-                  setSearchQ('')
-                  setResults([])
-                }}
-                className="p-1 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
-                title="Remove selected guardian">
-                <X size={13}/>
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-      {(mode === 'new' || g.link_parent_id) && (
-      <div className={clsx('grid grid-cols-2 gap-2', g.link_parent_id && 'opacity-75')}>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Surname {!g.link_parent_id && '*'}</label>
-          <input className={clsx('input text-sm py-2', g.link_parent_id && 'bg-slate-100 cursor-not-allowed')}
-            placeholder="Santos" value={g.surname}
-            onChange={e => !g.link_parent_id && set('surname', e.target.value)}
-            onBlur={e => !g.link_parent_id && set('surname', titleCase(e.target.value))}
-            readOnly={!!g.link_parent_id} required={!g.link_parent_id}/>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">First Name {!g.link_parent_id && '*'}</label>
-          <input className={clsx('input text-sm py-2', g.link_parent_id && 'bg-slate-100 cursor-not-allowed')}
-            placeholder="Maria" value={g.first_name}
-            onChange={e => !g.link_parent_id && set('first_name', e.target.value)}
-            onBlur={e => !g.link_parent_id && set('first_name', titleCase(e.target.value))}
-            readOnly={!!g.link_parent_id} required={!g.link_parent_id}/>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Middle Name</label>
-          <input className={clsx('input text-sm py-2', g.link_parent_id && 'bg-slate-100 cursor-not-allowed')}
-            placeholder="Optional" value={g.middle_name}
-            onChange={e => !g.link_parent_id && set('middle_name', e.target.value)}
-            onBlur={e => !g.link_parent_id && set('middle_name', titleCase(e.target.value))}
-            readOnly={!!g.link_parent_id}/>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Relationship *</label>
-          <select className="input text-sm py-2" value={g.relationship}
-            onChange={e => set('relationship', e.target.value)}>
-            {RELATIONSHIPS.map(r => <option key={r}>{r}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">
-            Email{g.create_account && !g.link_parent_id ? ' *' : ''}
-          </label>
-          <input className={clsx('input text-sm py-2', g.link_parent_id && 'bg-slate-100 cursor-not-allowed')}
-            type="email"
-            placeholder={g.create_account && !g.link_parent_id ? 'Required for portal account' : 'parent@email.com'}
-            value={g.email}
-            onChange={e => !g.link_parent_id && set('email', e.target.value)}
-            required={g.create_account && !g.link_parent_id}
-            readOnly={!!g.link_parent_id}/>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Phone {!g.link_parent_id && '*'}</label>
-          <PhoneInput className={clsx('input text-sm py-2 pr-10', g.link_parent_id && 'bg-slate-100 cursor-not-allowed')}
-            value={g.phone} onChange={v => !g.link_parent_id && set('phone', v)}
-            required={!g.link_parent_id}/>
-        </div>
-        <div className="col-span-2">
-          <label className="block text-xs font-medium text-slate-600 mb-1">
-            Home Address {!g.link_parent_id && '*'}
-            {g.link_parent_id && !g.home_address && (
-              <span className="text-amber-500 font-normal ml-1">(not on file for this parent)</span>
-            )}
-          </label>
-          <textarea className={clsx('input text-sm resize-none min-h-14', g.link_parent_id && !g.home_address ? '' : g.link_parent_id ? 'bg-slate-100 cursor-not-allowed' : '')}
-            placeholder="House No., Street, Barangay, Municipality/City, Province"
-            value={g.home_address}
-            onChange={e => set('home_address', e.target.value)}
-            onBlur={e => set('home_address', e.target.value.trim())}
-            readOnly={!!(g.link_parent_id && g.home_address)}
-            required/>
-        </div>
-      </div>
-      )}{/* end link_parent_id / new mode fields */}
-      <div className="flex flex-wrap gap-4 pt-1">
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" className="rounded" checked={g.is_authorized_pickup}
-            onChange={e => set('is_authorized_pickup', e.target.checked)}/>
-          <span className="text-xs text-slate-600 font-medium">Authorized for pickup</span>
-        </label>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" className="rounded" checked={g.is_emergency_contact}
-            onChange={e => set('is_emergency_contact', e.target.checked)}/>
-          <span className="text-xs text-slate-600 font-medium">Emergency contact</span>
-        </label>
-        {!g.link_parent_id && (
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" className="rounded" checked={g.create_account}
-              onChange={e => set('create_account', e.target.checked)}/>
-            <span className="text-xs text-slate-600 font-medium">Create parent portal account</span>
-          </label>
-        )}
-        {g.link_parent_id && (
-          <span className="flex items-center gap-1.5 text-xs text-blue-600 font-medium bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200">
-            ✓ Has parent portal account
-          </span>
-        )}
-      </div>
-      {g.create_account && !g.link_parent_id && (
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Account Password *</label>
-          <div className="relative">
-            <input className="input text-sm py-2 pr-9"
-              type={showPw ? 'text' : 'password'} placeholder="Min. 8 characters"
-              value={g.password} onChange={e => set('password', e.target.value)}/>
-            <button type="button" onClick={() => setShowPw(!showPw)}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400">
-              {showPw ? <EyeOff size={14}/> : <Eye size={14}/>}
-            </button>
-          </div>
-          <p className="text-xs text-slate-400 mt-1">Guardian uses email + this password to log in to Parent Portal.</p>
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ── Age calculator helper ─────────────────────────────────────
 const calcAge = (dob) => {
   if (!dob) return ''
@@ -279,8 +39,9 @@ const calcAge = (dob) => {
   return age >= 0 ? String(age) : ''
 }
 
-// ── Student Form (shared by create + edit) ────────────────────
-function StudentForm({ initial, onSubmit, onClose, mode, gradeOptions }) {
+// ── Student Form (edit) ───────────────────────────────────────
+// Adding a student is components/AddStudentWizard.jsx.
+function StudentForm({ initial, onSubmit, onClose, gradeOptions }) {
   const [form, setForm] = useState({
     lrn:               initial?.lrn ?? '',
     surname:           initial?.surname ?? '',
@@ -295,11 +56,8 @@ function StudentForm({ initial, onSubmit, onClose, mode, gradeOptions }) {
     home_address:      initial?.home_address      ?? '',
     age:               initial?.date_of_birth
                          ? calcAge(initial.date_of_birth) : '',
-    guardians:         mode === 'create' ? [emptyGuardian()] : [],
   })
   const [saving, setSaving]       = useState(false)
-  const [tab, setTab]             = useState('info')
-  const [skipGuardians, setSkipGuardians] = useState(false)
 
   const [sections, setSections] = useState([])
 
@@ -318,17 +76,11 @@ function StudentForm({ initial, onSubmit, onClose, mode, gradeOptions }) {
     return n
   })
 
-  const addG    = () => setForm(p => ({ ...p, guardians: [...p.guardians, emptyGuardian()] }))
-  const removeG = i  => setForm(p => ({ ...p, guardians: p.guardians.filter((_,j) => j !== i) }))
-  const updateG = (i, v) => setForm(p => { const g=[...p.guardians]; g[i]=v; return {...p,guardians:g} })
-
   const handleSubmit = async e => {
     e.preventDefault()
     setSaving(true)
     try {
       const payload = { ...form }
-      if (mode === 'edit') delete payload.guardians
-      if (skipGuardians) payload.guardians = []
       delete payload.age   // computed field, not stored in DB
       if (!payload.profile_photo_url) delete payload.profile_photo_url
       await onSubmit(payload)
@@ -337,22 +89,9 @@ function StudentForm({ initial, onSubmit, onClose, mode, gradeOptions }) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col h-full min-h-0">
-      {/* ── Sticky tab bar — never scrolls away ── */}
-      {mode === 'create' && (
-        <div className="flex gap-1 bg-slate-100 p-1 rounded-xl mb-4 flex-shrink-0">
-          {[['info','Student Info'],['guardians','Guardians / Parents']].map(([v,l]) => (
-            <button key={v} type="button" onClick={() => setTab(v)}
-              className={clsx('flex-1 py-2 rounded-lg text-sm font-medium transition-all',
-                tab === v ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
-              {l}
-            </button>
-          ))}
-        </div>
-      )}
       {/* ── Scrollable content area ── */}
       <div className="overflow-y-auto flex-1 min-h-0 space-y-3 pr-1 pb-2">
 
-      {(tab === 'info' || mode === 'edit') && (
         <div className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">
@@ -430,53 +169,13 @@ function StudentForm({ initial, onSubmit, onClose, mode, gradeOptions }) {
             </div>
           </div>
         </div>
-      )}
-
-      {tab === 'guardians' && mode === 'create' && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" className="rounded accent-brand-500"
-                checked={skipGuardians} onChange={e => setSkipGuardians(e.target.checked)}/>
-              <span className="text-sm text-slate-600 font-medium cursor-pointer">Add guardians / parents later</span>
-            </label>
-            {!skipGuardians && (
-              <button type="button" onClick={addG}
-                className="flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:text-brand-700 px-2.5 py-1.5 rounded-lg hover:bg-brand-50 transition-colors">
-                <Plus size={13}/> Add Guardian
-              </button>
-            )}
-          </div>
-
-          {!skipGuardians && (
-            <div>
-              {form.guardians.length === 0 ? (
-                <div className="text-center py-8 text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl">
-                  No guardians added.
-                  <button type="button" onClick={addG} className="block mx-auto mt-2 text-brand-600 font-medium hover:text-brand-700">
-                    + Add Guardian
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
-                  {form.guardians.map((g,i) => (
-                    <GuardianRow key={i} g={g} index={i} onChange={updateG} onRemove={removeG}/>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          </div>
-      )}
 
       </div>{/* end scrollable area */}
       {/* ── Sticky action buttons — never scrolls away ── */}
       <div className="flex gap-3 pt-4 mt-2 border-t border-slate-100 flex-shrink-0">
         <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
         <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
-          {saving
-            ? (mode === 'create' ? 'Adding...' : 'Saving...')
-            : (mode === 'create' ? 'Add Student'  : 'Save Changes')}
+          {saving ? 'Saving...' : 'Save Changes'}
         </button>
       </div>
     </form>
@@ -1329,8 +1028,8 @@ export default function Students() {
       </div>
 
       {/* ── Modals ──────────────────────────────────────────── */}
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Add New Student" size="lg" selfScroll>
-        <StudentForm mode="create" onSubmit={handleCreate} onClose={() => setShowCreate(false)} gradeOptions={scopedGrades}/>
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Add New Student" size="xl" selfScroll>
+        <AddStudentWizard onSubmit={handleCreate} onClose={() => setShowCreate(false)} gradeOptions={scopedGrades}/>
       </Modal>
 
       <BatchUploadModal
@@ -1340,7 +1039,7 @@ export default function Students() {
       />
 
       <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title="Edit Student Information" size="lg" selfScroll>
-        {editTarget && <StudentForm mode="edit" initial={editTarget} onSubmit={handleEdit} onClose={() => setEditTarget(null)} gradeOptions={scopedGrades}/>}
+        {editTarget && <StudentForm initial={editTarget} onSubmit={handleEdit} onClose={() => setEditTarget(null)} gradeOptions={scopedGrades}/>}
       </Modal>
 
       <Modal open={!!editGuardians} onClose={() => setEditGuardians(null)} title="Manage Guardians / Parents" size="lg">
