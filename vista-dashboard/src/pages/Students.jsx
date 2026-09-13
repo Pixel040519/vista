@@ -326,16 +326,18 @@ function GuardianManager({ studentId, guardians, onRefresh }) {
   const [mode, setMode]       = useState(null)  // null | 'add' | guardianId (for edit)
   const closeForm = () => setMode(null)
 
+  // The server's message says what happened to a requested portal account
+  // (created, or linked to one that already existed), so show it verbatim.
   const handleAdd = async (form) => {
-    await studentApi.addGuardian(studentId, form)
-    toast.success('Guardian added.')
+    const res = await studentApi.addGuardian(studentId, form)
+    toast.success(res.data?.message || 'Guardian added.', { duration: 6000 })
     closeForm()
     onRefresh()
   }
 
   const handleEdit = async (guardianId, form) => {
-    await studentApi.updateGuardian(studentId, guardianId, form)
-    toast.success('Guardian updated.')
+    const res = await studentApi.updateGuardian(studentId, guardianId, form)
+    toast.success(res.data?.message || 'Guardian updated.', { duration: 6000 })
     closeForm()
     onRefresh()
   }

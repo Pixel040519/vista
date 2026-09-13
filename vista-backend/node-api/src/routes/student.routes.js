@@ -52,6 +52,25 @@ const assertStudentInScope = async (req, studentId, { includeArchived = false } 
 
 router.use(authenticate)
 
+// A guardian asked to get a parent portal login must arrive with an email and a
+// password. insertGuardian only creates the account when both are present, so
+// without this a ticked box with a blank field saved the guardian, answered
+// success, and quietly created nothing. Unticked, a blank password is ignored.
+const PORTAL_PASSWORD_MSG = 'A password of at least 8 characters is needed for the parent portal account.'
+const portalAccountShape = (base = Joi.boolean()) => ({
+  create_account: base,
+  password: Joi.when('create_account', {
+    is: true,
+    then: Joi.string().min(8).required().messages({ 'any.required': PORTAL_PASSWORD_MSG, 'string.empty': PORTAL_PASSWORD_MSG, 'string.min': PORTAL_PASSWORD_MSG }),
+    otherwise: Joi.any().strip(),
+  }),
+})
+const portalEmail = Joi.when('create_account', {
+  is: true,
+  then: Joi.string().email().required().messages({ 'any.required': 'An email is needed for the parent portal account.', 'string.empty': 'An email is needed for the parent portal account.' }),
+  otherwise: Joi.string().email().optional().allow(''),
+})
+
 const guardianNameShape = {
   surname:     Joi.string().min(1).required(),
   first_name:  Joi.string().min(1).required(),
@@ -73,12 +92,11 @@ const studentSchema = Joi.object({
   guardians: Joi.array().items(Joi.object({
     ...guardianNameShape,
     relationship:         Joi.string().required(),
-    email:                Joi.string().email().optional().allow(''),
+    email:                portalEmail,
     phone:                Joi.string().optional().allow(''),
     is_authorized_pickup:  Joi.boolean().default(true),
     is_emergency_contact:  Joi.boolean().default(false),
-    create_account:        Joi.boolean().default(false),
-    password:              Joi.string().min(8).optional().allow(''),
+    ...portalAccountShape(Joi.boolean().default(false)),
     home_address:          Joi.string().trim().optional().allow(''),
     link_parent_id:        Joi.string().uuid().optional().allow(null),
   })).optional()
@@ -101,12 +119,11 @@ const updateStudentSchema = Joi.object({
 const guardianSchema = Joi.object({
   ...guardianNameShape,
   relationship:         Joi.string().required(),
-  email:                Joi.string().email().optional().allow(''),
+  email:                portalEmail,
   phone:                Joi.string().optional().allow(''),
   is_authorized_pickup:  Joi.boolean().default(true),
   is_emergency_contact:  Joi.boolean().default(false),
-  create_account:        Joi.boolean().default(false),
-  password:              Joi.string().min(8).optional().allow(''),
+  ...portalAccountShape(Joi.boolean().default(false)),
   home_address:          Joi.string().trim().min(1).required(),
 })
 
@@ -120,6 +137,10 @@ const updateGuardianSchema = Joi.object({
   is_authorized_pickup:  Joi.boolean().optional(),
   is_emergency_contact:  Joi.boolean().optional(),
   home_address:          Joi.string().optional().allow(''),
+  // Giving an existing guardian a parent portal login. Without these keys
+  // stripUnknown dropped them, so the edit saved and answered "Guardian
+  // updated." while no account was ever created.
+  ...portalAccountShape(Joi.boolean().optional()),
 })
 
 // ── Helper: get student with guardians ───────────────────────
@@ -182,7 +203,40 @@ const getStudentWithGuardians = async (id, { includeArchived = false } = {}) => 
   return result.rows[0] || null
 }
 
+// ── Helper: the parent portal account for an email ────────────
+// Returns { id, created }. An email is one login: an existing *parent* account
+// is reused (the sibling case) and its password left alone, while an email that
+// belongs to a teacher or admin is refused, since linking it would hand that
+// staff account this learner's parent-side access. Matched case-insensitively,
+// so "Rosa@Mail.com" does not mint a second account beside "rosa@mail.com".
+const ensureParentAccount = async (client, { email, password, surname, first_name, middle_name, phone }) => {
+  const exist = await client.query('SELECT id, role FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [email])
+  if (exist.rows.length) {
+    if (exist.rows[0].role !== ROLES.PARENT) {
+      throw new AppError(`${email} already belongs to a staff account. Use a different email for the parent portal account.`, 409)
+    }
+    return { id: exist.rows[0].id, created: false }
+  }
+  const bcrypt = require('bcryptjs')
+  const hash = await bcrypt.hash(password, await bcrypt.genSalt(12))
+  const r = await client.query(
+    `INSERT INTO users (email, password_hash, surname, first_name, middle_name, role, phone)
+     VALUES ($1,$2,$3,$4,$5,'parent',$6) RETURNING id`,
+    [email, hash, surname, first_name, middle_name || null, phone || null]
+  )
+  return { id: r.rows[0].id, created: true }
+}
+
+// What happened to the portal account, appended to the response message. A
+// reused account is spelled out because the password the admin typed was not
+// applied to it, and saying only "added" hid that.
+const accountNote = (account, email) => !account ? ''
+  : account.created ? ' Parent portal account created.'
+  : ` ${email} already had a parent portal account, so the guardian was linked to it and its password was not changed.`
+
 // ── Helper: insert guardian row ───────────────────────────────
+// Returns { parentId, account }: `account` is ensureParentAccount's answer when
+// a portal account was asked for, null otherwise.
 const insertGuardian = async (client, studentId, g) => {
   const { surname, first_name, middle_name } = normaliseName(g)
   let parentId = null
@@ -206,27 +260,14 @@ const insertGuardian = async (client, studentId, g) => {
          u.email, u.phone, g.relationship,
          g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, g.home_address || null]
       )
-      return parentId
+      return { parentId, account: null }
     }
   }
 
+  let account = null
   if (g.create_account && g.email && g.password) {
-    const bcrypt = require('bcryptjs')
-    const hash   = await bcrypt.hash(g.password, await bcrypt.genSalt(12))
-    const exist  = await client.query('SELECT id, role FROM users WHERE email=$1', [g.email])
-    // An email is one login. Linking a teacher's or admin's account as a parent
-    // would hand that account this learner's parent-side access, so refuse
-    // rather than reuse it; an existing *parent* account is the sibling case.
-    if (exist.rows.length && exist.rows[0].role !== ROLES.PARENT) {
-      throw new AppError(`${g.email} already belongs to a staff account. Use a different email for the parent portal account.`, 409)
-    }
-    parentId = exist.rows.length
-      ? exist.rows[0].id
-      : (await client.query(
-          `INSERT INTO users (email, password_hash, surname, first_name, middle_name, role, phone)
-           VALUES ($1,$2,$3,$4,$5,'parent',$6) RETURNING id`,
-          [g.email, hash, surname, first_name, middle_name || null, g.phone || null]
-        )).rows[0].id
+    account = await ensureParentAccount(client, { email: g.email, password: g.password, surname, first_name, middle_name, phone: g.phone })
+    parentId = account.id
   } else if (g.email) {
     const found = await client.query('SELECT id FROM users WHERE email=$1 AND role=$2', [g.email,'parent'])
     if (found.rows.length) parentId = found.rows[0].id
@@ -240,7 +281,7 @@ const insertGuardian = async (client, studentId, g) => {
      g.email || null, g.phone || null, g.relationship,
      g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, g.home_address || null]
   )
-  return parentId
+  return { parentId, account }
 }
 
 // GET /api/students/parents/search?q=juan — search existing parent accounts
@@ -781,7 +822,7 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
           const home_address = g.home_address || account?.home_address || r.home_address
           // link_parent_id makes insertGuardian copy name, email and phone from
           // the account rather than from the sheet.
-          const parentId = await insertGuardian(client, res.rows[0].id, account
+          const { parentId } = await insertGuardian(client, res.rows[0].id, account
             ? { link_parent_id: account.id, relationship: g.relationship, home_address,
                 is_authorized_pickup: g.is_authorized_pickup, is_emergency_contact: g.is_emergency_contact }
             : { ...g, home_address })
@@ -954,8 +995,11 @@ router.post('/:id/guardians', authorizeAnyAdmin, async (req, res, next) => {
     await assertStudentInScope(req, req.params.id)
     const { error, value } = guardianSchema.validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
-    await withTransaction(async (client) => { await insertGuardian(client, req.params.id, value) })
-    res.json({ message: 'Guardian added.', student: await getStudentWithGuardians(req.params.id) })
+    const { account } = await withTransaction((client) => insertGuardian(client, req.params.id, value))
+    res.json({
+      message: 'Guardian added.' + accountNote(account, value.email),
+      student: await getStudentWithGuardians(req.params.id),
+    })
   } catch (err) { next(err) }
 })
 
@@ -966,20 +1010,61 @@ router.put('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, nex
     const { error, value } = updateGuardianSchema.validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
 
-    const normed = normaliseName(value)
-    const sets=[]; const params=[]
-    for (const f of ['surname','first_name','middle_name','email','phone','relationship','is_authorized_pickup','is_emergency_contact','home_address']) {
-      if (normed[f] !== undefined) { params.push(normed[f] ?? null); sets.push(`${f}=$${params.length}`) }
-    }
-    if (!sets.length) throw new AppError('Nothing to update.', 400)
-    sets.push('updated_at=NOW()')
-    params.push(req.params.guardianId, req.params.id)
+    const { create_account, password, ...fields } = value
+    const normed = normaliseName(fields)
 
-    const r = await query(
-      `UPDATE parent_student SET ${sets.join(',')} WHERE id=$${params.length-1} AND student_id=$${params.length} RETURNING id`, params
-    )
-    if (!r.rows.length) throw new AppError('Guardian not found.', 404)
-    res.json({ message: 'Guardian updated.', student: await getStudentWithGuardians(req.params.id) })
+    const account = await withTransaction(async (client) => {
+      const cur = await client.query(
+        'SELECT parent_id, surname, first_name, middle_name, email, phone FROM parent_student WHERE id=$1 AND student_id=$2 FOR UPDATE',
+        [req.params.guardianId, req.params.id]
+      )
+      if (!cur.rows.length) throw new AppError('Guardian not found.', 404)
+      const row = cur.rows[0]
+
+      const sets = []; const params = []
+      for (const f of ['surname','first_name','middle_name','email','phone','relationship','is_authorized_pickup','is_emergency_contact','home_address']) {
+        if (normed[f] !== undefined) { params.push(normed[f] ?? null); sets.push(`${f}=$${params.length}`) }
+      }
+
+      let acct = null
+      if (create_account) {
+        if (row.parent_id) throw new AppError('This guardian already has a parent portal account.', 409)
+        // The values this save leaves on the row, not the ones it replaces.
+        const merged = { ...row }
+        for (const [k, v] of Object.entries(normed)) if (v !== undefined) merged[k] = v
+        if (!merged.email || Joi.string().email().validate(merged.email).error) {
+          throw new AppError('A valid email is needed for the parent portal account.', 422)
+        }
+        acct = await ensureParentAccount(client, {
+          email: merged.email, password,
+          surname: merged.surname, first_name: merged.first_name, middle_name: merged.middle_name, phone: merged.phone,
+        })
+        // UNIQUE(parent_id, student_id): the account may already sit under this
+        // learner through another guardian row. Say so instead of a raw 23505.
+        const dup = await client.query(
+          'SELECT 1 FROM parent_student WHERE parent_id=$1 AND student_id=$2 AND id<>$3',
+          [acct.id, req.params.id, req.params.guardianId]
+        )
+        if (dup.rows.length) {
+          throw new AppError(`${merged.email} is already the portal account of another guardian of this student.`, 409)
+        }
+        params.push(acct.id); sets.push(`parent_id=$${params.length}`)
+        acct.email = merged.email
+      }
+
+      if (!sets.length) throw new AppError('Nothing to update.', 400)
+      sets.push('updated_at=NOW()')
+      params.push(req.params.guardianId, req.params.id)
+      await client.query(
+        `UPDATE parent_student SET ${sets.join(',')} WHERE id=$${params.length-1} AND student_id=$${params.length}`, params
+      )
+      return acct
+    })
+
+    res.json({
+      message: 'Guardian updated.' + accountNote(account, account?.email),
+      student: await getStudentWithGuardians(req.params.id),
+    })
   } catch (err) { next(err) }
 })
 
