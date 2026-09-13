@@ -10,7 +10,7 @@ const GRADE_LEVELS = [
   'Kinder',
   'Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6',
 ]
-const GENDERS = ['Male','Female','Other']
+const GENDERS = ['Male','Female']
 const COLUMNS = ['lrn','surname','first_name','middle_name','date_of_birth','gender','grade_level','section','home_address']
 const MAX_ROWS = 200
 
@@ -349,7 +349,7 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
           <div className="text-xs text-slate-600 space-y-1">
             <p className="font-semibold text-slate-700">Upload format</p>
             <p>Use the template. Columns (case-sensitive): <code className="font-mono">{COLUMNS.join(', ')}</code></p>
-            <p>Gender: Male / Female / Other. Date of birth: YYYY-MM-DD. Max {MAX_ROWS} rows per upload.</p>
+            <p>Gender: Male or Female. Date of birth: YYYY-MM-DD. Max {MAX_ROWS} rows per upload.</p>
             <p className="text-slate-500">
               Accepts .xlsx and .csv. The template keeps the LRN column as text so Excel does not turn 12-digit numbers into scientific notation.
               Guardians are not part of this upload — add them after using "Manage Guardians".

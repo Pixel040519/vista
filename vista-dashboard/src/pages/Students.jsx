@@ -20,7 +20,7 @@ const GRADE_LEVELS = ['Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5'
 // Sections loaded dynamically from API per grade level
 
 const RELATIONSHIPS = ['Mother','Father','Guardian','Grandmother','Grandfather','Aunt','Uncle','Sibling','Other']
-const GENDER_STYLE  = { Male:'bg-blue-50 text-blue-700', Female:'bg-pink-50 text-pink-700', Other:'bg-purple-50 text-purple-700' }
+const GENDER_STYLE  = { Male:'bg-blue-50 text-blue-700', Female:'bg-pink-50 text-pink-700' }
 
 const emptyGuardian = () => ({
   surname:'', first_name:'', middle_name:'', relationship:'Mother', email:'', phone:'',
@@ -392,7 +392,7 @@ function StudentForm({ initial, onSubmit, onClose, mode, gradeOptions }) {
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">Gender *</label>
               <select className="input" value={form.gender} onChange={e => set('gender', e.target.value)}>
-                <option>Male</option><option>Female</option><option>Other</option>
+                <option>Male</option><option>Female</option>
               </select>
             </div>
             <div>

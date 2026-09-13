@@ -951,6 +951,8 @@ Two tabs over one filter set (school year, class, subject): **Grading Sheet** (p
 grades + average from `gradesApi.getBySubject`) and **Grade Summary** (weighted category
 breakdown for one period from `scoreApi.getBreakdown`).
 
+Both tables group learners with `groupByGender()`: **Male**, then **Female**, then **No gender recorded**. The third group is for learners whose `gender` is NULL, which the column allows. It used to be a group called "Other", which is not a valid value anymore. A plain Male/Female filter would drop those learners from the sheet without a trace, and Score Entry's gender groups still do.
+
 **A composite learning area adds a third control**, between the filters and the tabs:
 the **area tab strip** — a **roll-up tab carrying the learning area's own name**
 (`MAPEH`) plus one tab per area. The Subject filter lists learning areas only; the strip

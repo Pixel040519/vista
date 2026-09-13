@@ -119,6 +119,13 @@ were retired in Aug 2026 — they sit outside DepEd's K-12 scope entirely and ar
 longer offered. `2026_08_20_remove_pre_kinder_levels.sql` cleared their curriculum rows;
 nothing in the codebase should reintroduce them.
 
+Student gender is **Male or Female** only. `students_gender_check` allowed `'Other'` until
+`2026_09_13_remove_gender_other.sql`, which refuses to run while any learner still holds it
+rather than guessing a replacement. It matches the sex field on DepEd school forms (SF1, SF9)
+and the Male/Female grouping of every class record. The Joi schemas in `student.routes.js`,
+the Add/Edit Student forms and the batch upload all enforce the same two values. The column
+stays nullable, so a surface that groups by gender must still list learners with none.
+
 ## Cross-cutting Conventions
 
 - **Name fields** are always `surname` / `first_name` / `middle_name`. Never a single `full_name`.

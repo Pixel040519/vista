@@ -288,6 +288,18 @@ import { BookOpen, Filter, Layers } from 'lucide-react'
 import { Fragment } from 'react'
 import clsx from 'clsx'
 
+// Male, then Female, like the DepEd class record. A learner with no gender on
+// file still gets a group of their own at the end: gender is nullable, and a
+// Male/Female filter alone would drop them from the sheet without a trace.
+function groupByGender(rows, genderOf) {
+  const groups = [
+    { label: 'MALE', students: rows.filter(r => genderOf(r) === 'Male') },
+    { label: 'FEMALE', students: rows.filter(r => genderOf(r) === 'Female') },
+    { label: 'NO GENDER RECORDED', students: rows.filter(r => !['Male', 'Female'].includes(genderOf(r))) },
+  ]
+  return groups.filter(g => g.students.length)
+}
+
 export function Grades() {
   const { user, activeAssignments } = useAuth()
   const isTeacher = user?.role === 'teacher'
@@ -461,15 +473,10 @@ export function Grades() {
   }, [activeTab, classQuarter, activeSubjectId, gradeLevel, section, viewingRollup])
 
   // ── Breakdown gender groups ───────────────────────────────
-  const breakdownGroups = useMemo(() => {
-    if (!breakdownData?.breakdown?.length) return []
-    const groups = []
-    for (const g of ['Male', 'Female', 'Other']) {
-      const list = breakdownData.breakdown.filter(b => (b.student.gender || 'Other') === g)
-      if (list.length) groups.push({ label: g.toUpperCase(), students: list })
-    }
-    return groups
-  }, [breakdownData])
+  const breakdownGroups = useMemo(
+    () => groupByGender(breakdownData?.breakdown || [], b => b.student.gender),
+    [breakdownData]
+  )
 
   // Category headers from first student's breakdown
   const breakdownCategories = useMemo(() => {
@@ -478,15 +485,10 @@ export function Grades() {
   }, [breakdownData])
 
   // ── Gender groups for rendering ───────────────────────────
-  const genderGroups = useMemo(() => {
-    if (!data?.students) return []
-    const groups = []
-    for (const g of ['Male', 'Female', 'Other']) {
-      const list = data.students.filter(s => (s.gender || 'Other') === g)
-      if (list.length) groups.push({ label: g.toUpperCase(), students: list })
-    }
-    return groups
-  }, [data])
+  const genderGroups = useMemo(
+    () => groupByGender(data?.students || [], s => s.gender),
+    [data]
+  )
 
   return (
     <div className="space-y-5 animate-fade-in">

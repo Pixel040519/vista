@@ -25,7 +25,7 @@ CREATE TABLE students (
     student_id VARCHAR(50) UNIQUE NOT NULL,  -- School-assigned ID
     full_name VARCHAR(255) NOT NULL,
     date_of_birth DATE NOT NULL,
-    gender VARCHAR(10) CHECK (gender IN ('Male', 'Female', 'Other')),
+    gender VARCHAR(10) CHECK (gender IN ('Male', 'Female')),
     grade_level VARCHAR(20) NOT NULL,        -- Kinder, Grade 1-6
     section VARCHAR(50),
     profile_photo_url TEXT,
