@@ -83,6 +83,7 @@ export const studentApi = {
   create:         (data)   => api.post('/students', data),
   bulk:           (students) => api.post('/students/bulk', { students }),
   checkLrns:      (lrns)    => api.post('/students/check-lrns', { lrns }),
+  checkParentEmails: (emails) => api.post('/students/check-parent-emails', { emails }),
   update:         (id, d)  => api.put(`/students/${id}`, d),
   // Archiving takes a learner off the active roll; restoring puts them back. The
   // record, its grades and its history survive either way — there is no delete.

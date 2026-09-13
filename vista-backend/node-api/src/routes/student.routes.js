@@ -206,14 +206,20 @@ const insertGuardian = async (client, studentId, g) => {
          u.email, u.phone, g.relationship,
          g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, g.home_address || null]
       )
-      return
+      return parentId
     }
   }
 
   if (g.create_account && g.email && g.password) {
     const bcrypt = require('bcryptjs')
     const hash   = await bcrypt.hash(g.password, await bcrypt.genSalt(12))
-    const exist  = await client.query('SELECT id FROM users WHERE email=$1', [g.email])
+    const exist  = await client.query('SELECT id, role FROM users WHERE email=$1', [g.email])
+    // An email is one login. Linking a teacher's or admin's account as a parent
+    // would hand that account this learner's parent-side access, so refuse
+    // rather than reuse it; an existing *parent* account is the sibling case.
+    if (exist.rows.length && exist.rows[0].role !== ROLES.PARENT) {
+      throw new AppError(`${g.email} already belongs to a staff account. Use a different email for the parent portal account.`, 409)
+    }
     parentId = exist.rows.length
       ? exist.rows[0].id
       : (await client.query(
@@ -234,6 +240,7 @@ const insertGuardian = async (client, studentId, g) => {
      g.email || null, g.phone || null, g.relationship,
      g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, g.home_address || null]
   )
+  return parentId
 }
 
 // GET /api/students/parents/search?q=juan — search existing parent accounts
@@ -598,8 +605,73 @@ router.post('/check-lrns', authorizeAnyAdmin, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
-// POST /api/students/bulk — admin-only CSV batch upload (students only, no guardians)
-const bulkStudentSchema = studentSchema.fork(['guardians'], s => s.forbidden())
+// Parent accounts by email, case-insensitively, keyed on the lowercased email.
+// `home_address` is the most recent one recorded against any of their children,
+// since users carries no address of its own.
+const findParentAccountsByEmail = async (emails) => {
+  const clean = [...new Set(emails.map(e => String(e ?? '').trim().toLowerCase()).filter(Boolean))]
+  if (!clean.length) return new Map()
+  const r = await query(
+    `SELECT DISTINCT ON (LOWER(u.email))
+            u.id, u.email, u.surname, u.first_name, u.middle_name, u.phone,
+            (SELECT ps.home_address FROM parent_student ps
+              WHERE ps.parent_id = u.id AND ps.home_address IS NOT NULL
+              ORDER BY ps.created_at DESC LIMIT 1) AS home_address
+       FROM users u
+      WHERE u.role = 'parent' AND LOWER(u.email) = ANY($1::text[])
+      ORDER BY LOWER(u.email), u.created_at`,
+    [clean]
+  )
+  return new Map(r.rows.map(row => [row.email.toLowerCase(), row]))
+}
+
+const sameName = (a, b) =>
+  String(a ?? '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+
+// A guardian row naming a parent account takes its identity from the account.
+// A name typed beside the email must agree with it: a mistyped email that
+// happens to match another family would otherwise give a stranger this learner
+// in their parent app, pickup QR included.
+const guardianAccountMismatch = (g, account) =>
+  (g.surname && !sameName(g.surname, account.surname)) || (g.first_name && !sameName(g.first_name, account.first_name))
+
+// POST /api/students/check-parent-emails — { emails } → { parents: [...] }.
+// The batch-upload preview uses it to fill a guardian row in from the account
+// its email belongs to. Same fields `GET /parents/search` already shows admins.
+router.post('/check-parent-emails', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const emails = Array.isArray(req.body?.emails) ? req.body.emails.slice(0, 1000) : []
+    const found = await findParentAccountsByEmail(emails)
+    res.json({
+      parents: [...found.values()].map(({ email, surname, first_name, middle_name, phone, home_address }) =>
+        ({ email, surname, first_name, middle_name, phone, home_address })),
+    })
+  } catch (err) { next(err) }
+})
+
+// POST /api/students/bulk — admin-only batch upload. Guardians come from the
+// template's second sheet, grouped under their learner by the client.
+//
+// No row can create a login. There is no create_account or password key, so a
+// spreadsheet never carries plain-text passwords for real families. A row whose
+// email belongs to an existing *parent* account is linked to that account and
+// takes its name and phone from it, so only relationship and the two flags are
+// needed; any other row needs a name and phone of its own.
+const bulkGuardianSchema = Joi.object({
+  surname:              Joi.string().trim().optional().allow(''),
+  first_name:           Joi.string().trim().optional().allow(''),
+  middle_name:          Joi.string().trim().optional().allow(''),
+  relationship:         Joi.string().max(50).required(),
+  email:                Joi.string().email().optional().allow(''),
+  phone:                Joi.string().pattern(/^\+63 9\d{2} \d{7}$/).optional().allow('')
+    .messages({ 'string.pattern.base': 'phone must be a PH mobile number (+63 9XX XXXXXXX)' }),
+  home_address:         Joi.string().trim().optional().allow(''),
+  is_authorized_pickup: Joi.boolean().required(),
+  is_emergency_contact: Joi.boolean().required(),
+})
+const bulkStudentSchema = studentSchema.keys({
+  guardians: Joi.array().items(bulkGuardianSchema).max(10).default([]),
+})
 const bulkSchema = Joi.object({
   students: Joi.array().items(bulkStudentSchema).min(1).max(200).required()
 })
@@ -634,6 +706,18 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
         throw new AppError(`Duplicate LRN ${rows[i].lrn} at row ${i + 1} within the upload.`, 400)
       }
       seen.add(rows[i].lrn)
+      // One email twice on one learner is a typo, and if it matches a parent
+      // account the second row would trip UNIQUE(parent_id, student_id) as a raw
+      // "Record already exists." with nothing naming the learner.
+      const emails = new Set()
+      for (const g of rows[i].guardians) {
+        const e = (g.email || '').trim().toLowerCase()
+        if (!e) continue
+        if (emails.has(e)) {
+          throw new AppError(`Row ${i + 1}: guardian email ${g.email} is listed twice for LRN ${rows[i].lrn}.`, 422)
+        }
+        emails.add(e)
+      }
     }
 
     const existing = await query(
@@ -660,6 +744,22 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
     const activeSY = await requireActiveSYId()
     await assertSectionsExist(activeSY, rows, (_r, i) => `Row ${i + 1}`)
 
+    const accounts = await findParentAccountsByEmail(rows.flatMap(r => r.guardians.map(g => g.email)))
+    const accountFor = (g) => (g.email ? accounts.get(g.email.trim().toLowerCase()) : undefined)
+    const guardianProblems = []
+    rows.forEach((r, i) => r.guardians.forEach((g) => {
+      const who = `Row ${i + 1} (LRN ${r.lrn}) guardian ${g.email || [g.surname, g.first_name].filter(Boolean).join(', ') || '(blank)'}`
+      const account = accountFor(g)
+      if (account) {
+        if (guardianAccountMismatch(g, account)) {
+          guardianProblems.push(`${who}: the email belongs to parent account ${account.surname}, ${account.first_name}, but the name does not match`)
+        }
+      } else if (!g.surname || !g.first_name || !g.phone) {
+        guardianProblems.push(`${who}: surname, first name and phone are required unless the email belongs to a parent account`)
+      }
+    }))
+    if (guardianProblems.length) throw new AppError(guardianProblems.join('; '), 422)
+
     const inserted = await withTransaction(async (client) => {
       const out = []
       for (const r of rows) {
@@ -672,12 +772,36 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
            r.gender, r.grade_level, r.section || null, r.home_address]
         )
         await enrollForActiveYear(client, activeSY, res.rows[0])
-        out.push({ id: res.rows[0].id, lrn: res.rows[0].lrn })
+        let guardians = 0, linked = 0
+        for (const g of r.guardians) {
+          const account = accountFor(g)
+          // A blank address means "lives with the learner", which is the usual
+          // case and saves retyping it on every guardian row. A linked parent
+          // keeps the address already on file for them, if there is one.
+          const home_address = g.home_address || account?.home_address || r.home_address
+          // link_parent_id makes insertGuardian copy name, email and phone from
+          // the account rather than from the sheet.
+          const parentId = await insertGuardian(client, res.rows[0].id, account
+            ? { link_parent_id: account.id, relationship: g.relationship, home_address,
+                is_authorized_pickup: g.is_authorized_pickup, is_emergency_contact: g.is_emergency_contact }
+            : { ...g, home_address })
+          guardians++
+          if (parentId) linked++
+        }
+        out.push({ id: res.rows[0].id, lrn: res.rows[0].lrn, guardians, linked })
       }
       return out
     })
 
-    res.status(201).json({ message: `${inserted.length} students added.`, students: inserted })
+    const guardianCount = inserted.reduce((n, s) => n + s.guardians, 0)
+    const linkedCount   = inserted.reduce((n, s) => n + s.linked, 0)
+    const message = [
+      `${inserted.length} student${inserted.length === 1 ? '' : 's'} added`,
+      guardianCount && `${guardianCount} guardian${guardianCount === 1 ? '' : 's'}`
+        + (linkedCount ? ` (${linkedCount} linked to existing parent accounts)` : ''),
+    ].filter(Boolean).join(' with ') + '.'
+
+    res.status(201).json({ message, students: inserted })
   } catch (err) { next(err) }
 })
 

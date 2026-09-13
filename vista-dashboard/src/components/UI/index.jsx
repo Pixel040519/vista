@@ -108,7 +108,7 @@ export function EmptyState({ icon: Icon, title, description, action }) {
 // ── Modal ─────────────────────────────────────────────────────
 export function Modal({ open, onClose, title, children, size = 'md', selfScroll = false }) {
   if (!open) return null
-  const widths = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' }
+  const widths = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl', '2xl': 'max-w-6xl' }
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
