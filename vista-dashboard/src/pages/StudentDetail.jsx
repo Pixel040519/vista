@@ -1,10 +1,12 @@
 import { useState, useEffect, Fragment } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ClipboardCheck, Heart, Brain, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Pencil, Baby, Lock, Unlock, CalendarDays, Archive, ArchiveRestore, GraduationCap } from 'lucide-react'
+import { ArrowLeft, BookOpen, ClipboardCheck, Heart, Brain, Users, Activity, TrendingUp, TrendingDown, MapPin, ChevronDown, ChevronRight, Info, Baby, Lock, Unlock, CalendarDays, Archive, ArchiveRestore, GraduationCap } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { studentApi, gradesApi, attendanceApi, behaviorApi, aiApi, eceApi, curriculumApi, enrollmentApi } from '../api/client'
-import { resolveGradingPolicy } from '../utils/grading'
-import { RiskBadge, SentimentBadge, LoadingSpinner, GradeChip } from '../components/UI'
+import { resolveGradingPolicy, finalGradeFrom } from '../utils/grading'
+import { GradeNumber, RemarksPill, DescriptorLabel } from '../components/GradeMarks'
+import { SYStatusPill } from '../components/SchoolYearPicker'
+import { RiskBadge, LoadingSpinner } from '../components/UI'
 import { format } from 'date-fns'
 import { formatName, nameInitial } from '../utils/nameHelper'
 import { statusLabel, statusClasses } from '../utils/enrollment'
@@ -38,15 +40,130 @@ const UNASSIGNED_SY = 'No school year recorded'
 
 // Present / Late / Excused / Absent tallies, shown on both the school year and
 // the month header so a year can be read without opening it.
-function AttendanceCounts({ summary }) {
+// One status per school day, rolled up from that day's subject records — see
+// `rollUpDay`. Ordered by how much a day needs attention, worst last.
+const DAY_STATUS = {
+  present: { label: 'Present',       cls: 'bg-emerald-50 text-emerald-700' },
+  late:    { label: 'Late',          cls: 'bg-amber-50 text-amber-700' },
+  excused: { label: 'Excused',       cls: 'bg-blue-50 text-blue-700' },
+  partly:  { label: 'Partly absent', cls: 'bg-orange-50 text-orange-700' },
+  absent:  { label: 'Absent',        cls: 'bg-red-50 text-red-700' },
+}
+const RECORD_STATUS_KEY = { Present: 'present', Late: 'late', Excused: 'excused', Absent: 'absent' }
+
+function DayStatusPill({ status, label }) {
+  const meta = DAY_STATUS[status] || DAY_STATUS.present
+  return (
+    <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${meta.cls}`}>
+      {label || meta.label}
+    </span>
+  )
+}
+
+function DayCounts({ counts }) {
   return (
     <div className="flex items-center gap-1.5 flex-wrap justify-end">
-      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">P {summary.Present || 0}</span>
-      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">L {summary.Late || 0}</span>
-      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">E {summary.Excused || 0}</span>
-      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-red-50 text-red-700">A {summary.Absent || 0}</span>
+      {Object.keys(DAY_STATUS).filter(k => counts[k] > 0).map(k => (
+        <DayStatusPill key={k} status={k} label={`${DAY_STATUS[k].label} ${counts[k]}`} />
+      ))}
     </div>
   )
+}
+
+// Behavior tab pieces — the Behavior page's own vocabulary (category pill,
+// tone badge, timeline entry), so an observation reads the same in both places.
+// The raw sentiment score is not shown, as on that page: the label carries it.
+const BEHAVIOR_CATEGORY_ICON = { Social: Users, Emotional: Heart, Academic: BookOpen, Physical: Activity }
+const BEHAVIOR_TONE = {
+  Positive: { badge: 'bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500' },
+  Neutral:  { badge: 'bg-slate-100 text-slate-600',    dot: 'bg-slate-400' },
+  Negative: { badge: 'bg-red-50 text-red-700',         dot: 'bg-red-500' },
+}
+
+function ToneBadge({ sentiment, label }) {
+  const t = BEHAVIOR_TONE[sentiment] || BEHAVIOR_TONE.Neutral
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${t.badge}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${t.dot}`} />
+      {label || sentiment || 'Neutral'}
+    </span>
+  )
+}
+
+function ToneCounts({ counts }) {
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap justify-end">
+      {Object.keys(BEHAVIOR_TONE).filter(k => counts[k] > 0).map(k => (
+        <ToneBadge key={k} sentiment={k} label={`${k} ${counts[k]}`} />
+      ))}
+    </div>
+  )
+}
+
+function BehaviorChip({ active, onClick, children }) {
+  return (
+    <button type="button" onClick={onClick} aria-pressed={active}
+      className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+        active ? 'bg-brand-500 border-brand-500 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+      }`}>
+      {children}
+    </button>
+  )
+}
+
+function BehaviorEntry({ log, mine }) {
+  const at = new Date(log.observed_at)
+  const Icon = BEHAVIOR_CATEGORY_ICON[log.category]
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-[84px_minmax(0,1fr)] gap-1.5 sm:gap-4">
+      <div className="sm:pt-3.5 flex sm:block items-baseline gap-2">
+        <p className="text-sm font-semibold text-slate-700">{format(at, 'MMM d')}</p>
+        <p className="text-xs text-slate-400">{format(at, 'EEE · h:mm a')}</p>
+      </div>
+      <div className="border border-slate-100 rounded-xl px-4 py-3.5 space-y-2 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border border-slate-200 bg-white text-slate-600">
+              {Icon && <Icon size={12} />}
+              {log.category || 'Uncategorized'}
+            </span>
+            <ToneBadge sentiment={log.sentiment} />
+          </div>
+          <span className="text-xs text-slate-400">
+            {mine ? 'Logged by you' : log.teacher_name ? `By ${log.teacher_name}` : ''}
+          </span>
+        </div>
+        <p className="text-sm leading-[22px] text-slate-600 whitespace-pre-line">{log.observation}</p>
+      </div>
+    </div>
+  )
+}
+
+const subjectList = (records) => records.map(r => r.subject_name || 'a subject').join(', ')
+
+// A school day's status from every subject record the viewer can see that day:
+//   absent   every subject Absent
+//   partly   some, not all, Absent — the case the dashboard flags as possible skipping
+//   excused  every subject Excused
+//   late     no absence, at least one Late
+//   present  everything else (Present, possibly with an Excused subject)
+// `note` says which subjects were affected, so the row reads without opening it.
+function rollUpDay(records) {
+  const n = records.length
+  const by = (st) => records.filter(r => r.status === st)
+  const absent = by('Absent'), late = by('Late'), excused = by('Excused')
+  const allOf = (list) => list.length === n
+  const allSubjects = n === 1 ? (records[0].subject_name || '1 subject') : `all ${n} subjects`
+  if (allOf(absent))  return { status: 'absent',  note: `Absent in ${allSubjects}` }
+  if (allOf(excused)) return { status: 'excused', note: `Excused in ${allSubjects}` }
+  const parts = []
+  if (absent.length)  parts.push(`Absent in ${subjectList(absent)}`)
+  if (late.length)    parts.push(`Late in ${subjectList(late)}`)
+  if (excused.length) parts.push(`Excused in ${subjectList(excused)}`)
+  const status = absent.length ? 'partly' : late.length ? 'late' : 'present'
+  const note = parts.length ? parts.join(' · ')
+    : n === 1 ? (records[0].subject_name || '1 subject') : `All ${n} subjects`
+  return { status, note }
 }
 
 export default function StudentDetail() {
@@ -68,19 +185,27 @@ export default function StudentDetail() {
   const [loading, setLoading]   = useState(true)
   const [tab, setTab]           = useState('Overview')
   const [expandedSYs, setExpandedSYs] = useState(() => new Set())
-  // Which learning areas have their areas open, keyed "SY|||MAPEH" so the same
-  // learning area can be expanded independently in each school year.
-  const [expandedAreas, setExpandedAreas] = useState(() => new Set())
-  const toggleAreas = (key) => setExpandedAreas(prev => {
+  // Which learning areas have their areas *closed*, keyed "SY|||MAPEH" so the
+  // same learning area folds independently in each school year. Areas start
+  // open: MAPEH's grade is not self-explanatory without the four beneath it.
+  const [collapsedAreas, setCollapsedAreas] = useState(() => new Set())
+  const toggleAreas = (key) => setCollapsedAreas(prev => {
     const next = new Set(prev)
     next.has(key) ? next.delete(key) : next.add(key)
     return next
   })
   const [expandedAttSYs, setExpandedAttSYs] = useState(() => new Set())
   const [expandedAttMonths, setExpandedAttMonths] = useState(() => new Set())
+  // Open school days on the Attendance tab, keyed "SY|||yyyy-MM-dd".
+  const [expandedAttDays, setExpandedAttDays] = useState(() => new Set())
   const [expandedBehSYs, setExpandedBehSYs] = useState(() => new Set())
   const [expandedBehMonths, setExpandedBehMonths] = useState(() => new Set())
-  const [behaviorFilter, setBehaviorFilter] = useState('All')
+  // Category and tone filters live inside each open school-year card, so each
+  // year keeps its own: { [sy]: { category, tone } }.
+  const [behFilters, setBehFilters] = useState({})
+  const behFilterFor = (sy) => ({ category: 'All', tone: 'All', ...(behFilters[sy] || {}) })
+  const setBehFilter = (sy, patch) =>
+    setBehFilters(prev => ({ ...prev, [sy]: { ...behFilterFor(sy), ...patch } }))
 
   // ECE competency (Kinder) — replaces the numeric grades view
   // for ECE learners and feeds the AI Insights tab so ECE teachers see
@@ -119,6 +244,17 @@ export default function StudentDetail() {
   const gradingForSY = (label) =>
     resolveGradingPolicy(schoolYears.find(sy => sy.label === label) || null, student?.grade_level)
 
+  // Where the learner sat in a given school year, for the Grades tab's year
+  // header. Admins have the enrolment history; anyone else only knows the
+  // active year, whose placement is the learner's own snapshot.
+  const activeSYLabel = schoolYears.find(sy => sy.is_active)?.label
+  const placementForSY = (label) => {
+    const e = (enrollments || []).find(r => r.school_year === label)
+    if (e) return { grade_level: e.grade_level, section: e.section }
+    if (student && label === activeSYLabel) return { grade_level: student.grade_level, section: student.section }
+    return null
+  }
+
   const activeGrading = resolveGradingPolicy(
     schoolYears.find(sy => sy.is_active) || null,
     student?.grade_level
@@ -137,6 +273,15 @@ export default function StudentDetail() {
     v => v.grade_level === student.grade_level && v.section === student.section
   )
 
+  // A general average counts every learning area of a year, so it may only be
+  // shown to a viewer who is served all of them. `GET /api/grades` narrows a
+  // teacher to the learning areas they teach, and widens it to the whole record
+  // only for their advisee in the active year — an average over the rest would
+  // look complete while missing most of the year.
+  const seesWholeYear = (label) => !isTeacher || (isAdvisee && label === activeSYLabel)
+
+  const toGrade = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v))
+
   const toggleInSet = (setter) => (key) => {
     setter(prev => {
       const next = new Set(prev)
@@ -148,6 +293,7 @@ export default function StudentDetail() {
   const toggleSY           = toggleInSet(setExpandedSYs)
   const toggleAttSY        = toggleInSet(setExpandedAttSYs)
   const toggleAttMonth     = toggleInSet(setExpandedAttMonths)
+  const toggleAttDay       = toggleInSet(setExpandedAttDays)
   const toggleBehSY        = toggleInSet(setExpandedBehSYs)
   const toggleBehMonth     = toggleInSet(setExpandedBehMonths)
   const toggleEceSubject   = toggleInSet(setExpandedEceSubjects)
@@ -363,11 +509,6 @@ export default function StudentDetail() {
     }
   }
 
-  const attSummary = attendance.reduce((a, r) => {
-    a[r.status] = (a[r.status] || 0) + 1
-    return a
-  }, {})
-
   // Group grades by school year → learning area → period, with each learning
   // area carrying its areas. MAPEH is one row whose grade is the average of
   // Music, Arts, Physical Education and Health; those sit under it, revealed on
@@ -407,18 +548,48 @@ export default function StudentDetail() {
   // the next one's start, so dates cannot say which year a record belongs to.
   // A record the backfill could not attribute has no year at all and lands in
   // its own bucket rather than being guessed into someone else's.
-  const emptyAttSummary = () => ({ Present: 0, Absent: 0, Late: 0, Excused: 0 })
-  const attBySY = attendance.reduce((acc, r) => {
-    const sy = r.school_year || UNASSIGNED_SY
-    const mk = monthKey(r.date)
-    if (!acc[sy]) acc[sy] = { total: 0, summary: emptyAttSummary(), months: {} }
-    if (!acc[sy].months[mk]) acc[sy].months[mk] = { records: [], summary: emptyAttSummary() }
-    acc[sy].months[mk].records.push(r)
-    acc[sy].months[mk].summary[r.status] = (acc[sy].months[mk].summary[r.status] || 0) + 1
-    acc[sy].summary[r.status] = (acc[sy].summary[r.status] || 0) + 1
-    acc[sy].total++
+  //
+  // Within a month the records are folded into **school days**: one row per
+  // date, with a status rolled up from that day's subject records (`rollUpDay`).
+  // Every count on the tab is in days, not records — eight subjects on one day
+  // used to be eight rows and eight "Present".
+  const emptyDayCounts = () => ({ present: 0, late: 0, excused: 0, partly: 0, absent: 0 })
+  const attBySY = (() => {
+    const acc = {}
+    for (const r of attendance) {
+      const sy = r.school_year || UNASSIGNED_SY
+      const mk = monthKey(r.date)
+      const dk = format(new Date(r.date), 'yyyy-MM-dd')
+      acc[sy] ??= { counts: emptyDayCounts(), dayCount: 0, months: {} }
+      acc[sy].months[mk] ??= { counts: emptyDayCounts(), days: {} }
+      ;(acc[sy].months[mk].days[dk] ??= { records: [] }).records.push(r)
+    }
+    for (const year of Object.values(acc)) {
+      for (const month of Object.values(year.months)) {
+        for (const day of Object.values(month.days)) {
+          day.records.sort((x, y) => (x.subject_name || '').localeCompare(y.subject_name || ''))
+          Object.assign(day, rollUpDay(day.records))
+          month.counts[day.status]++
+          year.counts[day.status]++
+          year.dayCount++
+        }
+      }
+    }
     return acc
-  }, {})
+  })()
+  // The Overview card counts the same school days as the Attendance tab, summed
+  // across every year on record, so the two never disagree about a learner.
+  const attDaySummary = Object.values(attBySY).reduce((sum, year) => {
+    for (const [k, n] of Object.entries(year.counts)) sum[k] += n
+    return sum
+  }, emptyDayCounts())
+  // Whether those days are whole school days or only the viewer's own subjects.
+  // A subject teacher is served just the subjects they teach, so a day they see
+  // as Absent may be one class missed, not a day away from school — the card
+  // says which it is rather than letting the count read as the second.
+  const attSummaryIsWholeDays = Object.keys(attBySY).every(
+    sy => sy !== UNASSIGNED_SY ? seesWholeYear(sy) : !isTeacher
+  )
   // Most recent year first, with the unattributed bucket always last — it has no
   // place on the timeline, so sorting it by label would drop it at the top.
   const sortedAttSYs = Object.keys(attBySY).sort((a, b) => {
@@ -437,21 +608,29 @@ export default function StudentDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attendance])
 
-  // Behavior: filter by sentiment, then group by school year and month. The year
-  // is the one stamped on the log when it was written, never read off the date —
-  // see the Attendance grouping above for why the date cannot answer this.
-  const filteredBehavior = behaviorFilter === 'All'
-    ? behavior
-    : behavior.filter(b => b.sentiment === behaviorFilter)
-  const behBySY = filteredBehavior.reduce((acc, b) => {
+  // Behavior: group by school year and month. The year is the one stamped on the
+  // log when it was written, never read off the date — see the Attendance
+  // grouping above for why the date cannot answer this. Grouping is unfiltered,
+  // so the year header's tone counts describe the whole year; the month chips are
+  // recounted at render from the entries the card's filters leave listed.
+  const emptyToneCounts = () => ({ Positive: 0, Neutral: 0, Negative: 0 })
+  const behBySY = behavior.reduce((acc, b) => {
     const sy = b.school_year || UNASSIGNED_SY
     const mk = monthKey(b.observed_at)
-    if (!acc[sy]) acc[sy] = { total: 0, months: {} }
-    if (!acc[sy].months[mk]) acc[sy].months[mk] = []
-    acc[sy].months[mk].push(b)
+    const tone = b.sentiment || 'Neutral'
+    acc[sy] ??= { total: 0, counts: emptyToneCounts(), months: {} }
+    acc[sy].months[mk] ??= { logs: [], counts: emptyToneCounts() }
+    acc[sy].months[mk].logs.push(b)
+    acc[sy].months[mk].counts[tone] = (acc[sy].months[mk].counts[tone] || 0) + 1
+    acc[sy].counts[tone] = (acc[sy].counts[tone] || 0) + 1
     acc[sy].total++
     return acc
   }, {})
+  for (const year of Object.values(behBySY)) {
+    for (const month of Object.values(year.months)) {
+      month.logs.sort((x, y) => new Date(y.observed_at) - new Date(x.observed_at))
+    }
+  }
   const sortedBehSYs = Object.keys(behBySY).sort((a, b) => {
     if (a === UNASSIGNED_SY) return 1
     if (b === UNASSIGNED_SY) return -1
@@ -461,15 +640,12 @@ export default function StudentDetail() {
 
   useEffect(() => {
     if (!sortedBehSYs.length) return
-    // Re-seed whenever the sentiment filter has left nothing open — switching to
-    // a filter whose logs are all in years that were collapsed would otherwise
-    // show a list of shut drawers.
     if (sortedBehSYs.some(sy => expandedBehSYs.has(sy))) return
     const latestSY = sortedBehSYs[0]
     setExpandedBehSYs(new Set([latestSY]))
     setExpandedBehMonths(new Set([behMonthsOf(latestSY)[0]]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [behavior, behaviorFilter])
+  }, [behavior])
 
   const formatMonth = (k) => {
     const [y, m] = k.split('-').map(Number)
@@ -639,13 +815,17 @@ export default function StudentDetail() {
             <div className="absolute inset-0 p-5 flex flex-col overflow-y-auto">
             <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2 flex-shrink-0">
               <ClipboardCheck size={15} className="text-brand-500" /> Attendance Summary
+              <span className="ml-auto text-xs font-medium text-slate-400">
+                {attSummaryIsWholeDays ? 'in school days' : 'in your subjects'}
+              </span>
             </h3>
             <div className="space-y-3">
               {[
-                { label: 'Present', count: attSummary.Present || 0, color: 'bg-emerald-500', textColor: 'text-emerald-700', bg: 'bg-emerald-50' },
-                { label: 'Absent',  count: attSummary.Absent  || 0, color: 'bg-red-500',     textColor: 'text-red-700',     bg: 'bg-red-50'     },
-                { label: 'Late',    count: attSummary.Late    || 0, color: 'bg-amber-500',   textColor: 'text-amber-700',   bg: 'bg-amber-50'   },
-                { label: 'Excused', count: attSummary.Excused || 0, color: 'bg-blue-500',    textColor: 'text-blue-700',    bg: 'bg-blue-50'    },
+                { label: 'Present',       count: attDaySummary.present, textColor: 'text-emerald-700', bg: 'bg-emerald-50' },
+                { label: 'Partly absent', count: attDaySummary.partly,  textColor: 'text-orange-700',  bg: 'bg-orange-50'  },
+                { label: 'Absent',        count: attDaySummary.absent,  textColor: 'text-red-700',     bg: 'bg-red-50'     },
+                { label: 'Late',          count: attDaySummary.late,    textColor: 'text-amber-700',   bg: 'bg-amber-50'   },
+                { label: 'Excused',       count: attDaySummary.excused, textColor: 'text-blue-700',    bg: 'bg-blue-50'    },
               ].map(r => (
                 <div key={r.label} className={`flex items-center justify-between px-3 py-2 rounded-xl ${r.bg}`}>
                   <span className={`text-sm font-medium ${r.textColor}`}>{r.label}</span>
@@ -911,70 +1091,148 @@ export default function StudentDetail() {
           <div className="space-y-3">
             {sortedSYs.map(sy => {
               const isOpen = expandedSYs.has(sy)
-              const subjects = Object.entries(gradesBySY[sy])
+              const grading = gradingForSY(sy)
+              const passing = grading.passingGrade
+              const showDescriptor = !!grading.descriptorFor
+              const syRow = schoolYears.find(s => s.label === sy)
+              const placement = placementForSY(sy)
+              const rows = Object.entries(gradesBySY[sy])
+                .map(([name, entry]) => {
+                  const periods = grading.periods.map(q => toGrade(entry.periods[q]))
+                  const areas = Object.entries(entry.areas || {})
+                    .map(([areaName, quarters]) => {
+                      const ap = grading.periods.map(q => toGrade(quarters[q]))
+                      return { name: areaName, periods: ap, final: finalGradeFrom(ap) }
+                    })
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                  return { name, periods, final: finalGradeFrom(periods), areas }
+                })
+                .sort((a, b) => a.name.localeCompare(b.name))
+              // The general average counts every learning area of the year, so it
+              // is shown only to a viewer who can see them all — see seesWholeYear.
+              const whole = seesWholeYear(sy)
+              const generalAverage = whole ? finalGradeFrom(rows.map(r => r.final)) : null
+              const hasComposite = rows.some(r => r.areas.length > 0)
               return (
                 <div key={sy} className="card overflow-hidden">
                   <button
                     onClick={() => toggleSY(sy)}
-                    className="w-full flex items-center gap-2 px-5 py-3 hover:bg-slate-50 transition-colors"
+                    className={`w-full flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3.5 text-left hover:bg-slate-50 transition-colors ${isOpen ? 'border-b border-slate-100' : ''}`}
                   >
                     {isOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
-                    <span className="text-sm font-semibold text-slate-800">{sy}</span>
-                    <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
-                      {subjects.length} {subjects.length === 1 ? 'subject' : 'subjects'}
-                    </span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-slate-800">
+                          {sy === '—' ? 'No school year recorded' : `SY ${sy}`}
+                        </span>
+                        {syRow && <SYStatusPill sy={syRow} className="!text-[10px]" />}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {[
+                          placement && `${placement.grade_level}${placement.section ? ` · ${placement.section}` : ''}`,
+                          `${grading.periodCount} ${grading.periodNoun.toLowerCase()}s`,
+                        ].filter(Boolean).join(' · ')}
+                      </p>
+                    </div>
+                    {generalAverage !== null && (
+                      <div className="ml-auto flex flex-wrap items-center gap-3">
+                        <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">General average</span>
+                        <GradeNumber grade={generalAverage} passing={passing} tone="final" />
+                        {showDescriptor && <DescriptorLabel grade={generalAverage} grading={grading} />}
+                        <RemarksPill grade={generalAverage} passing={passing} />
+                      </div>
+                    )}
                   </button>
                   {isOpen && (
-                    <div className="overflow-x-auto border-t border-slate-100">
-                      <table className="table-base">
-                        <thead>
-                          <tr>
-                            <th>Subject</th>
-                            {gradingForSY(sy).periods.map(q => (
-                              <th key={q}>{gradingForSY(sy).abbr(q)}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {subjects.map(([subject, entry]) => {
-                            const areas = Object.entries(entry.areas || {})
-                            const key = `${sy}|||${subject}`
-                            const open = expandedAreas.has(key)
-                            return (
-                              <Fragment key={subject}>
-                                <tr className={areas.length ? 'cursor-pointer hover:bg-slate-50' : undefined}
-                                  onClick={areas.length ? () => toggleAreas(key) : undefined}>
-                                  <td className="font-medium">
-                                    <span className="flex items-center gap-1.5">
-                                      {areas.length > 0 && (open
-                                        ? <ChevronDown size={13} className="text-slate-400"/>
-                                        : <ChevronRight size={13} className="text-slate-400"/>)}
-                                      {subject}
-                                      {areas.length > 0 && (
-                                        <span className="text-[10px] font-medium text-slate-400">
-                                          avg. of {areas.length}
-                                        </span>
-                                      )}
-                                    </span>
-                                  </td>
-                                  {gradingForSY(sy).periods.map(q => (
-                                    <td key={q}><GradeChip grade={entry.periods[q]} /></td>
-                                  ))}
-                                </tr>
-                                {open && areas.map(([areaName, quarters]) => (
-                                  <tr key={areaName} className="bg-slate-50/60">
-                                    <td className="pl-8 text-[13px] text-slate-500">{areaName}</td>
-                                    {gradingForSY(sy).periods.map(q => (
-                                      <td key={q}><GradeChip grade={quarters[q]} /></td>
+                    <>
+                      <div className="overflow-x-auto">
+                        <table className="table-base">
+                          <thead>
+                            <tr>
+                              <th className="!pl-5">Learning area</th>
+                              {grading.ordinals.map(o => <th key={o} className="!text-center">{o}</th>)}
+                              <th className="!text-center border-l border-slate-100">Final grade</th>
+                              {showDescriptor && <th className="!text-center">Descriptor</th>}
+                              <th className="!text-center">Remarks</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map(r => {
+                              const key = `${sy}|||${r.name}`
+                              const composite = r.areas.length > 0
+                              const open = composite && !collapsedAreas.has(key)
+                              return (
+                                <Fragment key={r.name}>
+                                  <tr className={composite ? 'cursor-pointer' : undefined}
+                                    onClick={composite ? () => toggleAreas(key) : undefined}>
+                                    <td className="!pl-5 font-medium text-slate-800">
+                                      <span className="flex items-center gap-1.5">
+                                        {composite && (open
+                                          ? <ChevronDown size={14} className="text-slate-400" />
+                                          : <ChevronRight size={14} className="text-slate-400" />)}
+                                        <span className="whitespace-nowrap">{r.name}</span>
+                                        {composite && (
+                                          <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap">
+                                            avg. of {r.areas.length}
+                                          </span>
+                                        )}
+                                      </span>
+                                    </td>
+                                    {r.periods.map((g, i) => (
+                                      <td key={i} className="text-center"><GradeNumber grade={g} passing={passing} /></td>
                                     ))}
+                                    <td className="text-center border-l border-slate-100"><GradeNumber grade={r.final} passing={passing} tone="final" /></td>
+                                    {showDescriptor && <td className="text-center"><DescriptorLabel grade={r.final} grading={grading} /></td>}
+                                    <td className="text-center"><RemarksPill grade={r.final} passing={passing} /></td>
                                   </tr>
-                                ))}
-                              </Fragment>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                                  {open && r.areas.map(a => (
+                                    <tr key={a.name} className="bg-slate-50/60">
+                                      <td className="!pl-12 !py-2.5 text-[13px] text-slate-500 whitespace-nowrap">{a.name}</td>
+                                      {a.periods.map((g, i) => (
+                                        <td key={i} className="text-center !py-2.5"><GradeNumber grade={g} passing={passing} tone="muted" small /></td>
+                                      ))}
+                                      <td className="text-center !py-2.5 border-l border-slate-100"><GradeNumber grade={a.final} passing={passing} tone="muted" small /></td>
+                                      {showDescriptor && <td className="!py-2.5" />}
+                                      <td className="!py-2.5" />
+                                    </tr>
+                                  ))}
+                                </Fragment>
+                              )
+                            })}
+                            {generalAverage !== null && (
+                              <tr className="bg-slate-50 hover:!bg-slate-50">
+                                <td colSpan={grading.periodCount + 1} className="!pl-5 text-[13px] font-bold text-slate-800 border-t border-slate-200">
+                                  General average
+                                </td>
+                                <td className="text-center border-t border-slate-200 border-l border-l-slate-100">
+                                  <GradeNumber grade={generalAverage} passing={passing} tone="final" />
+                                </td>
+                                {showDescriptor && (
+                                  <td className="text-center border-t border-slate-200"><DescriptorLabel grade={generalAverage} grading={grading} /></td>
+                                )}
+                                <td className="text-center border-t border-slate-200"><RemarksPill grade={generalAverage} passing={passing} /></td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                      {(hasComposite || !whole) && (
+                        <div className="px-5 py-3 space-y-1">
+                          {hasComposite && (
+                            <p className="flex items-center gap-2 text-xs text-slate-500">
+                              <Info size={14} className="text-slate-400 flex-shrink-0" />
+                              MAPEH’s areas are shown beneath it.
+                            </p>
+                          )}
+                          {!whole && (
+                            <p className="flex items-center gap-2 text-xs text-slate-500">
+                              <Info size={14} className="text-slate-400 flex-shrink-0" />
+                              Only the learning areas you teach are shown, so no general average is given.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )
@@ -990,60 +1248,118 @@ export default function StudentDetail() {
           <div className="space-y-3">
             {sortedAttSYs.map(sy => {
               const syOpen = expandedAttSYs.has(sy)
-              const { summary: sySummary, total, months } = attBySY[sy]
+              const { counts: syCounts, dayCount, months } = attBySY[sy]
+              const syRow = schoolYears.find(s => s.label === sy)
+              const placement = sy === UNASSIGNED_SY ? null : placementForSY(sy)
               return (
                 <div key={sy} className="card overflow-hidden">
                   <button
                     onClick={() => toggleAttSY(sy)}
-                    className="w-full flex items-center gap-2 px-5 py-3 hover:bg-slate-50 transition-colors"
+                    className="w-full flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3.5 text-left hover:bg-slate-50 transition-colors"
                   >
                     {syOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
-                    <span className="text-sm font-semibold text-slate-800">
-                      {sy === UNASSIGNED_SY ? sy : `SY ${sy}`}
-                    </span>
-                    <span className="text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
-                      {total} {total === 1 ? 'record' : 'records'}
-                    </span>
-                    <div className="ml-auto"><AttendanceCounts summary={sySummary} /></div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-slate-800">
+                          {sy === UNASSIGNED_SY ? sy : `SY ${sy}`}
+                        </span>
+                        {syRow && <SYStatusPill sy={syRow} className="!text-[10px]" />}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {[
+                          placement && `${placement.grade_level}${placement.section ? ` · ${placement.section}` : ''}`,
+                          `${dayCount} school ${dayCount === 1 ? 'day' : 'days'} recorded`,
+                        ].filter(Boolean).join(' · ')}
+                      </p>
+                    </div>
+                    <div className="ml-auto"><DayCounts counts={syCounts} /></div>
                   </button>
 
                   {syOpen && (
                     <div className="border-t border-slate-100 divide-y divide-slate-100">
                       {attMonthsOf(sy).map(mk => {
                         const isOpen = expandedAttMonths.has(mk)
-                        const { records, summary } = months[mk]
+                        const { counts, days } = months[mk]
+                        const dayKeys = Object.keys(days).sort().reverse()
                         return (
                           <div key={mk}>
                             <button
                               onClick={() => toggleAttMonth(mk)}
-                              className="w-full flex items-center gap-2 pl-9 pr-5 py-2.5 bg-slate-50/50 hover:bg-slate-50 transition-colors"
+                              className="w-full flex flex-wrap items-center gap-x-2 gap-y-1.5 pl-9 pr-5 py-2.5 bg-slate-50/50 hover:bg-slate-50 transition-colors"
                             >
                               {isOpen ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />}
                               <span className="text-xs font-semibold text-slate-600">{formatMonth(mk)}</span>
-                              <div className="ml-auto"><AttendanceCounts summary={summary} /></div>
+                              <span className="text-xs text-slate-400">
+                                {dayKeys.length} school {dayKeys.length === 1 ? 'day' : 'days'}
+                              </span>
+                              <div className="ml-auto"><DayCounts counts={counts} /></div>
                             </button>
                             {isOpen && (
                               <div className="overflow-x-auto border-t border-slate-100">
                                 <table className="table-base">
-                                  <thead><tr><th>Date</th><th>Status</th><th>Subject</th><th>Recorded By</th></tr></thead>
+                                  <thead>
+                                    <tr>
+                                      <th className="!pl-9 w-40">Date</th>
+                                      <th className="w-40">Status</th>
+                                      <th>Subjects</th>
+                                      <th className="w-12" />
+                                    </tr>
+                                  </thead>
                                   <tbody>
-                                    {records.map(a => (
-                                      <tr key={a.id}>
-                                        <td className="font-mono text-xs">{format(new Date(a.date), 'MMM d, yyyy')}</td>
-                                        <td>
-                                          <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                            a.status === 'Present' ? 'bg-emerald-50 text-emerald-700' :
-                                            a.status === 'Absent'  ? 'bg-red-50 text-red-700' :
-                                            a.status === 'Late'    ? 'bg-amber-50 text-amber-700' :
-                                                                     'bg-blue-50 text-blue-700'
-                                          }`}>{a.status}</span>
-                                        </td>
-                                        <td className="text-slate-500 text-xs">{a.subject_name || '—'}</td>
-                                        <td className="text-slate-400 text-xs">
-                                          {isTeacher && a.recorded_by === user?.id ? 'You' : (a.recorded_by_name || '—')}
-                                        </td>
-                                      </tr>
-                                    ))}
+                                    {dayKeys.map(dk => {
+                                      const day = days[dk]
+                                      const key = `${sy}|||${dk}`
+                                      const dayOpen = expandedAttDays.has(key)
+                                      return (
+                                        <Fragment key={dk}>
+                                          <tr
+                                            onClick={() => toggleAttDay(key)}
+                                            className={`cursor-pointer ${dayOpen ? '!bg-brand-50' : ''}`}
+                                          >
+                                            <td className="!pl-9 font-mono text-xs text-slate-700 whitespace-nowrap">
+                                              {format(new Date(day.records[0].date), 'EEE, MMM d')}
+                                            </td>
+                                            <td><DayStatusPill status={day.status} /></td>
+                                            <td className={`text-[13px] ${day.status === 'present' && !day.note.startsWith('Excused') ? 'text-slate-400' : 'text-slate-700'}`}>
+                                              {day.note}
+                                            </td>
+                                            <td className="text-slate-400">
+                                              {dayOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                            </td>
+                                          </tr>
+                                          {dayOpen && (
+                                            <tr className="!bg-brand-50">
+                                              <td colSpan={4} className="!pt-0 !pb-3.5 !pl-9 !pr-5">
+                                                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                                                  <table className="w-full text-sm">
+                                                    <thead>
+                                                      <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                                                        <th className="px-4 py-2 text-left">Subject</th>
+                                                        <th className="px-4 py-2 text-left w-36">Status</th>
+                                                        <th className="px-4 py-2 text-left w-56">Recorded by</th>
+                                                      </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                      {day.records.map(a => (
+                                                        <tr key={a.id} className="border-b border-slate-50 last:border-0">
+                                                          <td className="px-4 py-2 text-[13px] font-medium text-slate-800">{a.subject_name || '—'}</td>
+                                                          <td className="px-4 py-2">
+                                                            <DayStatusPill status={RECORD_STATUS_KEY[a.status] || 'present'} label={a.status} />
+                                                          </td>
+                                                          <td className="px-4 py-2 text-xs text-slate-400">
+                                                            {isTeacher && a.recorded_by === user?.id ? 'You' : (a.recorded_by_name || '—')}
+                                                          </td>
+                                                        </tr>
+                                                      ))}
+                                                    </tbody>
+                                                  </table>
+                                                </div>
+                                              </td>
+                                            </tr>
+                                          )}
+                                        </Fragment>
+                                      )
+                                    })}
                                   </tbody>
                                 </table>
                               </div>
@@ -1051,6 +1367,12 @@ export default function StudentDetail() {
                           </div>
                         )
                       })}
+                      {sy !== UNASSIGNED_SY && !seesWholeYear(sy) && (
+                        <p className="px-5 py-3 flex items-center gap-2 text-xs text-slate-500">
+                          <Info size={14} className="text-slate-400 flex-shrink-0" />
+                          Only the subjects you teach are shown, so a day’s status covers those subjects only.
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1065,100 +1387,115 @@ export default function StudentDetail() {
           <div className="card p-8 text-center text-sm text-slate-400">No behavior logs yet.</div>
         ) : (
           <div className="space-y-3">
-            <div className="flex gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto">
-              {['All', 'Positive', 'Neutral', 'Negative'].map(f => {
-                const count = f === 'All' ? behavior.length : behavior.filter(b => b.sentiment === f).length
-                return (
-                  <button
-                    key={f}
-                    onClick={() => setBehaviorFilter(f)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap flex items-center gap-1.5 ${
-                      behaviorFilter === f ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                    }`}
-                  >
-                    {f}
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${behaviorFilter === f ? 'bg-slate-100 text-slate-600' : 'bg-slate-200 text-slate-500'}`}>{count}</span>
-                  </button>
-                )
-              })}
-            </div>
-            {sortedBehSYs.length === 0 ? (
-              <div className="card p-8 text-center text-sm text-slate-400">No {behaviorFilter.toLowerCase()} logs in this view.</div>
-            ) : sortedBehSYs.map(sy => {
+            {sortedBehSYs.map(sy => {
               const syOpen = expandedBehSYs.has(sy)
-              const { total, months } = behBySY[sy]
+              const { total, counts: syCounts, months } = behBySY[sy]
+              const syRow = schoolYears.find(s => s.label === sy)
+              const placement = sy === UNASSIGNED_SY ? null : placementForSY(sy)
+              const filter = behFilterFor(sy)
+              const filtering = filter.category !== 'All' || filter.tone !== 'All'
+              const matches = (b) =>
+                (filter.category === 'All' || b.category === filter.category) &&
+                (filter.tone === 'All' || b.sentiment === filter.tone)
+              const monthKeys = behMonthsOf(sy).filter(mk => !filtering || months[mk].logs.some(matches))
               return (
                 <div key={sy} className="card overflow-hidden">
                   <button
                     onClick={() => toggleBehSY(sy)}
-                    className="w-full flex items-center gap-2 px-5 py-3 hover:bg-slate-50 transition-colors"
+                    className={`w-full flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3.5 text-left hover:bg-slate-50 transition-colors ${syOpen ? 'border-b border-slate-100' : ''}`}
                   >
                     {syOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
-                    <span className="text-sm font-semibold text-slate-800">
-                      {sy === UNASSIGNED_SY ? sy : `SY ${sy}`}
-                    </span>
-                    <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
-                      {total} {total === 1 ? 'log' : 'logs'}
-                    </span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-slate-800">
+                          {sy === UNASSIGNED_SY ? sy : `SY ${sy}`}
+                        </span>
+                        {syRow && <SYStatusPill sy={syRow} className="!text-[10px]" />}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {[
+                          placement && `${placement.grade_level}${placement.section ? ` · ${placement.section}` : ''}`,
+                          `${total} ${total === 1 ? 'observation' : 'observations'}`,
+                        ].filter(Boolean).join(' · ')}
+                      </p>
+                    </div>
+                    <div className="ml-auto"><ToneCounts counts={syCounts} /></div>
                   </button>
 
                   {syOpen && (
-                    <div className="border-t border-slate-100 divide-y divide-slate-100">
-                      {behMonthsOf(sy).map(mk => {
-                        const isOpen = expandedBehMonths.has(mk)
-                        const logs = months[mk]
-                        return (
-                          <div key={mk}>
-                            <button
-                              onClick={() => toggleBehMonth(mk)}
-                              className="w-full flex items-center gap-2 pl-9 pr-5 py-2.5 bg-slate-50/50 hover:bg-slate-50 transition-colors"
-                            >
-                              {isOpen ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />}
-                              <span className="text-xs font-semibold text-slate-600">{formatMonth(mk)}</span>
-                              <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
-                                {logs.length} {logs.length === 1 ? 'log' : 'logs'}
-                              </span>
-                            </button>
-                            {isOpen && (
-                              <div className="border-t border-slate-100 p-3 space-y-2">
-                                {logs.map(b => {
-                                  const mine = isTeacher && b.teacher_id === user?.id
-                                  return (
-                                  <div key={b.id} className="p-3 bg-slate-50 rounded-xl flex gap-4">
-                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${mine ? 'bg-brand-50 text-brand-600' : 'bg-white text-slate-500 text-sm font-bold'}`}>
-                                      {mine ? <Pencil size={14}/> : (b.teacher_name?.[0] || 'T')}
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                                        <p className="text-sm font-medium text-slate-800">{mine ? 'Logged by you' : b.teacher_name}</p>
-                                        <div className="flex items-center gap-2">
-                                          <SentimentBadge sentiment={b.sentiment} />
-                                          {b.category && <span className="text-xs text-slate-400 bg-white px-2 py-0.5 rounded-full">{b.category}</span>}
-                                        </div>
-                                      </div>
-                                      <p className="text-sm text-slate-600 mt-1.5">{b.observation}</p>
-                                      <p className="text-xs text-slate-400 mt-1.5">{format(new Date(b.observed_at), 'MMM d, yyyy · h:mm a')}</p>
-                                      {b.sentiment_score !== null && (
-                                        <div className="mt-2 flex items-center gap-2">
-                                          <div className="flex-1 h-1.5 bg-slate-200 rounded-full max-w-24">
-                                            <div
-                                              className={`h-full rounded-full ${b.sentiment === 'Positive' ? 'bg-brand-500' : b.sentiment === 'Negative' ? 'bg-red-500' : 'bg-slate-400'}`}
-                                              style={{ width: `${Math.abs(b.sentiment_score) * 100}%` }}
-                                            />
-                                          </div>
-                                          <span className="text-xs font-mono text-slate-400">score: {Number(b.sentiment_score).toFixed(3)}</span>
-                                        </div>
-                                      )}
-                                    </div>
+                    <>
+                      <div className="px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs text-slate-500 mr-1">Show</span>
+                          {['All', ...Object.keys(BEHAVIOR_CATEGORY_ICON)].map(c => (
+                            <BehaviorChip key={c} active={filter.category === c}
+                              onClick={() => setBehFilter(sy, { category: c })}>
+                              {c}
+                            </BehaviorChip>
+                          ))}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {['All', 'Positive', 'Neutral', 'Negative'].map(t => (
+                            <BehaviorChip key={t} active={filter.tone === t}
+                              onClick={() => setBehFilter(sy, { tone: t })}>
+                              {t === 'All' ? 'All tones' : t}
+                            </BehaviorChip>
+                          ))}
+                        </div>
+                      </div>
+
+                      {monthKeys.length === 0 ? (
+                        <p className="px-5 py-8 text-center text-sm text-slate-400 border-t border-slate-100">
+                          No observations match these filters.
+                        </p>
+                      ) : (
+                        <div className="divide-y divide-slate-100 border-t border-slate-100">
+                          {monthKeys.map(mk => {
+                            const isOpen = expandedBehMonths.has(mk)
+                            const { logs } = months[mk]
+                            const shown = logs.filter(matches)
+                            // The month's tone chips follow the filter, so they
+                            // always describe the entries listed beneath them.
+                            const counts = shown.reduce((c, b) => {
+                              const t = b.sentiment || 'Neutral'
+                              c[t] = (c[t] || 0) + 1
+                              return c
+                            }, emptyToneCounts())
+                            return (
+                              <div key={mk}>
+                                <button
+                                  onClick={() => toggleBehMonth(mk)}
+                                  className="w-full flex flex-wrap items-center gap-x-2 gap-y-1.5 pl-9 pr-5 py-2.5 bg-slate-50/50 hover:bg-slate-50 transition-colors"
+                                >
+                                  {isOpen ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />}
+                                  <span className="text-xs font-semibold text-slate-600">{formatMonth(mk)}</span>
+                                  <span className="text-xs text-slate-400">
+                                    {filtering
+                                      ? `${shown.length} of ${logs.length} observations`
+                                      : `${logs.length} ${logs.length === 1 ? 'observation' : 'observations'}`}
+                                  </span>
+                                  <div className="ml-auto"><ToneCounts counts={counts} /></div>
+                                </button>
+                                {isOpen && (
+                                  <div className="pl-9 pr-5 pt-4 pb-5 space-y-3 border-t border-slate-100">
+                                    {shown.map(b => (
+                                      <BehaviorEntry key={b.id} log={b} mine={isTeacher && b.teacher_id === user?.id} />
+                                    ))}
                                   </div>
-                                  )
-                                })}
+                                )}
                               </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      {sy !== UNASSIGNED_SY && !seesWholeYear(sy) && (
+                        <p className="px-5 py-3 flex items-center gap-2 text-xs text-slate-500 border-t border-slate-100">
+                          <Info size={14} className="text-slate-400 flex-shrink-0" />
+                          Only your own observations are shown for this school year.
+                        </p>
+                      )}
+                    </>
                   )}
                 </div>
               )

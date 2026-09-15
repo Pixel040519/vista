@@ -7,7 +7,7 @@ Vite + React on port 5173. Dev server proxies `/api/*` to `http://localhost:5000
 - `main.jsx` — Router setup, AuthContext provider.
 - `api/client.js` — Axios instance with JWT interceptors. Exports `aiApi` (`teacherDashboard`, `classHealth`, `classHealthAll`, `eceClassHealth`), `studentApi`, `behaviorApi` (`get`, `summary`, `classRoster`, `log`, `update`, `delete`), `curriculumApi`, `scoreApi`, `eceApi` (skill CRUD, record flows, `getSummary`), `profileApi` (`updateMe`, `changePassword`).
 - `pages/` — one component per route. `Dashboard.jsx` is a thin role router (~10 lines) that branches on `user.role` and renders `pages/dashboard/AdminDashboard.jsx` or `pages/dashboard/TeacherDashboard.jsx`.
-- `components/` — shared UI (`GradingConfigModal.jsx` for per-subject grading structure, `AttendanceDetailModal.jsx` for dashboard drill-down, etc.).
+- `components/` — shared UI (`GradingConfigModal.jsx` for per-subject grading structure, `AttendanceDetailModal.jsx` for dashboard drill-down, `GradeMarks.jsx` for how a numeric grade is shown — `GradeNumber`, `DescriptorLabel`, `RemarksPill` — used by the Grades page and Student Detail, etc.).
 - Routes: `/login`, `/` (dashboard), `/students`, `/students/:id`, `/attendance`, `/grades`, `/score-entry`, `/behavior`, `/securepass`, `/risk`, `/announcements`, `/profile`, `/ece-competency`.
 
 The `BrowserRouter` in both `App.jsx` and `main.jsx` has `v7_startTransition` and `v7_relativeSplatPath` future flags enabled.
@@ -137,15 +137,96 @@ Open to admin + teacher (route `roles={['admin','teacher']}`).
 Title/subtitle adapts for teachers ("...students in your assigned classes"). Empty state distinguishes "no data at all" from "no matches for current filter".
 
 ### Student Detail (`pages/StudentDetail.jsx`)
-Teacher-aware. Teachers do **not** see the Home Address card or per-guardian email/phone/home_address rows (guardian names, relationship, emergency/pickup chips stay so teachers still know who can fetch a student). There is no Generate QR button on this page — SecurePass QR generation lives in the `vista_parent` mobile app (the web page previously exposed it to admins, but the flow is parent-initiated). **Attendance and Behavior are grouped School Year → Month → records**, both collapsible, most
+
+**Grades tab (numeric learners) — one card per school year**, newest first and the newest
+open, the same grouping Attendance and Behavior use. The card header names the year with its
+`SYStatusPill`, the grade level and section held that year, and the period count, and
+carries the year's **general average** with its descriptor and remarks, so a closed card
+still says how the year ended. Open, it is a table of learning area × period (column heads
+`grading.ordinals`), **Final grade**, **Descriptor** (only when that year's policy has one —
+DO 015 / zero-based, never DO 8) and **Remarks**, with a General average footer row. It uses
+the Grades page's pieces from `components/GradeMarks.jsx` (`GradeNumber`, `DescriptorLabel`,
+`RemarksPill`) and plain whole numbers — the old `GradeChip` ("85.0" pills) is no longer used
+here. Finals and the general average are `finalGradeFrom()`; policy is resolved per year with
+`gradingForSY`.
+
+Two rules that are easy to break:
+
+- **Placement per year** comes from the enrolment history (`placementForSY`), which only
+  admins load. A teacher sees a grade level and section only on the active year, where the
+  learner's snapshot is true; older years show just the period count rather than a guess.
+- **The general average is withheld from a viewer who cannot see every learning area**
+  (`seesWholeYear`). `GET /api/grades` narrows a teacher to the subjects they teach, widened
+  to the whole record only for their advisee in the active year, so averaging what a subject
+  teacher is served would print a complete-looking figure built from one or two subjects.
+  Such a card says "Only the learning areas you teach are shown, so no general average is
+  given." instead.
+
+Teacher-aware. Teachers do **not** see the Home Address card or per-guardian email/phone/home_address rows (guardian names, relationship, emergency/pickup chips stay so teachers still know who can fetch a student). There is no Generate QR button on this page — SecurePass QR generation lives in the `vista_parent` mobile app (the web page previously exposed it to admins, but the flow is parent-initiated). **Attendance and Behavior are grouped School Year → Month**, both collapsible, most
 recent first, with the latest year and its latest month open by default. The year comes from each
 record's own `school_year` (the API resolves it from `school_year_id`), never from the date:
 consecutive years can leave months uncovered between them and their ranges can overlap, so a date
 names two years or none. Records with no year land in a `UNASSIGNED_SY` bucket ("No school year
-recorded") pinned last, since sorting it by label would float it to the top. Attendance shows
-P/L/E/A tallies on both header levels via the shared `AttendanceCounts`. On Behavior the sentiment
-filter sits above the years and re-seeds the open year/month when a filter change leaves everything
-collapsed. Attendance tab columns: Date · Status · **Subject** (`subject_name` from the GET join) · Recorded By (renders "You" when `isTeacher && a.recorded_by === user.id`; else `recorded_by_name`). Behavior tab applies the same self-identity pattern: teacher's own logs render with a teal `Pencil` avatar + "Logged by you"; other teachers' logs show the teacher's initial + full name.
+recorded") pinned last, since sorting it by label would float it to the top. All three year-grouped
+tabs (Grades, Attendance, Behavior) share one year header: the year with its `SYStatusPill`, and
+`placementForSY` for the grade level and section held that year.
+
+**Attendance goes one level further: School Year → Month → school day → subject records.**
+A month lists **one row per date**, not one per record — eight subjects on a day used to be eight
+rows. Each day gets a single status from `rollUpDay(records)`:
+
+| Day status | When |
+|---|---|
+| Absent | every subject Absent |
+| Partly absent | some, not all, Absent — what the dashboard flags as possible skipping |
+| Excused | every subject Excused |
+| Late | no absence, at least one Late |
+| Present | everything else, including Present with an Excused subject |
+
+Columns are **Date · Status · Subjects**, where Subjects is the roll-up's note ("All 8 subjects",
+"Absent in Mathematics, Science", "Late in English"). The column was briefly "Day", which read as a
+second date. Clicking a day opens its subject records — Subject · Status · Recorded by ("You" when
+`isTeacher && a.recorded_by === user.id`, else `recorded_by_name`) — keyed `"SY|||yyyy-MM-dd"` in
+`expandedAttDays`. **Every count on the tab is in days** (`DayCounts`, `DayStatusPill`): the year
+header reads "Grade 4 · Mabini · 100 school days recorded" beside its day tallies, and each month
+names its school days. The year header shares `placementForSY` and `SYStatusPill` with the Grades tab.
+
+A teacher who is not served the whole year (`seesWholeYear`, the Grades tab's rule) is shown only
+their own subjects' records, so a day's status covers those subjects only; the card says so.
+
+The **Overview tab's Attendance Summary card counts the same days** (`attDaySummary`, summed over
+every year's `counts`): Present · Partly absent · Absent · Late · Excused. It used to tally subject
+records, so the two tabs disagreed about the same learner.
+
+Its caption reads **"in school days"** only when the viewer is served every subject for every year
+on the card (`attSummaryIsWholeDays` — `seesWholeYear` on each year; a year-less bucket counts as
+whole for admins only). Otherwise it reads **"in your subjects"**: a Math-only teacher sees a day
+the learner skipped Math as Absent, which is one class, not a day away from school, and an
+uncaptioned "Absent 3" read as the second. Such a teacher can also never see Partly absent — it
+needs two or more subjects on a day, some absent. The statuses keep one meaning for every role;
+only the caption changes.
+
+**Behavior tab — school-year cards, the Behavior page's timeline inside.** One card per year (the
+same header as Grades and Attendance: `SYStatusPill`, `placementForSY`, "N observations", and the
+year's Positive / Neutral / Negative counts via `ToneCounts`), months inside with their own tone
+counts, newest year and month open. Observations render as `BehaviorEntry` — a copy of the
+Behavior page's `TimelineEntry`: date and weekday/time on the left, category pill with its icon,
+`ToneBadge`, and "Logged by you" for the teacher's own log or "By {teacher_name}" otherwise. The
+raw `sentiment_score` bar the tab used to draw is gone, matching that page, where the label
+carries the meaning.
+
+Filters sit **inside the open year** — category chips (All / Social / Emotional / Academic /
+Physical) and tone chips — held **per school year** in `behFilters` (`behFilterFor(sy)`), so
+narrowing one year leaves the others alone. **Month tone chips follow the filter** — they are
+counted from the entries listed beneath them, so choosing Social or Positive changes them; they
+were first counted over the whole month and read as frozen while the list below changed. The
+**year header's counts stay the whole year's** record. A month with no matching entries is hidden,
+its row reads "N of M observations", and a year with none says so.
+It replaces the old global Positive/Neutral/Negative tab bar above the years.
+
+A teacher not served the whole year (`seesWholeYear`) sees only their own observations for it, and
+the card says so. Behavior page components are copied rather than imported because `pages.jsx`
+does not export them; keep the two in step.
 
 **ECE branch** (`isECE` = student's grade_level ∈ {Kinder}):
 - The **Grades** tab label renders as "Competencies" and swaps its body to an ECE view: a collapsible SY card (label from `eceApi.getRecords` response), a period selector from the school year's period model, and per-subject expandable rows that list each skill with its rating badge on the class's configured scale (or italic "Not rated"). **Not yet migrated to `ratingUi.js`** — this tab still renders E/G/F/NA colours directly, so it needs updating before a non-EGFNA level goes live. Skills come from `eceApi.getSkills({grade_level})` joined to `curriculumApi.getSubjects({grade_level})` by `subject_id`; the student's ratings come from `eceApi.getRecords({grade_level, section, quarter})` filtered client-side to the current student. SY header shows `{grading.abbr(n)} · {rated}/{total} rated` (`T2`, not `Q2`, on a three-term year); no overall distribution bar/legend.
@@ -1012,7 +1093,8 @@ Do not add them back as "helpful context".
 beside every final grade and general average under every policy. The **Descriptor**
 column appears only when the year's policy has one (`grading.descriptorFor` — DO 015 and
 zero-based, **not** DO 8), rendered as a dot + label with the DO 015 instructional
-response as its tooltip. Period cells stay plain numbers in both cases; putting a
+response as its tooltip. All three pieces live in `components/GradeMarks.jsx`, shared with
+Student Detail's Grades tab. Period cells stay plain numbers in both cases; putting a
 descriptor in every cell is what made the sheet look crowded.
 
 **Grade Summary follows the same rule one level down.** Its **Final** is the selected
@@ -1112,7 +1194,7 @@ active year and offered the wrong year's subjects whenever another was selected.
 | **Grading config modal** (`GradingConfigModal.jsx`) | For a composite subject it opens on an **area picker** instead of an editor: one row per area with a Configured / Not set up chip, because MAPEH has no weights of its own. Choosing one points `target` at that area and renders the normal editor with an `ArrowLeft` **back** control top-left ("All MAPEH areas"). Every read and write follows `target`, not `subject`. Saving an area returns to the picker rather than closing — MAPEH needs all four before it produces a grade, so finishing one is the middle of the job. `areaConfigured` is tracked in the modal so a chip updates the moment an area is saved, without waiting on a refetch. An ordinary subject is completely unaffected: no picker, no back control. |
 | **Score Entry** | the page that *writes* one level down. Asks for `include_areas` and keeps both levels: the **learning areas** fill the Subject dropdown, the areas fill a **tab strip** under the filters (see that page's section below), led by a **read-only roll-up tab** showing the four areas' grades, the MAPEH average and the remark. An area qualifies through its **parent** being in `allowedSubjects` — mirroring `verifyTeacherAssignment()`. The sheet header and the export filename still read "MAPEH — Music". |
 | **Grades** | the Subject filter lists **learning areas only**; a composite one's areas are a **tab strip** under the filters whose **first tab is the roll-up itself** — MAPEH's average is the grade that reaches the report card, so it is a view in its own right and stays the default. Both inner tabs work on it: **Grading Sheet** is the roll-up per period, and **Grade Summary** becomes an *area* breakdown — one column per area, then Final and Remarks — since MAPEH has no weighted categories of its own (`viewingRollup` picks which summary to render). The area breakdown is also where a blank roll-up cell is explained: the empty column beside it names the area that has no grade yet. |
-| **Student Detail → Grades** | groups by `parent_subject_name ?? subject_name`. MAPEH is one row, marked "avg. of 4", that expands to show the areas indented. `expandedAreas` is keyed `"SY|||MAPEH"` so the same learning area opens independently per school year. The subject count in the school-year header still counts learning areas. |
+| **Student Detail → Grades** | groups by `parent_subject_name ?? subject_name`. MAPEH is one row, marked "avg. of 4", with the areas indented beneath it — **open by default**; `collapsedAreas` is keyed `"SY|||MAPEH"` so the same learning area folds independently per school year. The general average in the year header and footer averages learning-area finals only, never the areas. |
 | **My Class** | unchanged — `/advisory/grades` returns learning-area columns, so MAPEH is one column and `general_average` is right without any client work. |
 | **Attendance**, **Accounts → teacher assignments** | unchanged, and deliberately: both take the default (learning areas only). One teacher handles MAPEH, so it stays one assignment row, and attendance is one roll for the whole learning area. |
 | **Grading config "Copy from"** | asks for `include_areas` and excludes subjects that *have* areas. Copying Music's structure to Arts is the most useful thing the picker does once a subject is split; the list labels an area "MAPEH — Music". |
@@ -1208,6 +1290,8 @@ Thin role router over `TeacherBehavior` and `AdminBehavior`.
 The filter card has four fields — Learner (autocomplete by name/LRN), **Grade level**, **Section**, Category — and below a divider, **tone tabs** (All / Positive / Neutral / Negative) that replace the old stat cards and the Sentiment select: each shows its `behaviorApi.summary` count and clicking it sets `sentiment`. The summary is fetched from `scopeParams`, which is every filter **except** tone, so picking Negative does not zero the other tabs; the list uses `listParams` (scope + tone). A Clear filters link appears only while a filter is set, and it leaves the period alone. Grade level and section are two dropdowns rather than one combined "Class" — the useful question is usually a whole grade level, which the paired list could not ask. Both read `curriculumApi.getSections()`, which the API already orders by grade level and scopes to the caller, so the grade options need no constant of their own; Section is disabled until a grade level is picked and re-filters to it, and changing grade level clears the section. Picking a student auto-fills both from the student's grade/section and **disables** them; typing in Learner or clicking Clear filters unlocks them by clearing `student_id` + `grade_level` + `section` together.
 
 Table: Learner (avatar, name linked to `/students/:id`, class) · Observation (category pill + tone badge + the text itself, clamped to two lines) · Recorded by (teacher + `subject`) · When. The whole row is clickable (and keyboard-focusable) and opens a right-hand `SidePanel` — local to `pages.jsx`, portalled, closes on Escape or backdrop: the learner (LRN from the list row's `s.lrn`), the full observation, Recorded by / Teaches this class / Date & time / School year, and **This learner in SY …** — a second `behaviorApi.get({ student_id, school_year_id })` giving that year's tone tally and up to three other observations. "Show all for this learner" applies the learner filter and closes the panel. The raw `sentiment_score` is deliberately not shown anywhere on the page — the label carries the meaning. **No** Log/Edit/Delete actions. Paginated 50/page with a "Showing X–Y of N" footer. It reuses the teacher view's `ToneBadge`, `CategoryPill`, `SENTIMENT_TONE` and `BEHAVIOR_CATEGORIES`.
+
+**Student Detail's Behavior tab carries copies** of `ToneBadge`, the category pill and `TimelineEntry` (as `BehaviorEntry`), because `pages.jsx` does not export them. A visual change to either side should be made to both.
 
 ### SecurePass (`pages.jsx` `SecurePass`)
 `/securepass` is **oversight-only** — admins and teachers monitor dismissal activity, they do not scan. Page renders: stat strip (dismissed / failed / total today) + today's dismissal log table (Student · Guardian · Status · Time). No "Open Scanner" button, no manual-verify fallback.

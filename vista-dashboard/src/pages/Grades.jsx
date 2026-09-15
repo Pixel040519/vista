@@ -10,7 +10,8 @@ import { curriculumApi, gradesApi, scoreApi } from '../api/client'
 import { LoadingSpinner, EmptyState } from '../components/UI'
 import { useAuth } from '../context/AuthContext'
 import { formatName } from '../utils/nameHelper'
-import { resolveGradingPolicy, finalGradeFrom, DO15_2026_DESCRIPTORS } from '../utils/grading'
+import { resolveGradingPolicy, finalGradeFrom } from '../utils/grading'
+import { GradeNumber, RemarksPill, DescriptorLabel } from '../components/GradeMarks'
 
 // ============================================================
 // GRADES PAGE
@@ -47,9 +48,6 @@ const matchesSearch = (student, q) => {
   const needle = q.trim().toLowerCase()
   return formatName(student).toLowerCase().includes(needle) || (student.lrn || '').includes(needle)
 }
-
-// Rank-ordered, best first — the same order as DO15_2026_DESCRIPTORS.
-const DESCRIPTOR_DOTS = ['bg-emerald-500', 'bg-brand-400', 'bg-slate-400', 'bg-amber-500', 'bg-red-500']
 
 // ── Small pieces ─────────────────────────────────────────────
 
@@ -108,54 +106,6 @@ function SearchBox({ value, onChange }) {
         onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
       />
     </div>
-  )
-}
-
-// `tone`: 'final' is the grade that counts (teal), 'plain' a period or area grade.
-function GradeNumber({ grade, passing, tone = 'plain', small = false }) {
-  if (grade === null) return <span className={clsx('font-mono text-slate-300', small ? 'text-[13px]' : 'text-sm')}>—</span>
-  const failing = grade < passing
-  return (
-    <span className={clsx(
-      'font-mono', small ? 'text-[13px]' : 'text-sm',
-      failing ? 'text-red-500 font-semibold'
-        : tone === 'final' ? 'text-teal-600 font-bold'
-        : tone === 'muted' ? 'text-slate-500'
-        : 'text-slate-700'
-    )}>
-      {grade}
-    </span>
-  )
-}
-
-function RemarksPill({ grade, passing }) {
-  if (grade === null) return <span className="text-slate-300 text-xs">—</span>
-  const passed = grade >= passing
-  return (
-    <span className={clsx(
-      'inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
-      passed ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'
-    )}>
-      {passed ? 'PASSED' : 'FAILED'}
-    </span>
-  )
-}
-
-function DescriptorLabel({ grade, grading }) {
-  if (grade === null || !grading.descriptorFor) return <span className="text-slate-300 text-xs">—</span>
-  const d = grading.descriptorFor(grade)
-  const rank = DO15_2026_DESCRIPTORS.findIndex(x => x.label === d.label)
-  return (
-    <span
-      title={d.response}
-      className={clsx(
-        'inline-flex items-center gap-1.5 text-[13px] font-medium whitespace-nowrap',
-        grade < grading.passingGrade ? 'text-red-600' : 'text-slate-700'
-      )}
-    >
-      <span className={clsx('w-1.5 h-1.5 rounded-full flex-shrink-0', DESCRIPTOR_DOTS[rank] || 'bg-slate-300')} />
-      {d.label}
-    </span>
   )
 }
 
