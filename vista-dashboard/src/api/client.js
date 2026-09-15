@@ -109,6 +109,10 @@ export const attendanceApi = {
 export const gradesApi = {
   get:         (params)  => api.get('/grades', { params }),
   getBySubject:(params)  => api.get('/grades/by-subject', { params }),
+  // Every learning area for one class (admin-only) — the "All subjects" view.
+  // Silent: a refusal (e.g. a descriptively-assessed grade level) is rendered
+  // inline by the page, so a toast would only repeat it.
+  getClassRecord:(params) => api.get('/grades/class-record', { params, silent: true }),
   submit:      (records) => api.post('/grades', { records }),
 }
 

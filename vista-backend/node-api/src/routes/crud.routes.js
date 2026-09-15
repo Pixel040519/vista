@@ -4,10 +4,11 @@
 const express = require('express');
 const attendanceRouter = express.Router();
 const { query } = require('../config/database');
-const { authenticate, authorize, authorizeAnyAdmin } = require('../middleware/auth.middleware');
+const { authenticate, authorize, authorizeAnyAdmin, enforceGradeScope } = require('../middleware/auth.middleware');
 const { AppError } = require('../middleware/error.middleware');
 const { ROLES, ANY_ADMIN, isAnyAdmin, isScopedAdmin, gradeScopeForRole } = require('../utils/roles');
 const { resolveGradingPolicy } = require('../utils/grading');
+const { loadAssessment } = require('../utils/assessmentConfig');
 const {
   enforceParentLinked,
   getParentLinkedStudentIds,
@@ -529,6 +530,141 @@ gradeRouter.get('/by-subject', async (req, res, next) => {
     const teacher_name = t ? `${t.surname}, ${t.first_name}${t.middle_name ? ' ' + t.middle_name : ''}` : null;
 
     res.json({ students, grades: gradesMap, subject_name, teacher_name, parent_name, areas, area_grades });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/grades/class-record?grade_level=&section=&school_year=
+//
+// Every learning area for one class in one request — the Grades page's
+// "All subjects" view, and the learner record it opens. Per-period grades are
+// returned rather than finals so the client can show any period, or the final,
+// without another round trip; the finals and the general average are
+// `finalGradeFrom()` over them, exactly as the by-subject sheet computes them.
+//
+// Admin-only. A subject teacher sees one column of a class, and the adviser's
+// cross-subject view is `/api/advisory/grades`, bounded to their own section.
+gradeRouter.get('/class-record', authorize(ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM), async (req, res, next) => {
+  try {
+    const { grade_level, section, school_year } = req.query;
+    if (!grade_level || !section || !school_year)
+      throw new AppError('grade_level, section, and school_year are all required.', 400);
+    enforceGradeScope(req, grade_level);
+
+    const syRes = await query(
+      `SELECT id, label, period_model, grading_policy FROM school_years WHERE label=$1 LIMIT 1`,
+      [school_year]
+    );
+    const sy = syRes.rows[0];
+    if (!sy) throw new AppError(`Unknown school year "${school_year}".`, 404);
+
+    // A descriptive grade level has no numeric grades to lay out.
+    const assessment = await loadAssessment(sy.id, grade_level);
+    if (assessment.isDescriptive) {
+      throw new AppError(
+        `${grade_level} is assessed descriptively in SY ${sy.label} — its ratings are in ECE Competency.`,
+        400
+      );
+    }
+
+    // The same roster as /by-subject, so both views of a class list the same learners.
+    const students = (await query(
+      `SELECT id, lrn, surname, first_name, middle_name, gender
+       FROM students
+       WHERE grade_level=$1 AND section=$2 AND is_active=TRUE
+         AND enrollment_status='enrolled'
+       ORDER BY gender DESC NULLS LAST, surname, first_name`,
+      [grade_level, section]
+    )).rows;
+    const ids = students.map(s => s.id);
+
+    // Every grade row for the year — learning areas and their areas alike. The
+    // areas are only ever shown beneath their learning area; nothing here adds
+    // them to it, since the learning area's own row already holds the roll-up.
+    const gradeRows = ids.length
+      ? (await query(
+          `SELECT g.student_id, g.subject_id, g.quarter, g.grade,
+                  sub.name, sub.parent_id, sub.grade_level
+             FROM grades g
+             JOIN subjects sub ON sub.id = g.subject_id
+            WHERE g.student_id = ANY($1::uuid[])
+              AND g.school_year = $2`,
+          [ids, sy.label]
+        )).rows
+      : [];
+
+    // Columns are the grade level's learning areas plus any learning area the
+    // learners actually hold a grade in this year, flagged `off_level` — the
+    // same rule as /api/advisory/grades, for the same reason: a learner moved
+    // mid-year has grades against another level's subjects, and dropping them
+    // would make the sheet read as ungraded.
+    const levelSubjects = (await query(
+      `SELECT id, name FROM subjects
+        WHERE grade_level=$1 AND school_year_id=$2 AND is_active=TRUE
+          AND parent_id IS NULL
+        ORDER BY name`,
+      [grade_level, sy.id]
+    )).rows;
+    const columns = levelSubjects.map(s => ({ id: s.id, name: s.name, off_level: false, grade_level }));
+    const known = new Set(columns.map(c => c.id));
+    const missingParents = new Set();
+    for (const r of gradeRows) {
+      if (r.parent_id) {
+        if (!known.has(r.parent_id)) missingParents.add(r.parent_id);
+        continue;
+      }
+      if (known.has(r.subject_id)) continue;
+      known.add(r.subject_id);
+      columns.push({ id: r.subject_id, name: r.name, off_level: true, grade_level: r.grade_level });
+    }
+    // An off-level area whose learning area holds no grade yet (a partial MAPEH
+    // set is withheld) still names its learning area as a column.
+    if (missingParents.size) {
+      const parents = await query(
+        `SELECT id, name, grade_level FROM subjects WHERE id = ANY($1::uuid[])`,
+        [[...missingParents]]
+      );
+      for (const p of parents.rows) {
+        if (known.has(p.id)) continue;
+        known.add(p.id);
+        columns.push({ id: p.id, name: p.name, off_level: true, grade_level: p.grade_level });
+      }
+    }
+
+    const areaRows = columns.length
+      ? (await query(
+          `SELECT id, name, parent_id FROM subjects
+            WHERE parent_id = ANY($1::uuid[]) AND is_active = TRUE
+            ORDER BY name`,
+          [columns.map(c => c.id)]
+        )).rows
+      : [];
+    const subjects = columns.map(c => ({
+      ...c,
+      areas: areaRows.filter(a => a.parent_id === c.id).map(a => ({ id: a.id, name: a.name })),
+    }));
+
+    // student_id -> subject_id -> period -> grade
+    const grades = {};
+    for (const r of gradeRows) {
+      if (r.grade == null) continue;
+      ((grades[r.student_id] ??= {})[r.subject_id] ??= {})[r.quarter] = parseFloat(r.grade);
+    }
+
+    const adviser = (await query(
+      `SELECT u.surname, u.first_name, u.middle_name
+         FROM sections sec
+         JOIN users u ON u.id = sec.adviser_id
+        WHERE sec.school_year_id=$1 AND sec.grade_level=$2 AND sec.name=$3 AND sec.is_active=TRUE
+        LIMIT 1`,
+      [sy.id, grade_level, section]
+    )).rows[0];
+    const adviser_name = adviser
+      ? `${adviser.surname}, ${adviser.first_name}${adviser.middle_name ? ' ' + adviser.middle_name : ''}`
+      : null;
+
+    res.json({ students, subjects, grades, adviser_name });
   } catch (err) {
     next(err);
   }

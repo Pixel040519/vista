@@ -72,6 +72,13 @@ Sizes are `sm` (`max-w-md`), `md` (`max-w-lg`, default), `lg` (`max-w-2xl`), `xl
 
 All `table-base` tables must be wrapped in `<div className="overflow-x-auto">` for horizontal scroll on narrow screens. Header cells use `whitespace-nowrap` to prevent awkward wrapping.
 
+**Centering a `table-base` header needs `!text-center`.** `.table-base thead th` sets
+`text-left`, and that selector (a class plus two elements) outranks a bare `text-center`
+utility — so a header given `text-center` silently stays left while its centered cells sit
+under it misaligned. Body cells have no such rule, so `text-center` works on `td`. The Grades
+page centers every grade, Descriptor and Remarks column this way (header and cells alike)
+and keeps only the learner name left-aligned; the old Grades page had the misalignment.
+
 ## Input / cursor conventions
 
 - Body has `select-none` and `cursor-default` globally. Text-type `input`/`textarea` re-enable `user-select: text` and `cursor: text`. `checkbox`/`radio` use `cursor: pointer`; `select` uses `cursor: pointer`. Reason: prevents the text caret on non-interactive elements like titles, headers, hints.
@@ -967,10 +974,59 @@ Vocabulary lives in `src/utils/enrollment.js`, a mirror of the backend's
 complete Tailwind class strings rather than interpolating a tone, because Tailwind's
 scanner only sees whole class names in source.
 
-### Grades (`pages.jsx` `Grades`)
+### Grades (`pages/Grades.jsx`)
 
-Two tabs over one filter set (school year, class, subject): **Grading Sheet** (period
-grades + average from `gradesApi.getBySubject`) and **Grade Summary** (weighted category
+Moved out of `pages.jsx` into its own file. One compact toolbar — school year, grade level,
+section, a **View** switch (**By subject** / **All subjects**), then either the Subject
+select or a period switch (`grading.ordinals` + **Final**). Teachers get By subject only
+and no switch: the class record endpoint is admin-only, and an adviser's cross-subject
+view is My Class.
+
+**By subject** is the sheet described below. Its header names the learning area, then
+`Grade – Section · Subject teacher · N terms`, with one stat: how many learners have
+failed. A learner search filters both tabs.
+
+**All subjects** (`ClassRecord`, `gradesApi.getClassRecord` →
+`GET /api/grades/class-record`) is one row per learner and one column per **learning
+area**, showing the selected period or the final, plus the general average. Its header is
+"All learning areas" over `Grade – Section · Adviser`, with the same single Failed stat
+(learners whose general average is failing). MAPEH is one column carrying its stored
+roll-up; `off_level` columns get an amber `*` and the same warning banner as My Class.
+Finals and general averages are `finalGradeFrom()` over the period grades, computed
+client-side, so the period switch needs no request.
+
+Clicking a row opens `LearnerRecord`, a right-hand panel (portalled, Escape or the backdrop
+closes it): a general-average block (grade, descriptor, remarks, "N learning areas"), every
+learning area × period with final, descriptor and remarks, MAPEH's areas expandable
+**beneath** it with the note "MAPEH's areas are shown beneath it.", and a link to Student
+Detail. Previous/Next walk the table's own order — gender groups flattened, search applied —
+and stop at either end. Its "X of N" counter runs across the whole class, while the table's
+`#` restarts per gender group, so the two numbers differ for everyone after the first group.
+
+**Deliberately absent**, each removed at the school's request after a first cut had them:
+a class average (on either view), a "latest period graded" count, and "1st–2nd term graded
+so far" captions under the All subjects header and the learner record's general average.
+Do not add them back as "helpful context".
+
+**Remarks and descriptor.** Remarks (PASSED/FAILED against `grading.passingGrade`) sit
+beside every final grade and general average under every policy. The **Descriptor**
+column appears only when the year's policy has one (`grading.descriptorFor` — DO 015 and
+zero-based, **not** DO 8), rendered as a dot + label with the DO 015 instructional
+response as its tooltip. Period cells stay plain numbers in both cases; putting a
+descriptor in every cell is what made the sheet look crowded.
+
+**Grade Summary follows the same rule one level down.** Its **Final** is the selected
+period's grade — the one grade on the row — so both its tables (weighted categories, and
+the MAPEH area breakdown) carry Descriptor + Remarks beside it under DO 015 / zero-based.
+The four area columns do not; they are the parts, not the grade. It is also the tab where
+the descriptor is most actionable: DO 015 pairs each band with an instructional response,
+and that is a per-term decision.
+
+The page does not name the DepEd order anywhere in its captions or hints — the columns
+change with the policy, and that is enough.
+
+By subject has two tabs over one filter set (school year, class, subject): **Grading Sheet** (period
+grades + final grade from `gradesApi.getBySubject`) and **Grade Summary** (weighted category
 breakdown for one period from `scoreApi.getBreakdown`).
 
 Both tables group learners with `groupByGender()`: **Male**, then **Female**, then **No gender recorded**. The third group is for learners whose `gender` is NULL, which the column allows. It used to be a group called "Other", which is not a valid value anymore. A plain Male/Female filter would drop those learners from the sheet without a trace, and Score Entry's gender groups still do.
@@ -991,8 +1047,10 @@ renders:
 
 | Selected | Grade Summary shows |
 |---|---|
-| an ordinary subject, or one area | weighted categories → Initial → Final (`scoreApi.getBreakdown`) |
-| the roll-up (the `MAPEH` tab) | one column per **area** → Final → Remarks, for the selected period |
+| an ordinary subject, or one area | weighted categories → Initial → Final → Descriptor → Remarks (`scoreApi.getBreakdown`) |
+| the roll-up (the `MAPEH` tab) | one column per **area** → Final → Descriptor → Remarks, for the selected period |
+
+Descriptor appears only on DO 015 / zero-based years, as everywhere on this page.
 
 The second is the answer to "what is this grade made of" one level up: MAPEH has no
 Written Work of its own, its grade for a period *is* the average of the four areas'
@@ -1006,8 +1064,8 @@ explanation — the column that is blank names the area still missing a grade.
 Everything else in this section describes an ordinary subject, which an individual area
 also is.
 
-The **sheet header** — Learning Area, Grade & Section, Subject Teacher — sits above the tab
-switch, not inside a branch, so both tabs carry it. It used to live in the Grading Sheet
+The **sheet header** — the learning area's name over grade & section and subject teacher —
+sits above the tab switch, not inside a branch, so both tabs carry it. It used to live in the Grading Sheet
 branch only, which left Grade Summary as the one view with no caption saying whose marks
 these are, and it is the view that needs it most: its columns are weighted category names
 (Written Work, Performance Task…) that read identically for every subject in the school.

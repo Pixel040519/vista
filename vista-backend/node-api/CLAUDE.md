@@ -945,7 +945,20 @@ It is one extra query on a request that has already resolved the area ids and th
 class's students; the alternative was four more round trips from the client, one
 per area. Empty for every ordinary subject, so nothing else pays for it.
 
-Two frontend surfaces read it, and both are read-only views of a **stored** grade:
+`GET /api/grades/class-record?grade_level=&section=&school_year=` is the whole class
+at once — the Grades page's **All subjects** view. `authorize(SUPER_ADMIN, ADMIN_ELEM)`
+plus `enforceGradeScope`, and a 400 for a grade level assessed descriptively that year.
+It returns the same roster as `/by-subject` (so both views list the same learners),
+`subjects` = the level's learning areas plus any learning area the learners hold a grade
+in that year (`off_level`, the `/advisory/grades` rule; an off-level area whose MAPEH has
+no roll-up yet still names its learning area), each carrying its `areas`, then
+`grades` as `{ student_id: { subject_id: { period: grade } } }` for learning areas **and**
+areas, and the section's `adviser_name`. Per-period grades rather than finals, so the
+client derives finals and the general average with `finalGradeFrom()` and switches periods
+without a request. Only learning-area columns feed that average; areas are for the
+learner record's nested rows.
+
+Two frontend surfaces read `/by-subject`'s `area_grades`, and both are read-only views of a **stored** grade:
 the Grades page's roll-up Grade Summary, and Score Entry's roll-up tab — which is
 also why Score Entry can show a MAPEH overview without a second endpoint. The
 teacher check on this route resolves `COALESCE(p.name, s.name)`, so asking it for
