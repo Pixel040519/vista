@@ -94,6 +94,12 @@ export const studentApi = {
   addGuardian:    (id, d)   => api.post(`/students/${id}/guardians`, d),
   updateGuardian: (id, gid, d) => api.put(`/students/${id}/guardians/${gid}`, d),
   removeGuardian: (id, gid) => api.delete(`/students/${id}/guardians/${gid}`),
+  // Parent/Guardian Account Access. Separate from updateGuardian on purpose:
+  // re-issuing or revoking an invitation is an access decision, not an edit to
+  // the person, and the two must not travel together.
+  inviteGuardian: (id, gid, email) =>
+    api.post(`/students/${id}/guardians/${gid}/invitation`, email ? { email } : {}),
+  revokeGuardianAccess: (id, gid) => api.delete(`/students/${id}/guardians/${gid}/invitation`),
   setAcademicAccess: (id, data) => api.patch(`/students/${id}/academic-access`, data),
 }
 

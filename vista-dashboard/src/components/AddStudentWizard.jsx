@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   Check, ChevronDown, ChevronLeft, ArrowRight, Info, Link2, Pencil, Plus, Search,
-  Trash2, Eye, EyeOff, GraduationCap, User,
+  Trash2, Lock, GraduationCap, User,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { format } from 'date-fns'
@@ -44,7 +44,7 @@ const emptyGuardian = () => ({
   surname: '', first_name: '', middle_name: '', relationship: 'Mother',
   phone: '', email: '', same_address: true, home_address: '',
   is_authorized_pickup: true, is_emergency_contact: false,
-  create_account: false, password: '',
+  invite: false,
 })
 
 // ── Small building blocks ─────────────────────────────────────
@@ -116,7 +116,6 @@ function GuardianCard({ g, index, errors, studentFirstName, studentAddress, onCh
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
   const [searching, setSearching] = useState(false)
-  const [showPw, setShowPw] = useState(false)
   const searchSeq = useRef(0)
 
   // Debounced, and a stale answer for an older query is dropped.
@@ -245,7 +244,13 @@ function GuardianCard({ g, index, errors, studentFirstName, studentAddress, onCh
           <Field label="Phone" error={e.phone}>
             <PhoneInput className={clsx(inputCls(e.phone), 'pr-10')} value={g.phone} onChange={v => set({ phone: v })}/>
           </Field>
-          <Field label="Email" optional={!g.create_account} error={e.email}>
+          {/* One email input, not two. Turning on Add Invitation below renames
+              it and makes it required rather than revealing a second field —
+              the guardian's contact email and the address the portal invitation
+              authorizes are the same address, and offering both would invite
+              them to disagree. */}
+          <Field label={g.invite ? 'Registered Email Address' : 'Email'} optional={!g.invite} error={e.email}
+            hint={g.invite ? 'Used by the parent/guardian to activate their VISTA account in the mobile app.' : undefined}>
             <input type="email" className={inputCls(e.email)} value={g.email} placeholder="name@email.com"
               onChange={ev => set({ email: ev.target.value })}/>
           </Field>
@@ -291,28 +296,55 @@ function GuardianCard({ g, index, errors, studentFirstName, studentAddress, onCh
           <div className="flex flex-wrap items-center gap-2">
             <FlagToggle tone="emerald" checked={g.is_authorized_pickup} onChange={v => set({ is_authorized_pickup: v })}>Can pick up</FlagToggle>
             <FlagToggle tone="amber" checked={g.is_emergency_contact} onChange={v => set({ is_emergency_contact: v })}>Emergency contact</FlagToggle>
-            <button type="button" onClick={() => set({ create_account: !g.create_account })}
-              className="ml-auto flex items-center gap-2.5 text-right">
-              <span className="flex flex-col">
-                <span className="text-[13px] font-medium text-slate-700">Create a parent app login</span>
-                <span className="text-xs text-slate-400">Needs an email and a password</span>
-              </span>
-              <span className={clsx('w-9 h-5 rounded-full p-0.5 flex transition-colors', g.create_account ? 'bg-brand-500 justify-end' : 'bg-slate-300')}>
-                <span className="w-4 h-4 rounded-full bg-white shadow"/>
-              </span>
-            </button>
           </div>
-          {g.create_account && (
-            <Field label="App password" error={e.password} hint="They sign in to the parent app with their email and this password.">
-              <div className="relative sm:max-w-xs">
-                <input type={showPw ? 'text' : 'password'} className={clsx(inputCls(e.password), 'pr-10')}
-                  placeholder="At least 8 characters" value={g.password} onChange={ev => set({ password: ev.target.value })}/>
-                <button type="button" onClick={() => setShowPw(s => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
-                  {showPw ? <EyeOff size={15}/> : <Eye size={15}/>}
-                </button>
+
+          {/* Parent/Guardian Account Access.
+              The admin authorizes an address; they never choose a password.
+              What sat here before was a password field, which meant the school
+              knew a family's credential and had to hand it over by some channel
+              VISTA does not own. */}
+          <div className="border-t border-slate-100 pt-3.5 space-y-3">
+            <div className="flex items-start justify-between gap-5">
+              <div>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Parent/Guardian Account Access</p>
+                <p className="text-[13px] text-slate-500 mt-1">Authorize an email so the parent can activate their own VISTA account.</p>
               </div>
-            </Field>
-          )}
+              <button type="button" onClick={() => set({ invite: !g.invite })}
+                className="flex items-center gap-2.5 text-right flex-shrink-0 pt-0.5">
+                <span className="text-[13px] font-medium text-slate-700">Add Invitation</span>
+                <span className={clsx('w-9 h-5 rounded-full p-0.5 flex transition-colors', g.invite ? 'bg-brand-500 justify-end' : 'bg-slate-300')}>
+                  <span className="w-4 h-4 rounded-full bg-white shadow"/>
+                </span>
+              </button>
+            </div>
+
+            {g.invite && (
+              <>
+                <div className="bg-brand-50 rounded-xl px-3.5 py-3 space-y-2">
+                  {[
+                    <>You authorize this email. <strong className="font-semibold">No message is sent yet.</strong></>,
+                    <>The parent opens the VISTA Parent app, taps Activate Account and enters this email.</>,
+                    <>VISTA emails a one-time code. The parent verifies it and creates their own password.</>,
+                  ].map((line, i) => (
+                    <div key={i} className="flex items-start gap-2.5">
+                      <span className="w-[18px] h-[18px] rounded-full bg-brand-500 text-white text-[11px] font-mono flex items-center justify-center flex-shrink-0 mt-px">{i + 1}</span>
+                      <span className="text-[13px] leading-[18px] text-brand-700">{line}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] text-slate-500">Status after saving</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700">Pending Activation</span>
+                  </div>
+                  <span className="flex items-center gap-1.5 text-xs text-slate-400">
+                    <Lock size={13}/> VISTA never asks you to set or view a parent&rsquo;s password.
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
         </>
       )}
     </div>
@@ -387,9 +419,8 @@ export default function AddStudentWizard({ gradeOptions, onSubmit, onClose }) {
       if (!g.surname.trim()) e.surname = 'Enter the surname'
       if (!g.first_name.trim()) e.first_name = 'Enter the first name'
       if (!PHONE_RE.test(g.phone)) e.phone = 'Enter a mobile number'
-      if (g.create_account) {
-        if (!EMAIL_RE.test(g.email)) e.email = 'Needed for the app login'
-        if (g.password.length < 8) e.password = 'At least 8 characters'
+      if (g.invite) {
+        if (!EMAIL_RE.test(g.email)) e.email = 'Needed to invite them to the parent portal'
       } else if (g.email && !EMAIL_RE.test(g.email)) e.email = "This isn't a valid email"
     }
     const asksAddress = g.mode === 'new' || (g.parent && !g.parent.home_address)
@@ -428,7 +459,7 @@ export default function AddStudentWizard({ gradeOptions, onSubmit, onClose }) {
               surname: g.surname, first_name: g.first_name, middle_name: g.middle_name,
               relationship: g.relationship, phone: g.phone, email: g.email, home_address: addressFor(g),
               is_authorized_pickup: g.is_authorized_pickup, is_emergency_contact: g.is_emergency_contact,
-              create_account: g.create_account, password: g.create_account ? g.password : '',
+              invite: g.invite,
             }),
       })
     } catch {
@@ -619,7 +650,7 @@ export default function AddStudentWizard({ gradeOptions, onSubmit, onClose }) {
                       <p className="text-sm font-medium text-slate-900 truncate">{name}</p>
                       {g.parent
                         ? <p className="flex items-center gap-1 text-xs text-brand-500"><Link2 size={11}/> Linked to parent account</p>
-                        : <p className="text-xs text-slate-500">{g.create_account ? `New app login · ${g.email}` : 'Contact only · no app login'}</p>}
+                        : <p className="text-xs text-slate-500">{g.invite ? `Invited · ${g.email}` : 'Contact only · no portal access'}</p>}
                     </div>
                     <p className="text-[13px] text-slate-600">{g.relationship}</p>
                     <p className="text-[13px] text-slate-600">{phone || '—'}</p>

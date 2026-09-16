@@ -16,7 +16,7 @@ const MAX_ROWS = 200
 
 // Same list as the guardian form in pages/Students.jsx.
 const RELATIONSHIPS = ['Mother','Father','Guardian','Grandmother','Grandfather','Aunt','Uncle','Sibling','Other']
-const GUARDIAN_COLUMNS = ['lrn','surname','first_name','middle_name','relationship','phone','email','home_address','authorized_pickup','emergency_contact']
+const GUARDIAN_COLUMNS = ['lrn','surname','first_name','middle_name','relationship','phone','email','home_address','authorized_pickup','emergency_contact','invite']
 const MAX_GUARDIAN_ROWS = 600
 const MAX_GUARDIANS_PER_STUDENT = 10 // matches POST /students/bulk
 
@@ -104,7 +104,7 @@ const FIELD_LABELS = {
   lrn: 'LRN', surname: 'Surname', first_name: 'First name', date_of_birth: 'Date of birth',
   gender: 'Gender', grade_level: 'Grade level', section: 'Section', home_address: 'Home address',
   relationship: 'Relationship', phone: 'Phone', email: 'Email',
-  authorized_pickup: 'Pickup', emergency_contact: 'Emergency contact', guardians: 'Guardians',
+  authorized_pickup: 'Pickup', emergency_contact: 'Emergency contact', invite: 'Invite', guardians: 'Guardians',
 }
 const issue = (field, text) => ({ field, text })
 
@@ -243,6 +243,14 @@ function validateGuardians(guardians, studentLrns, accounts) {
     if (!g.emergency_contact) errors.push(issue('emergency_contact', 'required: Yes or No'))
     else if (parseFlag(g.emergency_contact) === null) errors.push(issue('emergency_contact', 'must be Yes or No'))
 
+    // Optional, unlike the two flags above — a blank means No, because most
+    // guardians are contacts rather than portal users and requiring an answer
+    // on every row would be noise. It does need an email to authorize.
+    if (g.invite) {
+      if (parseFlag(g.invite) === null) errors.push(issue('invite', 'must be Yes or No'))
+      else if (parseFlag(g.invite) && !g.email) errors.push(issue('invite', 'needs an email to invite'))
+    }
+
     if (lrn) {
       if (!perStudent.has(lrn)) perStudent.set(lrn, { count: 0, emails: new Set(), names: new Set() })
       const seen = perStudent.get(lrn)
@@ -272,6 +280,7 @@ const toGuardianPayload = (g) => ({
   home_address: g.home_address,
   is_authorized_pickup: parseFlag(g.authorized_pickup),
   is_emergency_contact: parseFlag(g.emergency_contact),
+  invite: parseFlag(g.invite) ?? false,
 })
 
 const EXCEL_UNIX_EPOCH = 25569 // days from Excel's 1899-12-30 base to 1970-01-01
@@ -393,7 +402,8 @@ function UploadGuide() {
           <p>One row per guardian, matched to a student by {em('LRN')}.</p>
           <p>Always fill {em('relationship')}, {em('pickup')} and {em('emergency')} (Yes/No).</p>
           <p>Parent has an account? Just add their {em('email')} — name and phone fill in. Otherwise enter surname, first name and phone.</p>
-          <p className="text-slate-500">A blank address uses the student&apos;s.</p>
+          <p>{em('invite')} — Yes to authorize that {em('email')} for the VISTA Parent app. Blank means No.</p>
+          <p className="text-slate-500">A blank address uses the student&apos;s. No passwords are set and no messages are sent by this upload.</p>
         </div>
       ))}
     </div>
@@ -735,6 +745,7 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
     const bad = (f) => errs.some(e => e.field === f)
     const pickup = parseFlag(g.authorized_pickup)
     const emergency = parseFlag(g.emergency_contact)
+    const invite = parseFlag(g.invite)
     return (
       <div key={gi} className={clsx('px-3 py-2 border-b last:border-b-0', errs.length ? 'border-red-100' : 'border-slate-100')}>
         <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,0.8fr)_minmax(0,1fr)_9rem] gap-x-3 gap-y-1 items-center text-[13px]">
@@ -753,6 +764,13 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
           <span className="text-slate-600"><Cell bad={bad('relationship')} value={canonicalRelationship(g.relationship) ?? g.relationship}/></span>
           <span className="text-slate-600 whitespace-nowrap">
             <Cell bad={bad('phone')} value={normalizePhone(g.phone) ?? g.phone}/>
+            {bad('invite')
+              ? <Cell bad value={raw.invite}/>
+              : g.account
+                ? <span className="block text-[11px] text-emerald-700">Links to existing account</span>
+                : invite
+                  ? <span className="block text-[11px] text-blue-700">Will invite &mdash; Pending Activation</span>
+                  : null}
           </span>
           {/* Fixed column and a fixed slot per flag, so Pickup and Emergency
               line up down the list whichever of them a guardian has. */}
@@ -806,7 +824,7 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
               <>
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Before you upload</p>
                 <UploadGuide/>
-                <p className="text-xs text-slate-400 leading-relaxed">No new parent accounts are created by this upload.</p>
+                <p className="text-xs text-slate-400 leading-relaxed">No passwords are set and no messages are sent. An invited guardian activates from the VISTA Parent app.</p>
               </>
             ) : (
               <>

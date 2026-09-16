@@ -225,6 +225,33 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                         strokeWidth: 2, color: Colors.white))
                                 : const Text('Sign in'),
                           ),
+                          Align(
+                            alignment: Alignment.center,
+                            child: TextButton(
+                              onPressed: _loading
+                                  ? null
+                                  : () => context.go('/forgot-password'),
+                              child: const Text('Forgot password?'),
+                            ),
+                          ),
+                          const Divider(height: 24),
+                          // The way in for a parent the school has invited but
+                          // who has never signed in. Without it the only route
+                          // to an account is a password nobody has yet.
+                          Column(
+                            children: [
+                              const Text(
+                                'First time here?',
+                                style: TextStyle(fontSize: 13, color: Colors.black54),
+                              ),
+                              const SizedBox(height: 6),
+                              OutlinedButton(
+                                onPressed:
+                                    _loading ? null : () => context.go('/activate'),
+                                child: const Text('Activate my account'),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                     ),

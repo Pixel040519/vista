@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'providers.dart';
+import 'screens/activate_screen.dart';
 import 'screens/child_detail_screen.dart';
 import 'screens/children_screen.dart';
 import 'screens/edit_profile_screen.dart';
@@ -24,9 +25,13 @@ GoRouter buildRouter(WidgetRef ref) {
         return state.matchedLocation == '/' ? null : '/';
       }
       final loggedIn = session.valueOrNull != null;
-      final loggingIn = state.matchedLocation == '/login';
-      if (!loggedIn && !loggingIn) return '/login';
-      if (loggedIn && (loggingIn || state.matchedLocation == '/')) {
+      // Activation and password reset are signed-out surfaces, like /login —
+      // a parent reaching them has no session yet by definition, so they must
+      // not be bounced to /login by the guard below.
+      const signedOut = {'/login', '/activate', '/forgot-password'};
+      final onSignedOut = signedOut.contains(state.matchedLocation);
+      if (!loggedIn && !onSignedOut) return '/login';
+      if (loggedIn && (onSignedOut || state.matchedLocation == '/')) {
         return '/children';
       }
       return null;
@@ -34,6 +39,14 @@ GoRouter buildRouter(WidgetRef ref) {
     routes: [
       GoRoute(path: '/', builder: (_, __) => const SplashScreen()),
       GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
+      GoRoute(
+        path: '/activate',
+        builder: (_, __) => const ActivateScreen(flow: CodeFlow.activate),
+      ),
+      GoRoute(
+        path: '/forgot-password',
+        builder: (_, __) => const ActivateScreen(flow: CodeFlow.reset),
+      ),
       GoRoute(
         path: '/children',
         builder: (_, __) => const ChildrenScreen(),

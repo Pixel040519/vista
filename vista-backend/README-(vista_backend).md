@@ -63,10 +63,27 @@ uvicorn main:app --reload --port 8000
 ### Auth Endpoints (Node.js)
 | Method | Endpoint | Description | Auth |
 |--------|----------|-------------|------|
-| POST | /api/auth/register | Register user | None |
+| POST | /api/auth/register | Create a staff account | Super Admin |
 | POST | /api/auth/login | Login | None |
 | POST | /api/auth/refresh | Refresh token | None |
 | GET | /api/auth/me | Get current user | Bearer |
+| POST | /api/auth/activation/request | Ask for an activation code | None |
+| POST | /api/auth/activation/verify | Verify the code → activation token | None |
+| POST | /api/auth/activation/complete | Set password, activate, sign in | None |
+| POST | /api/auth/password-reset/request | Ask for a reset code | None |
+| POST | /api/auth/password-reset/verify | Verify the code → reset token | None |
+| POST | /api/auth/password-reset/complete | Set a new password (no sign-in) | None |
+
+`register` was unauthenticated and took `role` from the request body, so anyone
+who could reach the API could mint a `super_admin`. It is now super-admin only,
+and `parent` is gone from its role list — **parent accounts exist only where an
+admin has authorized the email**, through `POST /api/students/:id/guardians/:guardianId/invitation`.
+
+The six unauthenticated activation and reset routes answer **identically whether
+or not the email has an account** — same message, same status, same timing — so
+they cannot be used to discover which addresses are registered. They are rate
+limited per IP and per email in every environment. See "Parent portal accounts
+are invitations" in the root `CLAUDE.md` before changing any of them.
 
 ### Student Endpoints
 | Method | Endpoint | Description | Role |

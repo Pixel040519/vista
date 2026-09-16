@@ -12,7 +12,11 @@ All mobile traffic goes to the Node API at `:5000` — never FastAPI directly (a
 
 Parent-relevant endpoints introduced in Phase 1 of the mobile plan (`2026_04_22_*` migrations):
 
-- `POST /api/auth/login`, `POST /api/auth/refresh`, `GET /api/auth/me` — reused from the web dashboard.
+- `POST /api/auth/login`, `POST /api/auth/refresh`, `GET /api/auth/me` — reused from the web dashboard. Login now refuses any account whose `account_status` is not `'active'`, with the same `Invalid credentials.` as a wrong password — telling an unauthenticated caller "that account exists but is not activated" is the disclosure the activation flow goes to such lengths to avoid.
+- `POST /api/auth/activation/{request,verify,complete}` — **the only way a parent account comes into existence.** There is no self-registration: an admin authorizes the email in the web portal, and these let its holder prove it and choose a password. `complete` signs them in. `screens/activate_screen.dart` (`CodeFlow.activate`) is the UI; `AuthRepository` has the three calls.
+- `POST /api/auth/password-reset/{request,verify,complete}` — the same three beats for an active account, reached from **Forgot password?** on the login screen (`CodeFlow.reset`). It deliberately does **not** sign the user in: signing in with the new password is the last step that proves the reset landed where it was meant to.
+
+  **`request` answers identically whether or not the email was ever invited** — same words, same status, same timing. `activate_screen.dart` therefore always advances to the code step and must never branch on what comes back; there is nothing in the response to branch on. Do not add a "no invitation found" state, and do not skip the step for an address the app thinks is unknown.
 - `GET /api/students`, `GET /api/students/:id` — filtered server-side to linked students for `role=parent`.
 - `GET /api/attendance?student_id=` — `enforceParentLinked` on the Node side.
 - `GET /api/grades?student_id=` — `enforceParentLinked`; returns `423 Locked` with `{reason}` when `students.academic_access_suspended`. Every row now carries `parent_subject_name`: non-null on one of MAPEH's four **areas** (Music, Arts, Physical Education, Health), null on a learning area. See "Composite learning areas" below.

@@ -62,6 +62,8 @@ Copy `vista-backend/.env.example` to `vista-backend/node-api/.env`. Required var
 - `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_PORT` — PostgreSQL connection
 - `JWT_SECRET`, `JWT_REFRESH_SECRET`, `JWT_EXPIRES_IN` — JWT auth
 - `PORT` — API port (default 5000)
+- `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` (`SMTP_SECURE` only on port 465) — parent activation and password-reset codes. **Without these an invited parent can never receive a code**, so the activation flow stops at its first screen. Any provider works; a Gmail account with 2FA and an App Password is enough for development.
+- `MAIL_TRANSPORT=console` — development only. Prints codes to the API log instead of sending them, so the flow can be walked with no mail server. It **refuses to start** when `NODE_ENV=production`, because logging codes is what the rest of that design exists to avoid.
 
 ## Architecture
 
@@ -84,10 +86,10 @@ is a deliberate decision, not a small one.
 PostgreSQL database `vista_db`. Schema: `vista-backend/database/vistaDB_query.sql`. Migrations: `vista-backend/database/migrations/`.
 
 Key tables:
-- `users` — admin/teacher/parent accounts. Name fields are `surname`/`first_name`/`middle_name` (no `full_name`, no `home_address` on users). `photo_path` (TEXT, relative path under `/uploads/profile/`) is the parent's avatar shown to the guard on the SecurePass scan result; uploaded via `POST /api/profile/me/photo`.
+- `users` — admin/teacher/parent accounts. Name fields are `surname`/`first_name`/`middle_name` (no `full_name`, no `home_address` on users). `account_status` (`'pending'` | `'active'` | `'revoked'`, default `'active'`) gates sign-in and is what makes an **invited but not yet activated** parent expressible: such a row has `password_hash` **NULL** — the column dropped its NOT NULL for exactly this — and a CHECK keeps `'active'` and a NULL hash from ever coexisting. `email` is unique **case-insensitively** (`users_email_lower_unique`); login matches the same way, or an invitation issued for `Rosa@x.com` would not be found by a parent who types `rosa@x.com`. `photo_path` (TEXT, relative path under `/uploads/profile/`) is the parent's avatar shown to the guard on the SecurePass scan result; uploaded via `POST /api/profile/me/photo`.
 - `students` — student profiles with LRN, grade_level, section, QR code for SecurePass. `grade_level`/`section`/`enrollment_status` are the **denormalised snapshot of the active school year** — every roster query reads them directly; the year-by-year record lives in `student_enrollments`, and the two are reconciled by the rollover when a year is activated. `enrollment_status` (`'pending'` | `'enrolled'` | `'transferred_out'` | `'dropped'` | `'graduated'`) gates who appears on a teacher's class list: only `'enrolled'` does. `is_active` is a separate axis — **on the roll vs archived**, not an enrolment state. `FALSE` means the learner has been taken off the active roll: the record, its grades, attendance and behaviour logs all survive, but every roster query in Node and FastAPI filters `s.is_active = TRUE`, so they leave class lists, dashboards and risk scoring. `archived_at` / `archived_by` / `archived_reason` say when, by whom and why — **`archived_by IS NULL` means the system archived them** when a school year was activated, rather than an admin. See "Archiving a learner" below. `qr_generated_by` (UUID, FK `users.id`) is stamped by `POST /api/students/:id/generate-qr` so the guard scan flow can identify the parent who pressed Generate and skip the guardian picker. `qr_fetcher_type` (`'self'` | `'auth'` | NULL) + `qr_fetcher_id` bind the active QR to a chosen fetcher: `'self'` → `users.id` of the parent themself, `'auth'` → `authorized_pickup_persons.id`, NULL → legacy/admin-generated path that falls back to the full authorized list. **Expiry policy depends on `qr_fetcher_type`**: `'self'` and NULL/admin QRs use time-based expiry (20 min parents, 30 min admins) AND one-time use; `'auth'` QRs are **single-use only with no time expiry** (the authorized fetcher has no account access to refresh, so a timer would strand them at the gate). Either way, a successful `/verify` clears `qr_code`, `qr_expires_at`, `qr_fetcher_type`, and `qr_fetcher_id`.
 - `student_enrollments` — one row per `(student_id, school_year_id)`, carrying **two independent facts**. `status` (`'pending'` | `'enrolled'` | `'transferred_out'` | `'dropped'`) answers *is this learner attending this school year* and is owned by the Enrollment page. `outcome` (`'promoted'` | `'retained'` | `'graduated'`, NULL until the year is closed) answers *how did the year end for them* and is owned by the Year-End Promotion wizard. They are orthogonal — a learner is enrolled in 2025-2026 **and** promoted at the end of it — so writing one must never overwrite the other. `remarks` and `outcome_remarks` split the same way. `decided_by`/`decided_at` record who made the call.
-- `parent_student` — many-to-many guardian↔student link. Each row holds the guardian's own contact details. `parent_id` (FK `users.id`, nullable) is their **parent portal account**, the login the `vista_parent` app uses, and is NULL for a contact-only guardian. **An email is one login:** creating an account for an email that already belongs to a parent reuses that account and leaves its password alone (the sibling case), while one belonging to a teacher or admin is refused. `UNIQUE(parent_id, student_id)` means one account appears under a learner once. Every writer goes through `ensureParentAccount()` in `student.routes.js`.
+- `parent_student` — many-to-many guardian↔student link. Each row holds the guardian's own contact details. `parent_id` (FK `users.id`, nullable) is their **parent portal account**, the login the `vista_parent` app uses, and is NULL for a contact-only guardian. **An email is one login:** inviting an email that already belongs to a parent reuses that account (the sibling case) rather than minting a second, while one belonging to a teacher or admin is refused. `parent_id` is set the moment the invitation is created, not when the parent activates — so the sibling reuse, the `UNIQUE` below and every guardian read work the same whether the account is Pending Activation or Active. `UNIQUE(parent_id, student_id)` means one account appears under a learner once. Every writer goes through `grantParentAccess()` in `utils/parentInvitations.js` — the invitation-era replacement for `ensureParentAccount()`, which took a password an admin had typed. See "Parent portal accounts are invitations" below.
 - `authorized_pickup_persons` — non-account fetchers (yaya, lola, driver, relative) a parent has authorized to pick up a specific child. Unlike `parent_student` rows these have **no portal account** — they're scoped to `(parent_id, student_id)`, hold their own `surname`/`first_name`/`middle_name`/`relationship`/`photo_path`, and are managed exclusively by the owning parent through `/api/pickup-persons` from the vista_parent app. The Pickup QR tab lets the parent pick one of these as the fetcher before generating the QR; the chosen row's `id` lands in `students.qr_fetcher_id` and the `vista_guard` scan result renders the photo verbatim.
 - `teacher_assignments` / `class_assignments` — teacher↔class/subject mappings, scoped to a school year; unique per `(grade_level, section, subject, school_year)`.
 - `attendance` — per-student, per-subject, per-day record (Present/Absent/Late/Excused); unique on `(student_id, date, subject_id)` so each teacher records independently per subject. `school_year_id` (nullable, FK `school_years.id`) records **which year the attendance belongs to**, derived from the subject on write — `subjects` is scoped per school year, so the subject is authoritative. It is deliberately **not** derived from the date: consecutive school years leave months uncovered between one year's `end_date` and the next one's `start_date`, and every record falling in such a gap used to belong to no year at all and was invisible to every year-scoped query. NULL means genuinely unattributable (a legacy row with no subject) and counts for no year.
@@ -112,6 +114,8 @@ Key tables:
 - `school_years` — SY management via `is_active` (one) + `is_upcoming` (many). No `is_current` column. `period_model` (`'4Q'` | `'3T'`) and `grading_policy` (`'DO8_2015'` | `'DO15_2026'` | `'ZERO_BASED'`) declare **how that year is graded** — see "Grading periods & transmutation" below.
 - `sections` — class sections per grade level + school year. `adviser_id` (UUID, FK `users.id`, `ON DELETE SET NULL`) is the **class adviser** — the teacher responsible for the section as a whole, as distinct from the per-subject rows in `teacher_assignments`. See "Class advisers" below.
 - `competency_domains` / `competency_skills` / `ece_competency_records` — competency tracker for **descriptively-assessed** grade levels. `rating_scale` (`'EGFNA'` | `'CODVBG'` | `'ABCDE'`) is stamped on every record and a pairwise CHECK ties it to the legal codes for that scale. Unique on `(student_id, skill_id, school_year_id, quarter)`.
+- `parent_invitations` — one row per portal invitation: `user_id`, the authorized `email`, `invited_by`/`invited_at`, `expires_at` (30 days), `consumed_at`, `revoked_at`/`revoked_by`, plus the **live one-time code on the same row** (`code_hash`, `code_issued_at`, `code_expires_at`, `code_attempts`). Keeping the code here rather than in a table of its own is what makes "issuing a new code invalidates the previous unused one" automatic instead of a rule to enforce. `code_hash` is NULL at invite time, because no message is sent then. A partial unique index allows exactly **one live invitation per account** (`WHERE consumed_at IS NULL AND revoked_at IS NULL`), and `ON DELETE CASCADE` on `user_id` is load-bearing — removing a parent's last guardian row hard-deletes their `users` row.
+- `password_reset_codes` — the same code discipline for an active account's self-service reset. Deliberately **not** folded into `parent_invitations`: an invitation is a thing an admin creates, sees and revokes, while a reset code is ephemeral and belongs to the account holder.
 - `grade_level_assessment` — per `(school_year_id, grade_level)`: `assessment_mode` (`'numeric'` | `'descriptive'`) + `rating_scale` (required for descriptive, NULL for numeric). Zero rows = built-in defaults, so it is additive. See "Assessment mode" below.
 
 Supported grade levels: **Kinder, Grades 1–6**. Pre-Nursery, Nursery and Pre-Kinder
@@ -893,6 +897,83 @@ starts at the school year that was active when
 `2026_08_21_student_enrollments.sql` ran; earlier rosters cannot be reconstructed.
 The wizard has no record of remedial classes, which is why the 1-2-failed case is
 flagged for a human rather than decided.
+
+## Parent portal accounts are invitations
+
+**An admin authorizes an email address. They never set, see, or can recover a
+parent's password.** This replaced a model where the admin typed the password
+into the guardian form, which meant the school held a family's credential and
+had to pass it along through some channel VISTA does not own — a text message, a
+note in a bag, or saying it out loud at the gate.
+
+The lifecycle is five states, **derived, never stored twice** — `utils/parentAccess.js`,
+mirrored in `vista-dashboard/src/utils/parentAccess.js` on the `utils/roles.js`
+convention. Two facts already answer it (`users.account_status` and the account's
+newest `parent_invitations` row), and deriving keeps them from disagreeing:
+
+| | |
+|---|---|
+| **Pending Activation** | email authorized, no code issued, nothing sent |
+| **Activation In Progress** | a live code exists — 10 minutes, 5 attempts |
+| **Active** | password set by the parent; signs in normally |
+| **Revoked** | an admin withdrew access; record and history untouched |
+| **Expired** | the invitation passed its 30 days unused |
+
+**Exactly one transition sends an email, and only a parent can trigger it.** An
+admin pressing Add Invitation or Reissue Invitation sends nothing — which is
+what stops a mistyped address from mailing a stranger, and stops the admin
+console being usable to flood an inbox. The code is requested from the app.
+
+**The unauthenticated endpoints must not reveal whether an email has an account.**
+`POST /api/auth/activation/{request,verify,complete}` and the
+`password-reset` trio are the only unauthenticated routes taking an arbitrary
+email, so they are the ones an attacker would use to enumerate parents. Four
+things hold that shut, and they only work together — treat a change to one as a
+change to all four:
+
+1. **One message per branch.** `GENERIC_ACTIVATION` for a request,
+   `GENERIC_CODE_REJECTED` for a failed verify — identical for an uninvited
+   address, a revoked invitation, a wrong code and an expired one.
+2. **One status code per endpoint**, whatever happened.
+3. **Equal work, not just equal time.** A sleep floor alone is invisible behind
+   a 250 ms bcrypt, so the branch with nothing to check runs `equalizeWork()`
+   (a dummy bcrypt compare against a fixed hash) and both branches then
+   `settle()` to a common floor. Both live in `utils/authCodes.js`.
+4. **Mail is queued, never awaited** (`utils/mailer.js`), so the response never
+   carries the SMTP provider's latency as a tell.
+
+The raw code is never logged — only its bcrypt hash is stored. `MAIL_TRANSPORT=console`
+prints codes for local development and **refuses to start when `NODE_ENV=production`**.
+
+**Activation signs the parent in; a password reset does not.** They proved they
+hold the address and chose the password in one session, so there is nothing
+further to prove. A reset ends at the sign-in screen, which is the last step
+that proves it landed where it was meant to.
+
+**Revoking is per *account*, not per learner.** One email is one login across
+every child, so `DELETE /students/:id/guardians/:gid/invitation` cuts the parent
+off from all of them; the response counts the others so the admin is told rather
+than finding out from a support call. Taking a guardian off one child is the
+separate `DELETE /guardians/:gid`.
+
+**Batch upload can finally create access.** The guardians sheet refused logins
+only because it would have meant plain-text family passwords in a file that gets
+emailed around. An invitation carries no password, so an `invite` column now
+authorizes the address — and the guardian still proves they control it before
+anything activates.
+
+**Two holes closed in the same change**, because the first line of this design is
+"no self-registration": `POST /api/auth/register` was unauthenticated **and**
+took `role` from the body (anyone reachable could mint a `super_admin`) — it is
+now `authorizeSuperAdmin` with `parent` removed from its role list; and the rate
+limiter ran only under `NODE_ENV=production` as one global bucket, so
+`middleware/rateLimit.js` adds per-route, per-IP **and** per-email limiters that
+run in every environment.
+
+Still open: Google Sign-In is designed for but not built — the UI carries the
+slot and a sign-in-method column, and the invitation must remain the gate if it
+is added (a Google identity is only ever matched against an already-authorized
+address, never allowed to create an account).
 
 ## Role-Based Access (summary)
 
