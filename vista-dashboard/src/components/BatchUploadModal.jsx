@@ -208,6 +208,13 @@ function resolveGuardian(g, accounts) {
 function validateGuardians(guardians, studentLrns, accounts) {
   const perStudent = new Map() // lrn -> { count, emails, names }
   const orAccount = 'required, unless the email belongs to a parent account'
+  // One email is one person across the whole file, not only within a learner.
+  // The same address on several learners under the SAME name is one parent
+  // entered on each of their children and is fine; under a different name it is
+  // a typo or two people sharing a mailbox, and the first invitation would mint
+  // an account under one of the names and strand the other rows. The API
+  // refuses it too — this only says so before the upload.
+  const firstByEmail = new Map() // email -> { surname, first_name }
   return guardians.map(g => {
     const errors = []
     const lrn = g.lrn
@@ -263,6 +270,14 @@ function validateGuardians(guardians, studentLrns, accounts) {
       const name = `${r.surname}|${r.first_name}`.toLowerCase()
       if (r.surname && r.first_name && seen.names.has(name)) errors.push(issue('surname', 'this guardian is listed twice for this student'))
       seen.names.add(name)
+
+      if (email) {
+        const first = firstByEmail.get(email)
+        if (!first) firstByEmail.set(email, r)
+        else if (!sameName(first.surname, r.surname) || !sameName(first.first_name, r.first_name)) {
+          errors.push(issue('email', 'is used elsewhere in this file under a different name'))
+        }
+      }
     }
     return errors
   })

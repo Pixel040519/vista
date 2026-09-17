@@ -6,6 +6,7 @@ import {
 import clsx from 'clsx'
 import { format } from 'date-fns'
 import { PhoneInput } from './UI'
+import { useGuardianEmailCheck, describeEmailCheck, DUPLICATE_ON_LEARNER_MESSAGE } from './GuardianEmailCheck'
 import { studentApi, curriculumApi } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { titleCase } from '../utils/nameHelper'
@@ -16,7 +17,7 @@ import { titleCase } from '../utils/nameHelper'
 // Editing a student still uses StudentForm in pages/Students.jsx.
 
 const GRADE_LEVELS = ['Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
-// Same list as pages/Students.jsx and the batch upload.
+// Same list as components/GuardianManager.jsx and the batch upload.
 const RELATIONSHIPS = ['Mother','Father','Guardian','Grandmother','Grandfather','Aunt','Uncle','Sibling','Other']
 const PHONE_RE = /^\+63 9\d{2} \d{7}$/ // what PhoneInput stores
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
@@ -117,6 +118,20 @@ function GuardianCard({ g, index, errors, studentFirstName, studentAddress, onCh
   const [results, setResults] = useState([])
   const [searching, setSearching] = useState(false)
   const searchSeq = useRef(0)
+  // The learner does not exist yet, so there is no student_id to test for an
+  // existing guardian — only what an email would link to or be refused for.
+  const emailCheck = useGuardianEmailCheck(null)
+  const recheck = (patch = {}) => emailCheck.check({ ...g, ...patch })
+  const emailView = describeEmailCheck(emailCheck.current(g))
+
+  // The card's own validation lives in the wizard, which cannot see this check,
+  // so a refusal is carried on the guardian as `email_block` — Next then stops on
+  // it like any other field error. It is never posted: the payload is built field
+  // by field.
+  const blockMessage = g.mode === 'new' && emailView?.invalid ? emailView.message : null
+  useEffect(() => {
+    if ((g.email_block || null) !== blockMessage) set({ email_block: blockMessage })
+  }, [blockMessage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Debounced, and a stale answer for an older query is dropped.
   useEffect(() => {
@@ -222,15 +237,17 @@ function GuardianCard({ g, index, errors, studentFirstName, studentAddress, onCh
       )}
 
       {/* New guardian details */}
-      {g.mode === 'new' && (
+      {g.mode === 'new' && (<>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field label="Surname" error={e.surname}>
             <input className={inputCls(e.surname)} value={g.surname} placeholder="Dela Cruz"
-              onChange={ev => set({ surname: ev.target.value })} onBlur={ev => set({ surname: titleCase(ev.target.value) })}/>
+              onChange={ev => set({ surname: ev.target.value })}
+              onBlur={ev => { const surname = titleCase(ev.target.value); set({ surname }); recheck({ surname }) }}/>
           </Field>
           <Field label="First name" error={e.first_name}>
             <input className={inputCls(e.first_name)} value={g.first_name} placeholder="Rosa"
-              onChange={ev => set({ first_name: ev.target.value })} onBlur={ev => set({ first_name: titleCase(ev.target.value) })}/>
+              onChange={ev => set({ first_name: ev.target.value })}
+              onBlur={ev => { const first_name = titleCase(ev.target.value); set({ first_name }); recheck({ first_name }) }}/>
           </Field>
           <Field label="Middle name" optional>
             <input className="input" value={g.middle_name}
@@ -249,13 +266,29 @@ function GuardianCard({ g, index, errors, studentFirstName, studentAddress, onCh
               the guardian's contact email and the address the portal invitation
               authorizes are the same address, and offering both would invite
               them to disagree. */}
-          <Field label={g.invite ? 'Registered Email Address' : 'Email'} optional={!g.invite} error={e.email}
+          <Field label={g.invite ? 'Registered Email Address' : 'Email'} optional={!g.invite}
+            error={blockMessage ? (
+              <>
+                {blockMessage}
+                {emailView?.account && (
+                  <>
+                    {' '}
+                    <button type="button"
+                      onClick={() => { emailCheck.reset(); set({ mode: 'link', parent: emailView.account, same_address: !emailView.account.home_address, email_block: null }) }}
+                      className="font-medium text-brand-600 hover:text-brand-700 underline underline-offset-2">
+                      Link that account instead
+                    </button>
+                  </>
+                )}
+              </>
+            ) : (e.email || undefined)}
             hint={g.invite ? 'Used by the parent/guardian to activate their VISTA account in the mobile app.' : undefined}>
-            <input type="email" className={inputCls(e.email)} value={g.email} placeholder="name@email.com"
-              onChange={ev => set({ email: ev.target.value })}/>
+            <input type="email" className={inputCls(e.email || blockMessage)} value={g.email} placeholder="name@email.com"
+              aria-invalid={!!(e.email || blockMessage) || undefined}
+              onChange={ev => set({ email: ev.target.value })} onBlur={() => recheck()}/>
           </Field>
         </div>
-      )}
+      </>)}
 
       {/* Relationship for a linked account sits beside its flags */}
       {g.parent && (
@@ -422,6 +455,18 @@ export default function AddStudentWizard({ gradeOptions, onSubmit, onClose }) {
       if (g.invite) {
         if (!EMAIL_RE.test(g.email)) e.email = 'Needed to invite them to the parent portal'
       } else if (g.email && !EMAIL_RE.test(g.email)) e.email = "This isn't a valid email"
+      if (!e.email && g.email_block) e.email = g.email_block
+      // The API's same-learner rule, applied where it cannot reach: this learner
+      // has no record yet, so two cards claiming one address would both insert.
+      // Positions come from the card's `key`, never from object identity —
+      // updateGuardian() re-checks a card that is not in `guardians` yet, so an
+      // indexOf on the object would quietly match nothing.
+      const mine = guardians.findIndex(o => o.key === g.key)
+      const typed = g.email.trim().toLowerCase()
+      if (!e.email && typed && guardians.some((o, i) =>
+        o.key !== g.key && o.mode === 'new' && o.email.trim().toLowerCase() === typed && i < mine)) {
+        e.email = DUPLICATE_ON_LEARNER_MESSAGE
+      }
     }
     const asksAddress = g.mode === 'new' || (g.parent && !g.parent.home_address)
     if (asksAddress && !g.same_address && !g.home_address.trim()) e.home_address = 'Enter their home address'

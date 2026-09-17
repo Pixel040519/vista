@@ -90,8 +90,13 @@ export const studentApi = {
   setArchived:    (id, archived, reason) =>
     api.patch(`/students/${id}/archive`, { archived, ...(reason ? { reason } : {}) }),
   generateQR:     (id, m)  => api.post(`/students/${id}/generate-qr`, { expiresInMinutes: m }),
-  searchParents:  (q)       => api.get('/students/parents/search', { params: { q } }),
+  // `studentId` (optional) marks parents who already look after that learner.
+  searchParents:  (q, studentId) =>
+    api.get('/students/parents/search', { params: { q, ...(studentId ? { student_id: studentId } : {}) } }),
   addGuardian:    (id, d)   => api.post(`/students/${id}/guardians`, d),
+  // What saving a guardian with this email would do. Silent: it runs on blur,
+  // and a failure only means no early warning — the save still enforces it.
+  checkGuardianEmail: (d) => api.post('/students/guardian-email-check', d, { silent: true }),
   updateGuardian: (id, gid, d) => api.put(`/students/${id}/guardians/${gid}`, d),
   removeGuardian: (id, gid) => api.delete(`/students/${id}/guardians/${gid}`),
   // Parent/Guardian Account Access. Separate from updateGuardian on purpose:

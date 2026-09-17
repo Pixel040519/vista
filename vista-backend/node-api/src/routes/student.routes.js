@@ -10,7 +10,7 @@ const { normaliseName } = require('../utils/nameHelper')
 const { ROLES, gradeScopeForRole, canManageGrade, isScopedAdmin, isAnyAdmin } = require('../utils/roles')
 const { assertSectionsExist } = require('../utils/sections')
 const { MANUAL_STATUS_IDS, clampToManual, statusLabel } = require('../utils/enrollment')
-const { grantParentAccess, revokeParentAccess, changeInvitationEmail, latestInvitation, accessNote } = require('../utils/parentInvitations')
+const { grantParentAccess, revokeParentAccess, changeInvitationEmail, latestInvitation, accessNote, alsoLinkedNote } = require('../utils/parentInvitations')
 const { resolveParentAccess } = require('../utils/parentAccess')
 
 // The active school year, needed both to validate section names and to stamp
@@ -129,6 +129,9 @@ const guardianSchema = Joi.object({
   is_emergency_contact:  Joi.boolean().default(false),
   ...portalAccountShape(Joi.boolean().default(false)),
   home_address:          Joi.string().trim().min(1).required(),
+  // Link to a parent account that already exists instead of entering someone
+  // new. The account supplies the name, email and phone; see insertGuardian.
+  link_parent_id:        Joi.string().uuid().optional().allow(null),
 })
 
 const updateGuardianSchema = Joi.object({
@@ -183,7 +186,20 @@ const getStudentWithGuardians = async (id, { includeArchived = false } = {}) => 
                                    'revoked_at',      inv.revoked_at,
                                    'has_live_code',   inv.has_live_code,
                                    'code_expires_at', inv.code_expires_at
-                                 ) END
+                                 ) END,
+         -- The other learners this parent's account also covers. Name, contact
+         -- details and address are shared across all of them, so an admin
+         -- editing one entry has to be told whose records the save also changes.
+         'other_learners',       (SELECT COALESCE(json_agg(json_build_object(
+                                           'id', os.id,
+                                           'name', os.surname || ', ' || os.first_name,
+                                           'grade_level', os.grade_level
+                                         ) ORDER BY os.surname, os.first_name), '[]'::json)
+                                    FROM parent_student o
+                                    JOIN students os ON os.id = o.student_id
+                                   WHERE ps.parent_id IS NOT NULL
+                                     AND o.parent_id = ps.parent_id
+                                     AND o.student_id <> ps.student_id)
        ) ORDER BY ps.is_emergency_contact DESC, ps.created_at ASC) FILTER (WHERE ps.id IS NOT NULL), '[]') AS guardians,
        -- The class adviser, resolved from the learner's snapshot. grade_level
        -- and section on students ARE the active year's snapshot, so the section
@@ -236,6 +252,27 @@ const getStudentWithGuardians = async (id, { includeArchived = false } = {}) => 
 }
 
 /**
+ * What a viewer may see of a learner's guardians.
+ *
+ * `other_learners` names every learner on a parent's account, so it is removed
+ * for teachers and parents — a parent reading their own child's record must not
+ * learn the names of the other parent's children from another relationship —
+ * and a scoped admin sees only siblings inside their own grade scope, the rest
+ * counted but not named (the same redaction the adviser conflict message uses).
+ */
+const presentStudent = (student, role) => {
+  if (!student) return student
+  for (const g of student.guardians || []) {
+    if (!isAnyAdmin(role)) { delete g.other_learners; continue }
+    if (isScopedAdmin(role)) {
+      g.other_learners = (g.other_learners || []).map(o => canManageGrade(role, o.grade_level)
+        ? o : { id: null, name: null, grade_level: null, out_of_scope: true })
+    }
+  }
+  return student
+}
+
+/**
  * Attach the derived access state to each guardian.
  *
  * Done here, in JS, rather than in SQL: resolveParentAccess() is mirrored on
@@ -261,6 +298,69 @@ const decorateGuardians = (student) => {
 // email is refused; the lookup is case-insensitive); what it no longer does is
 // accept a password from anyone but the parent.
 
+// ── Helper: refuse a parent account's email on a separate guardian ──
+//
+// One rule for every place an admin types a guardian's email: an address that
+// belongs to a parent account can never be saved on a separate guardian entry.
+// The only ways forward are to clear it or to link that account — "Already has
+// a parent account", or the form's "Link that account instead" — where the
+// account supplies the name, email and phone.
+//
+// It used to link automatically when the typed name matched. That kept the
+// typed details on this learner's entry while the account and its other
+// learners kept theirs, so a different phone number typed into "New guardian"
+// quietly forked the parent's record. Linking is now always explicit, and a
+// real change to the parent's details goes through Edit, which reaches every
+// learner on the account.
+//
+// The refusal names no one. A staff address is left alone: it can be a plain
+// contact email, and the invitation paths refuse it on their own.
+const refuseParentAccountEmail = async (client, email) => {
+  if (!email) return
+  const r = await client.query(
+    "SELECT 1 FROM users WHERE LOWER(email)=LOWER($1) AND role='parent' LIMIT 1", [email]
+  )
+  if (r.rows.length) throw new AppError('This email already has a parent account. Link that account instead of entering the guardian separately.', 409)
+}
+
+// ── Helper: one email means one person ────────────────────────
+//
+// refuseParentAccountEmail() above covers an address that already has an
+// ACCOUNT. This covers the other half — an address already typed on a
+// contact-only guardian, which lives on parent_student and was checked nowhere:
+//
+//   same learner   two entries claiming one address. Refused, which is what the
+//                  batch upload has always done for a sheet ("listed twice for
+//                  LRN …"); the three entry points simply disagreed.
+//   any learner    the same address under a DIFFERENT name. Refused, because it
+//                  is either a typo or two people sharing a mailbox, and the
+//                  first invitation would mint an account under one of the two
+//                  names and strand the other entry — with no way to tell later
+//                  which learner the account's holder actually belongs to.
+//
+// The same address under the SAME name on another learner is exactly one parent
+// entered on each of their children, and stays allowed; linkContactEntriesForAccount()
+// gathers those the moment an account exists.
+//
+// Neither refusal names anyone: typing an address must not reveal whose it is.
+const assertGuardianEmailFree = async (client, { studentId, email, surname, first_name, exceptRowId = null }) => {
+  if (!email) return
+  const r = await client.query(
+    `SELECT student_id, surname, first_name
+       FROM parent_student
+      WHERE LOWER(email) = LOWER($1) AND ($2::uuid IS NULL OR id <> $2::uuid)`,
+    [email, exceptRowId]
+  )
+  for (const row of r.rows) {
+    if (studentId && row.student_id === studentId) {
+      throw new AppError('Another guardian of this learner already uses this email.', 409)
+    }
+    if (!sameName(row.surname, surname) || !sameName(row.first_name, first_name)) {
+      throw new AppError('This email is already used by a guardian with a different name. Check the email.', 409)
+    }
+  }
+}
+
 // ── Helper: insert guardian row ───────────────────────────────
 // Returns { parentId, account }: `account` is grantParentAccess's answer
 // ({id, outcome}) when portal access was asked for, null otherwise.
@@ -273,42 +373,43 @@ const insertGuardian = async (client, studentId, g, actorId = null) => {
   // Priority 1: link to existing parent account directly
   if (g.link_parent_id) {
     parentId = g.link_parent_id
-    // Pull contact info from the existing user account
+    // Pull contact info from the existing user account. role='parent' is not
+    // optional: without it an id that was not a parent account fell through to
+    // the plain insert below with parentId still set, so any user id — a
+    // teacher's, an admin's — could be attached as a learner's parent.
     const existing = await client.query(
-      'SELECT surname, first_name, middle_name, email, phone FROM users WHERE id=$1',
+      "SELECT surname, first_name, middle_name, email, phone FROM users WHERE id=$1 AND role='parent'",
       [g.link_parent_id]
     )
-    if (existing.rows.length) {
-      const u = existing.rows[0]
-      await client.query(
-        `INSERT INTO parent_student
-           (parent_id, student_id, surname, first_name, middle_name, email, phone, relationship, is_authorized_pickup, is_emergency_contact, home_address)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT DO NOTHING`,
-        [parentId, studentId, u.surname, u.first_name, u.middle_name,
-         u.email, u.phone, g.relationship,
-         g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, g.home_address || null]
-      )
-      return { parentId, account: null }
+    if (!existing.rows.length) {
+      throw new AppError('That parent account could not be found. Search for it again.', 422)
     }
+    const u = existing.rows[0]
+    await client.query(
+      `INSERT INTO parent_student
+         (parent_id, student_id, surname, first_name, middle_name, email, phone, relationship, is_authorized_pickup, is_emergency_contact, home_address)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT DO NOTHING`,
+      [parentId, studentId, u.surname, u.first_name, u.middle_name,
+       u.email, u.phone, g.relationship,
+       g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, g.home_address || null]
+    )
+    return { parentId, account: null }
   }
 
   let account = null
+  // A parent account's email on a new guardian is refused, invited or not —
+  // linking an existing account is link_parent_id above, and only that. The
+  // second guard covers an address already typed on another guardian; inside a
+  // create-student payload the rows insert one after another in this same
+  // transaction, so the second one sees the first without any extra check.
+  await refuseParentAccountEmail(client, g.email)
+  await assertGuardianEmailFree(client, { studentId, email: g.email, surname, first_name })
   if (g.invite && g.email) {
     account = await grantParentAccess(client, {
       email: g.email, surname, first_name, middle_name, phone: g.phone, invitedBy: actorId,
     })
     parentId = account.id
-  } else if (g.email) {
-    // Not invited, but the address may already belong to a parent account —
-    // link to it so this learner appears in a portal they already use.
-    // Case-insensitive now: users.email is unique by LOWER(email), so an exact
-    // match would miss "Rosa@mail.com" against a stored "rosa@mail.com" and
-    // strand the learner outside a portal that exists.
-    const found = await client.query(
-      "SELECT id FROM users WHERE LOWER(email)=LOWER($1) AND role='parent' LIMIT 1", [g.email]
-    )
-    if (found.rows.length) parentId = found.rows[0].id
   }
 
   await client.query(
@@ -325,14 +426,18 @@ const insertGuardian = async (client, studentId, g, actorId = null) => {
 // GET /api/students/parents/search?q=juan — search existing parent accounts
 router.get('/parents/search', authorizeAnyAdmin, async (req, res, next) => {
   try {
-    const { q = '' } = req.query
+    const { q = '', student_id } = req.query
     if (!q.trim()) return res.json({ parents: [] })
+    // Optional: the learner a guardian is being added to, so a parent who already
+    // looks after them can be marked rather than offered and then refused.
+    const forStudent = /^[0-9a-f-]{36}$/i.test(String(student_id || '')) ? student_id : null
 
     const result = await query(
       `SELECT u.id, u.surname, u.first_name, u.middle_name, u.full_name,
-              u.email, u.phone,
+              u.email, u.phone, u.account_status,
               MAX(ps.home_address) AS home_address,
-              COUNT(ps.student_id) AS linked_students
+              COUNT(ps.student_id) AS linked_students,
+              COALESCE(BOOL_OR(ps.student_id = $2::uuid), FALSE) AS already_linked
        FROM users u
        LEFT JOIN parent_student ps ON ps.parent_id = u.id
        WHERE u.role = 'parent'
@@ -340,7 +445,7 @@ router.get('/parents/search', authorizeAnyAdmin, async (req, res, next) => {
        GROUP BY u.id
        ORDER BY u.surname, u.first_name
        LIMIT 10`,
-      [`%${q.trim()}%`]
+      [`%${q.trim()}%`, forStudent]
     )
     res.json({ parents: result.rows })
   } catch (err) { next(err) }
@@ -514,6 +619,8 @@ router.get('/:id', async (req, res, next) => {
       if (!link.rowCount) throw new AppError('Student not found.', 404)
     }
 
+    presentStudent(student, req.user.role)
+
     if (req.user.role === 'teacher') {
       delete student.home_address
       for (const g of student.guardians || []) {
@@ -653,7 +760,7 @@ router.post('/', authorizeAnyAdmin, async (req, res, next) => {
       return await getStudentWithGuardians(sRes.rows[0].id)
     })
 
-    res.status(201).json({ message: 'Student added successfully.', student })
+    res.status(201).json({ message: 'Student added successfully.', student: presentStudent(student, req.user.role) })
   } catch (err) { next(err) }
 })
 
@@ -668,6 +775,76 @@ router.post('/', authorizeAnyAdmin, async (req, res, next) => {
 // archived learner therefore passed the preview and then failed the upload. The
 // `archived` split is what the preview needs to say something useful about it —
 // those rows are restorable, not duplicates to be renumbered.
+// POST /api/students/guardian-email-check — { email, surname, first_name, student_id? }
+//
+// The early warning behind a guardian's email field (Manage Guardians and the
+// Add Student wizard). It answers what SAVING would do, and says nothing about
+// whose an address is:
+//
+//   available         nothing else uses it
+//   restricted        not usable for app access (staff); fine as a contact email
+//   parent_account    a parent account uses it — save refuses; `account` is
+//                     returned so the form can offer "Link that account instead"
+//   already_guardian  that account already looks after student_id — save refuses,
+//                     and there is nothing left to link
+//   duplicate_on_learner  another guardian of student_id already uses it
+//   name_conflict     another guardian anywhere uses it under a different name
+//
+// Names are not compared: any parent account's email is refused on a separate
+// guardian (refuseParentAccountEmail(), which the save enforces), so the answer
+// does not depend on them. Returning `account` discloses nothing an admin could
+// not already get by searching the email under "Already has a parent account";
+// no reply puts an owner's name into a message.
+router.post('/guardian-email-check', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const { error, value } = Joi.object({
+      email:      Joi.string().email().required(),
+      surname:    Joi.string().allow('').optional(),
+      first_name: Joi.string().allow('').optional(),
+      student_id: Joi.string().uuid().allow(null, '').optional(),
+    }).validate(req.body || {}, { stripUnknown: true })
+    if (error) return res.json({ status: 'available' })
+
+    const r = await query(
+      `SELECT u.id, u.role, u.surname, u.first_name, u.middle_name, u.full_name, u.email, u.phone,
+              u.account_status,
+              (SELECT COUNT(*)::int FROM parent_student WHERE parent_id=u.id) AS linked_students,
+              (SELECT ps.home_address FROM parent_student ps
+                WHERE ps.parent_id=u.id AND ps.home_address IS NOT NULL
+                ORDER BY ps.created_at DESC LIMIT 1) AS home_address,
+              ($2::uuid IS NOT NULL AND EXISTS (
+                SELECT 1 FROM parent_student WHERE parent_id=u.id AND student_id=$2::uuid)) AS already_linked
+         FROM users u
+        WHERE LOWER(u.email)=LOWER($1)
+        LIMIT 1`,
+      [value.email.trim(), value.student_id || null]
+    )
+    const u = r.rows[0]
+    if (u && u.role !== ROLES.PARENT) return res.json({ status: 'restricted' })
+    if (u && u.already_linked) return res.json({ status: 'already_guardian' })
+    if (u) {
+      const { role, already_linked, ...account } = u
+      return res.json({ status: 'parent_account', account })
+    }
+
+    // No account holds it; another guardian entry still might. Mirrors
+    // assertGuardianEmailFree(), which is what the save enforces.
+    const others = await query(
+      `SELECT student_id, surname, first_name FROM parent_student WHERE LOWER(email) = LOWER($1)`,
+      [value.email.trim()]
+    )
+    for (const row of others.rows) {
+      if (value.student_id && row.student_id === value.student_id) {
+        return res.json({ status: 'duplicate_on_learner' })
+      }
+      if (!sameName(row.surname, value.surname) || !sameName(row.first_name, value.first_name)) {
+        return res.json({ status: 'name_conflict' })
+      }
+    }
+    res.json({ status: 'available' })
+  } catch (err) { next(err) }
+})
+
 router.post('/check-lrns', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const lrns = Array.isArray(req.body?.lrns) ? req.body.lrns : []
@@ -848,7 +1025,35 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
         guardianProblems.push(`${who}: surname, first name and phone are required unless the email belongs to a parent account`)
       }
     }))
+
+    // One email is one person, inside the file as well. The same address under
+    // two names is a typo or two people sharing a mailbox — either way the first
+    // invitation would mint an account under one of them and strand the other.
+    // The same address under the same name on several learners is one parent
+    // entered on each of their children, which is ordinary and stays allowed.
+    const byEmail = new Map()
+    rows.forEach((r, i) => r.guardians.forEach((g) => {
+      const key = String(g.email || '').trim().toLowerCase()
+      if (!key) return
+      const first = byEmail.get(key)
+      if (!first) { byEmail.set(key, { row: i + 1, lrn: r.lrn, g, invite: !!g.invite }); return }
+      if (!sameName(first.g.surname, g.surname) || !sameName(first.g.first_name, g.first_name)) {
+        guardianProblems.push(
+          `Row ${i + 1} (LRN ${r.lrn}) guardian ${g.email}: the same email is used on row ${first.row} (LRN ${first.lrn}) under a different name`
+        )
+      }
+      // Access belongs to the account, not to one child: a Yes anywhere in the
+      // person's rows invites them once, and every row of theirs links to it.
+      if (g.invite) first.invite = true
+    }))
     if (guardianProblems.length) throw new AppError(guardianProblems.join('; '), 422)
+
+    // What the loop below actually sends per row: the group's answer, not the
+    // row's own, so a blank beside a Yes does not leave that learner unlinked.
+    const inviteFor = (g) => {
+      const key = String(g.email || '').trim().toLowerCase()
+      return key ? !!byEmail.get(key)?.invite : false
+    }
 
     const inserted = await withTransaction(async (client) => {
       const out = []
@@ -874,9 +1079,19 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
           const { parentId, account: granted } = await insertGuardian(client, res.rows[0].id, account
             ? { link_parent_id: account.id, relationship: g.relationship, home_address,
                 is_authorized_pickup: g.is_authorized_pickup, is_emergency_contact: g.is_emergency_contact }
-            : { ...g, home_address }, req.user.id)
+            : { ...g, home_address, invite: inviteFor(g) }, req.user.id)
           guardians++
           if (parentId) linked++
+          // An account this file has just created is an existing account for
+          // every later row of that person, so they take the link path — which
+          // returns before the email guards — instead of failing on the address
+          // the row before them had just claimed.
+          if (granted?.id && g.email) {
+            accounts.set(g.email.trim().toLowerCase(), {
+              id: granted.id, surname: g.surname, first_name: g.first_name,
+              middle_name: g.middle_name, phone: g.phone, home_address,
+            })
+          }
           // Only a row that actually produced a new invitation counts. A row
           // whose email already had an active account was linked, not invited.
           if (granted && (granted.outcome === 'invited' || granted.outcome === 'reissued')) invited++
@@ -975,7 +1190,7 @@ router.put('/:id', authorizeAnyAdmin, async (req, res, next) => {
       return r.rows[0]
     })
 
-    res.json({ message: 'Student updated.', student: await getStudentWithGuardians(updated.id) })
+    res.json({ message: 'Student updated.', student: presentStudent(await getStudentWithGuardians(updated.id), req.user.role) })
   } catch (err) { next(err) }
 })
 
@@ -1053,10 +1268,32 @@ router.post('/:id/guardians', authorizeAnyAdmin, async (req, res, next) => {
     await assertStudentInScope(req, req.params.id)
     const { error, value } = guardianSchema.validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
+
+    let linkNote = ''
+    if (value.link_parent_id) {
+      // An invitation is meaningless on an account that already exists, and the
+      // link path returns before reaching it anyway — drop it so nothing reads it.
+      value.invite = false
+      const acct = await query(
+        `SELECT u.email, u.account_status, u.first_name,
+                EXISTS (SELECT 1 FROM parent_student WHERE parent_id=u.id AND student_id=$2) AS already_linked
+           FROM users u WHERE u.id=$1 AND u.role='parent'`,
+        [value.link_parent_id, req.params.id]
+      )
+      if (!acct.rows.length) throw new AppError('That parent account could not be found. Search for it again.', 422)
+      const a = acct.rows[0]
+      // UNIQUE(parent_id, student_id) with ON CONFLICT DO NOTHING in the link
+      // insert would otherwise answer "Guardian added." while adding nothing.
+      if (a.already_linked) throw new AppError(`${a.email} is already a guardian of this learner.`, 409)
+      linkNote = ` Linked to the existing parent account of ${a.email}, so this learner now appears in that account.`
+        + (a.account_status === 'revoked' ? ' That account’s app access is revoked, so they cannot sign in until it is restored.'
+          : a.account_status === 'pending' ? ' That account has not been activated yet.' : '')
+    }
+
     const { account } = await withTransaction((client) => insertGuardian(client, req.params.id, value, req.user.id))
     res.json({
-      message: 'Guardian added.' + accessNote(account?.outcome, value.email),
-      student: await getStudentWithGuardians(req.params.id),
+      message: 'Guardian added.' + (linkNote || accessNote(account?.outcome, value.email)) + alsoLinkedNote(account?.alsoLinked),
+      student: presentStudent(await getStudentWithGuardians(req.params.id), req.user.role),
     })
   } catch (err) { next(err) }
 })
@@ -1071,10 +1308,10 @@ router.put('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, nex
     const { invite, ...fields } = value
     const normed = normaliseName(fields)
 
-    const account = await withTransaction(async (client) => {
+    const result = await withTransaction(async (client) => {
       const cur = await client.query(
         `SELECT ps.parent_id, ps.surname, ps.first_name, ps.middle_name, ps.email, ps.phone,
-                u.account_status
+                u.account_status, (u.password_hash IS NOT NULL) AS has_password
            FROM parent_student ps
            LEFT JOIN users u ON u.id = ps.parent_id
           WHERE ps.id=$1 AND ps.student_id=$2
@@ -1084,8 +1321,18 @@ router.put('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, nex
       if (!cur.rows.length) throw new AppError('Guardian not found.', 404)
       const row = cur.rows[0]
 
+      // A guardian with an account is one person across every learner on it, so
+      // who they are and how to reach them is written to ALL of that account's
+      // entries (and to the account itself), while what they are to THIS learner
+      // stays on this entry. Before this split each learner held its own copy, an
+      // edit changed one copy, and a sibling's record kept showing the old name
+      // and number — including to the guard reading it at the gate.
+      const SHARED = ['surname', 'first_name', 'middle_name', 'phone', 'home_address']
+      const PER_LEARNER = ['relationship', 'is_authorized_pickup', 'is_emergency_contact']
+      const linked = !!row.parent_id
+
       const sets = []; const params = []
-      for (const f of ['surname','first_name','middle_name','email','phone','relationship','is_authorized_pickup','is_emergency_contact','home_address']) {
+      for (const f of linked ? PER_LEARNER : [...SHARED, 'email', ...PER_LEARNER]) {
         if (normed[f] !== undefined) { params.push(normed[f] ?? null); sets.push(`${f}=$${params.length}`) }
       }
 
@@ -1098,12 +1345,21 @@ router.put('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, nex
 
       // Once a parent has activated, this address is their sign-in identity and
       // stops being the school's to edit. While the invitation is unclaimed it
-      // very much is theirs to edit: a mistyped address is the likeliest reason
-      // an invitation is never used, and refusing the correction would strand
-      // the guardian with no way back.
+      // very much is the school's: a mistyped address is the likeliest reason an
+      // invitation is never used, and refusing the correction would strand the
+      // guardian with no way back.
+      //
+      // The test is "has this account ever set a password", NOT "is it active".
+      // A revoked account that was once active still belongs to a parent who
+      // proved the address; checking status let an admin rewrite that login
+      // the moment access was revoked. Clearing it is refused below too.
       if (row.parent_id && emailChanged) {
-        if (row.account_status === 'active') {
-          throw new AppError('This guardian has activated their account, so their sign-in email can only be changed by them in the VISTA Parent app.', 409)
+        const taken = await client.query(
+          'SELECT 1 FROM users WHERE LOWER(email)=LOWER($1) AND id<>$2', [merged.email || '', row.parent_id]
+        )
+        if (taken.rows.length) throw new AppError('This email is already used by another account. Use a different email.', 409)
+        if (row.has_password) {
+          throw new AppError('This guardian has already activated an account with this email, so it cannot be changed here.', 409)
         }
         if (!merged.email || Joi.string().email().validate(merged.email).error) {
           throw new AppError('A valid Registered Email Address is needed.', 422)
@@ -1112,6 +1368,18 @@ router.put('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, nex
       }
 
       let acct = null
+
+      // A contact-only guardian cannot take an email that already has a parent
+      // account — whenever the email changes, and on Add Invitation even when it
+      // did not. That entry stays a separate person; to make it the account,
+      // remove it and link the account instead.
+      if (!row.parent_id && (emailChanged || invite)) await refuseParentAccountEmail(client, merged.email)
+      if (emailChanged) {
+        await assertGuardianEmailFree(client, {
+          studentId: req.params.id, email: merged.email,
+          surname: merged.surname, first_name: merged.first_name, exceptRowId: req.params.guardianId,
+        })
+      }
       if (invite) {
         if (row.parent_id) {
           throw new AppError('This guardian already has parent portal access. Use Reissue Invitation or Revoke Access instead.', 409)
@@ -1137,18 +1405,55 @@ router.put('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, nex
         acct.email = merged.email
       }
 
-      if (!sets.length) throw new AppError('Nothing to update.', 400)
-      sets.push('updated_at=NOW()')
-      params.push(req.params.guardianId, req.params.id)
-      await client.query(
-        `UPDATE parent_student SET ${sets.join(',')} WHERE id=$${params.length-1} AND student_id=$${params.length}`, params
-      )
-      return acct
+      let sharedWith = null
+      if (linked) {
+        const shared = SHARED.filter(f => normed[f] !== undefined)
+        const values = shared.map(f => normed[f] ?? null)
+        // The email was already moved on the account and its invitation by
+        // changeInvitationEmail(); this carries it to the account's entries.
+        if (emailChanged) { shared.push('email'); values.push(merged.email) }
+
+        if (shared.length) {
+          await client.query(
+            `UPDATE parent_student SET ${shared.map((f, i) => `${f}=$${i + 1}`).join(', ')}, updated_at=NOW()
+              WHERE parent_id=$${shared.length + 1}`,
+            [...values, row.parent_id]
+          )
+          // users has no home_address; the name parts and phone live on both.
+          const onAccount = shared.filter(f => ['surname', 'first_name', 'middle_name', 'phone'].includes(f))
+          if (onAccount.length) {
+            await client.query(
+              `UPDATE users SET ${onAccount.map((f, i) => `${f}=$${i + 1}`).join(', ')}, updated_at=NOW()
+                WHERE id=$${onAccount.length + 1}`,
+              [...onAccount.map(f => normed[f] ?? null), row.parent_id]
+            )
+          }
+          const others = await client.query(
+            'SELECT COUNT(*)::int AS n FROM parent_student WHERE parent_id=$1 AND student_id<>$2',
+            [row.parent_id, req.params.id]
+          )
+          sharedWith = others.rows[0].n
+        }
+      }
+
+      if (!sets.length && sharedWith === null) throw new AppError('Nothing to update.', 400)
+      if (sets.length) {
+        sets.push('updated_at=NOW()')
+        params.push(req.params.guardianId, req.params.id)
+        await client.query(
+          `UPDATE parent_student SET ${sets.join(',')} WHERE id=$${params.length-1} AND student_id=$${params.length}`, params
+        )
+      }
+      return { acct, sharedWith }
     })
 
+    const { acct: account, sharedWith } = result
+    const sharedNote = sharedWith
+      ? ` Their shared details now match on the ${sharedWith} other learner${sharedWith === 1 ? '' : 's'} on this parent's account.`
+      : ''
     res.json({
-      message: 'Guardian updated.' + accessNote(account?.outcome, account?.email),
-      student: await getStudentWithGuardians(req.params.id),
+      message: 'Guardian updated.' + sharedNote + accessNote(account?.outcome, account?.email) + alsoLinkedNote(account?.alsoLinked),
+      student: presentStudent(await getStudentWithGuardians(req.params.id), req.user.role),
     })
   } catch (err) { next(err) }
 })
@@ -1185,6 +1490,22 @@ router.post('/:id/guardians/:guardianId/invitation', authorizeAnyAdmin, async (r
       const email = String(value.email || row.email || '').trim()
       if (!email || Joi.string().email().validate(email).error) throw new AppError(PORTAL_EMAIL_MSG, 422)
 
+      // An address that already has a parent account other than this entry's
+      // own is refused, never re-invited through this guardian.
+      const owner = await client.query(
+        "SELECT id FROM users WHERE LOWER(email)=LOWER($1) AND role='parent' LIMIT 1", [email]
+      )
+      if (owner.rows.length && owner.rows[0].id !== row.parent_id) {
+        throw new AppError(row.parent_id
+          ? 'This email is already used by another parent account. Use a different email.'
+          : 'This email already has a parent account. Link that account instead of entering the guardian separately.', 409)
+      }
+
+      await assertGuardianEmailFree(client, {
+        studentId: req.params.id, email,
+        surname: row.surname, first_name: row.first_name, exceptRowId: req.params.guardianId,
+      })
+
       const acct = await grantParentAccess(client, {
         email,
         surname: row.surname, first_name: row.first_name, middle_name: row.middle_name, phone: row.phone,
@@ -1205,12 +1526,12 @@ router.post('/:id/guardians/:guardianId/invitation', authorizeAnyAdmin, async (r
         'UPDATE parent_student SET parent_id=$1, email=$2, updated_at=NOW() WHERE id=$3 AND student_id=$4',
         [acct.id, email, req.params.guardianId, req.params.id]
       )
-      return { outcome: acct.outcome, email }
+      return { outcome: acct.outcome, email, alsoLinked: acct.alsoLinked }
     })
 
     res.json({
-      message: 'Parent portal access updated.' + accessNote(result.outcome, result.email),
-      student: await getStudentWithGuardians(req.params.id),
+      message: 'Parent portal access updated.' + accessNote(result.outcome, result.email) + alsoLinkedNote(result.alsoLinked),
+      student: presentStudent(await getStudentWithGuardians(req.params.id), req.user.role),
     })
   } catch (err) { next(err) }
 })
@@ -1251,7 +1572,7 @@ router.delete('/:id/guardians/:guardianId/invitation', authorizeAnyAdmin, async 
       : ''
     res.json({
       message: `Parent portal access revoked.${alsoNote} The guardian record and all history are unchanged.`,
-      student: await getStudentWithGuardians(req.params.id),
+      student: presentStudent(await getStudentWithGuardians(req.params.id), req.user.role),
     })
   } catch (err) { next(err) }
 })

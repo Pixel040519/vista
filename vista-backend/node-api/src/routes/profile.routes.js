@@ -46,6 +46,17 @@ router.put('/me', async (req, res, next) => {
     if (!result.rows.length) throw new AppError('User not found.', 404)
 
     const user = result.rows[0]
+
+    // A parent's name and number also sit on each of their guardian entries,
+    // which is what the school's pages and the guard's scan read. Without this a
+    // parent correcting their own name in the app changed it nowhere anyone saw.
+    if (user.role === 'parent') {
+      await query(
+        `UPDATE parent_student SET surname=$1, first_name=$2, middle_name=$3, phone=$4, updated_at=NOW()
+          WHERE parent_id=$5`,
+        [surname, first_name, middle_name || null, phone, user.id]
+      )
+    }
     user.photo_url = photoUrlFromPath(req, user.photo_path)
     delete user.photo_path
     user.grade_scope = gradeScopeForRole(user.role)

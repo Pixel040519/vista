@@ -80,26 +80,27 @@ const grantParentAccess = async (client, { email, surname, first_name, middle_na
     const u = exist.rows[0]
     if (u.role !== ROLES.PARENT) {
       throw new AppError(
-        `${email} already belongs to a staff account. Use a different email for parent portal access.`,
+        // Not "a staff account": the reply must not say what an address is.
+        'This email can’t be used for parent portal access. Use a different email.',
         409
       )
     }
 
     // Already signing in. This is the sibling case — the same parent gaining a
     // second child — and there is nothing to activate.
-    if (u.account_status === 'active') return { id: u.id, outcome: 'linked' }
+    if (u.account_status === 'active') return { id: u.id, outcome: 'linked', alsoLinked: await linkContactEntriesForAccount(client, u.id) }
 
     // Revoked but holding a password: they had an account and it was switched
     // off. Restoring it is the right move; making them re-activate would be
     // asking them to prove something they already proved.
     if (u.password_hash) {
       await client.query("UPDATE users SET account_status='active', updated_at=NOW() WHERE id=$1", [u.id])
-      return { id: u.id, outcome: 'restored' }
+      return { id: u.id, outcome: 'restored', alsoLinked: await linkContactEntriesForAccount(client, u.id) }
     }
 
     await client.query("UPDATE users SET account_status='pending', updated_at=NOW() WHERE id=$1", [u.id])
     await issueInvitation(client, { userId: u.id, email, invitedBy })
-    return { id: u.id, outcome: 'reissued' }
+    return { id: u.id, outcome: 'reissued', alsoLinked: await linkContactEntriesForAccount(client, u.id) }
   }
 
   // password_hash stays NULL: there is no password until the parent sets one,
@@ -111,8 +112,49 @@ const grantParentAccess = async (client, { email, surname, first_name, middle_na
   )
   const id = created.rows[0].id
   await issueInvitation(client, { userId: id, email, invitedBy })
-  return { id, outcome: 'invited' }
+  return { id, outcome: 'invited', alsoLinked: await linkContactEntriesForAccount(client, id) }
 }
+
+/**
+ * Gather the same person's other guardian entries onto this account.
+ *
+ * One parent is usually entered on each of their children before any of them
+ * has an account, so the moment one is granted the others are contact-only rows
+ * holding that same address — a learner missing from the parent's app, an entry
+ * that cannot be invited (the address now has an account) and one that cannot
+ * be edited through its email field. They are the same person: same address,
+ * same name, and assertGuardianEmailFree() makes any other combination
+ * impossible to create.
+ *
+ * The account's own row supplies name, email and phone, exactly as the explicit
+ * link path does, so every entry for that person agrees from the moment it is
+ * linked — a phone that differed is replaced, which the caller's message says.
+ *
+ * The NOT IN is load-bearing: a learner who already holds this account through
+ * another entry would trip UNIQUE(parent_id, student_id) as an anonymous 23505.
+ */
+const linkContactEntriesForAccount = async (client, userId) => {
+  const r = await client.query(
+    `UPDATE parent_student ps
+        SET parent_id = u.id, surname = u.surname, first_name = u.first_name,
+            middle_name = u.middle_name, email = u.email, phone = u.phone, updated_at = NOW()
+       FROM users u
+      WHERE u.id = $1
+        AND ps.parent_id IS NULL
+        AND LOWER(ps.email) = LOWER(u.email)
+        AND LOWER(TRIM(ps.surname)) = LOWER(TRIM(u.surname))
+        AND LOWER(TRIM(ps.first_name)) = LOWER(TRIM(u.first_name))
+        AND ps.student_id NOT IN (SELECT student_id FROM parent_student WHERE parent_id = $1)
+      RETURNING ps.student_id`,
+    [userId]
+  )
+  return r.rowCount
+}
+
+/** The sentence that keeps a replaced phone number from being silent. */
+const alsoLinkedNote = (n) => n
+  ? ` Also linked to ${n} other learner${n === 1 ? '' : 's'} on this account; their contact details now match it.`
+  : ''
 
 /**
  * Withdraw access. Kills any live invitation and any unused code with it, and
@@ -157,7 +199,7 @@ const accessNote = (outcome, email) => {
     case 'restored':
       return ` Portal access for ${email} was restored. Their existing password still works.`
     case 'linked':
-      return ` ${email} already has an active parent account, so this guardian was linked to it. No invitation was needed and no password was changed.`
+      return ` ${email} already has a parent account, so this guardian was linked to it instead of being entered separately. No invitation was sent and nothing about that account's access changed.`
     default:
       return ''
   }
@@ -166,6 +208,8 @@ const accessNote = (outcome, email) => {
 module.exports = {
   latestInvitation,
   issueInvitation,
+  linkContactEntriesForAccount,
+  alsoLinkedNote,
   grantParentAccess,
   revokeParentAccess,
   changeInvitationEmail,

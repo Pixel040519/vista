@@ -60,9 +60,18 @@ export const accessOf = (guardian) =>
 export const accessClasses = (state) => TONE_CLASSES[STATE_BY_ID[state]?.tone] || TONE_CLASSES.slate
 export const accessLabel = (state) => STATE_BY_ID[state]?.label || 'No account access'
 
-export const canInvite = (state) => state === 'none' || state === 'revoked' || state === 'expired'
+// Everything but Active can be granted, re-issued or restored — re-issuing a
+// pending invitation restarts its 30 days and cancels any unused code.
+export const canInvite = (state) => state !== 'active'
 export const canRevoke = (state) => state === 'pending' || state === 'in_progress' || state === 'active'
-export const canChangeEmail = (state) => state !== 'active'
+// Editable only while no password was ever set. Checked on the password, not
+// the status: a revoked account that was once active still belongs to a parent
+// who proved the address.
+export const canChangeEmail = (guardian) => !guardian?.has_account || !guardian?.has_password
+
+// Short chip text for tight spaces like the guardian list.
+const SHORT = { none: 'No app', pending: 'Pending', in_progress: 'In progress', active: 'Active', revoked: 'Revoked', expired: 'Expired' }
+export const accessShortLabel = (state) => SHORT[state] || 'No app'
 
 /**
  * The button label for granting access, which is not always "Add Invitation".

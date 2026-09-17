@@ -61,17 +61,22 @@ const resolveParentAccess = ({ hasAccount, accountStatus, invitation } = {}) => 
   return invitation.has_live_code ? STATE_BY_ID.in_progress : STATE_BY_ID.pending
 }
 
-/** Can an admin issue (or re-issue) a code-bearing invitation for this row? */
-const canInvite = (state) => state === 'none' || state === 'revoked' || state === 'expired'
+/**
+ * Can an admin grant, re-issue or restore access? Everything but Active — a
+ * pending invitation can be re-issued for a fresh 30 days, and doing so
+ * cancels any unused code.
+ */
+const canInvite = (state) => state !== 'active'
 
 /** Can an admin revoke? Anything that currently grants or promises access. */
 const canRevoke = (state) => state === 'pending' || state === 'in_progress' || state === 'active'
 
 /**
- * The email is editable only while the invitation is unclaimed. Once the parent
- * has activated, the address is their sign-in identity and is theirs to change.
+ * The email is editable only while no password has ever been set on the
+ * account. Checked on the password, not the status: a revoked account that was
+ * once active still belongs to a parent who proved the address.
  */
-const canChangeEmail = (state) => state !== 'active'
+const canChangeEmail = ({ hasAccount, hasPassword } = {}) => !hasAccount || !hasPassword
 
 module.exports = {
   PARENT_ACCESS_STATES,

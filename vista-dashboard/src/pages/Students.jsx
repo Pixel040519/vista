@@ -1,33 +1,27 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
-  Search, Plus, Filter, ChevronRight, Pencil, Trash2, Archive, ArchiveRestore,
-  UserPlus, Users, ShieldCheck, Phone, Mail, Upload, RotateCw, Ban, Lock
+  Search, Plus, Filter, ChevronRight, Pencil, Archive, ArchiveRestore, UserPlus, Users, Upload
 } from 'lucide-react'
 import { studentApi, curriculumApi } from '../api/client'
-import { LoadingSpinner, EmptyState, Modal, PhoneInput } from '../components/UI'
+import { LoadingSpinner, EmptyState, Modal } from '../components/UI'
 import BatchUploadModal from '../components/BatchUploadModal'
 import AddStudentWizard from '../components/AddStudentWizard'
+import GuardianManager from '../components/GuardianManager'
 import { useAuth } from '../context/AuthContext'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
 import { STUDENT_STATUSES, NO_RECORD, statusLabel, statusClasses } from '../utils/enrollment'
-import { accessOf, accessLabel, accessClasses, accessDetail, grantLabel, canInvite, canRevoke } from '../utils/parentAccess'
 
 // ── School constants ──────────────────────────────────────────
 const GRADE_LEVELS = ['Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6']
 
 // Sections loaded dynamically from API per grade level
 
-const RELATIONSHIPS = ['Mother','Father','Guardian','Grandmother','Grandfather','Aunt','Uncle','Sibling','Other']
 const GENDER_STYLE  = { Male:'bg-blue-50 text-blue-700', Female:'bg-pink-50 text-pink-700' }
 
-const emptyGuardian = () => ({
-  surname:'', first_name:'', middle_name:'', relationship:'Mother', email:'', phone:'',
-  is_authorized_pickup:true, is_emergency_contact:false, invite:false, home_address:'', link_parent_id:null
-})
 
 // ── Age calculator helper ─────────────────────────────────────
 const calcAge = (dob) => {
@@ -183,313 +177,6 @@ function StudentForm({ initial, onSubmit, onClose, gradeOptions }) {
   )
 }
 
-// ── Guardian Manager (for edit modal) ────────────────────────
-// ── Inline Guardian Form (shared by add + edit) ──────────────
-function GuardianForm({ initial, mode, onSubmit, onCancel }) {
-  const [form, setForm] = useState(initial)
-  const [saving, setSaving] = useState(false)
-  const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
-  // The row's access state decides whether the email is still the school's to
-  // edit. Once a parent has activated it is their sign-in identity.
-  const access = accessOf(form)
-  const emailLocked = access.id === 'active'
-
-  const handleSubmit = async e => {
-    e.preventDefault()
-    setSaving(true)
-    try { await onSubmit(form) } finally { setSaving(false) }
-  }
-
-  const isAdd = mode === 'add'
-  const nameDisplay = formatName(form)
-
-  return (
-    <form onSubmit={handleSubmit}
-      className={clsx('p-4 rounded-xl border space-y-3',
-        isAdd ? 'bg-brand-50 border-brand-200' : 'bg-amber-50 border-amber-200'
-      )}>
-      <p className={clsx('text-xs font-semibold uppercase tracking-wide',
-        isAdd ? 'text-brand-700' : 'text-amber-700'
-      )}>
-        {isAdd ? 'New Guardian' : 'Edit Guardian'}
-      </p>
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Surname *</label>
-          <input className="input text-sm py-2" value={form.surname}
-            onChange={e => set('surname', e.target.value)} onBlur={e => set('surname', titleCase(e.target.value))} required />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">First Name *</label>
-          <input className="input text-sm py-2" value={form.first_name}
-            onChange={e => set('first_name', e.target.value)} onBlur={e => set('first_name', titleCase(e.target.value))} required />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Middle Name</label>
-          <input className="input text-sm py-2" placeholder="Optional" value={form.middle_name}
-            onChange={e => set('middle_name', e.target.value)} onBlur={e => set('middle_name', titleCase(e.target.value))} />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Relationship *</label>
-          <select className="input text-sm py-2" value={form.relationship}
-            onChange={e => set('relationship', e.target.value)}>
-            {RELATIONSHIPS.map(r => <option key={r}>{r}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">
-            {form.invite || form.has_account ? 'Registered Email Address' : 'Email'}{form.invite && !form.has_account ? ' *' : ''}
-          </label>
-          <input className="input text-sm py-2" type="email"
-            placeholder={form.invite && !form.has_account ? 'Required to invite them' : 'Optional'}
-            value={form.email}
-            onChange={e => set('email', e.target.value)}
-            required={form.invite && !form.has_account}
-            readOnly={emailLocked}
-            disabled={emailLocked}
-          />
-          {emailLocked
-            ? <p className="text-xs text-slate-400 mt-1">This guardian has activated their account, so only they can change their sign-in email.</p>
-            : form.has_account
-              ? <p className="text-xs text-slate-400 mt-1">Can still be changed while the invitation is unclaimed.</p>
-              : null}
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">Phone *</label>
-          <PhoneInput className="input text-sm py-2 pr-10"
-            value={form.phone} onChange={v => set('phone', v)} required />
-        </div>
-        <div className="col-span-2">
-          <label className="block text-xs font-medium text-slate-600 mb-1">Home Address *</label>
-          <textarea className="input text-sm resize-none min-h-14" placeholder="House No., Street, Barangay, Municipality/City, Province"
-            value={form.home_address}
-            onChange={e => set('home_address', e.target.value)}
-            onBlur={e => set('home_address', e.target.value.trim())}
-            required/>
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-4">
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" checked={form.is_authorized_pickup}
-            onChange={e => set('is_authorized_pickup', e.target.checked)} />
-          <span className="text-xs text-slate-600 font-medium">Authorized for pickup</span>
-        </label>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" checked={form.is_emergency_contact ?? false}
-            onChange={e => set('is_emergency_contact', e.target.checked)} />
-          <span className="text-xs text-slate-600 font-medium">Emergency contact</span>
-        </label>
-
-      </div>
-
-      {/* Parent/Guardian Account Access. The admin authorizes an address; the
-          parent chooses their own password in the app. What stood here was a
-          password field, which meant the school held a family's credential and
-          had to pass it along by some channel VISTA does not own. */}
-      <div className="border-t border-slate-100 pt-3 space-y-2.5">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Parent/Guardian Account Access</p>
-          {form.has_account && (
-            <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium', accessClasses(access.id))}>
-              {accessLabel(access.id)}
-            </span>
-          )}
-        </div>
-
-        {form.has_account ? (
-          <p className="text-xs text-slate-500">
-            {accessDetail(form)}. Use the buttons on the guardian&rsquo;s row to reissue or revoke.
-          </p>
-        ) : (
-          <>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={form.invite ?? false}
-                onChange={e => set('invite', e.target.checked)} />
-              <span className="text-xs text-slate-600 font-medium">Add Invitation</span>
-            </label>
-            {form.invite && (
-              <p className="text-xs text-slate-500">
-                The address above is authorized for activation. <strong className="font-semibold">No message is sent now</strong> &mdash;
-                the parent opens the VISTA Parent app, enters this email, receives a one-time code and creates their own password.
-              </p>
-            )}
-            <p className="flex items-center gap-1.5 text-xs text-slate-400">
-              <Lock size={12}/> VISTA never asks you to set or view a parent&rsquo;s password.
-            </p>
-          </>
-        )}
-      </div>
-      <div className="flex gap-2">
-        <button type="button" onClick={onCancel} className="btn-secondary flex-1 py-2 text-sm">Cancel</button>
-        <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center py-2 text-sm">
-          {saving ? (isAdd ? 'Adding...' : 'Saving...') : (isAdd ? 'Add Guardian' : 'Save Changes')}
-        </button>
-      </div>
-    </form>
-  )
-}
-
-// ── Guardian Manager ──────────────────────────────────────────
-function GuardianManager({ studentId, guardians, onRefresh }) {
-  const [mode, setMode]       = useState(null)  // null | 'add' | guardianId (for edit)
-  const closeForm = () => setMode(null)
-
-  // The server's message says what happened to a requested portal account
-  // (created, or linked to one that already existed), so show it verbatim.
-  const handleAdd = async (form) => {
-    const res = await studentApi.addGuardian(studentId, form)
-    toast.success(res.data?.message || 'Guardian added.', { duration: 6000 })
-    closeForm()
-    onRefresh()
-  }
-
-  const handleEdit = async (guardianId, form) => {
-    const res = await studentApi.updateGuardian(studentId, guardianId, form)
-    toast.success(res.data?.message || 'Guardian updated.', { duration: 6000 })
-    closeForm()
-    onRefresh()
-  }
-
-  const handleInvite = async (guardianId, name) => {
-    try {
-      const res = await studentApi.inviteGuardian(studentId, guardianId)
-      toast.success(res.data?.message || 'Invitation issued.', { duration: 6000 })
-      onRefresh()
-    } catch {}
-  }
-
-  // Worth a confirm, and worth naming the scope: an account is one login for
-  // every child it is linked to, so this is not scoped to the learner on screen.
-  // Taking a guardian off one child is Remove guardian, the button beside it.
-  const handleRevoke = async (guardianId, name) => {
-    if (!window.confirm(
-      `Revoke parent portal access for ${name}?
-
-` +
-      'They will stop being able to sign in to the VISTA Parent app for every child linked to their account. ' +
-      'The guardian record, grades, attendance and dismissal history are unchanged, and access can be granted again later.'
-    )) return
-    try {
-      const res = await studentApi.revokeGuardianAccess(studentId, guardianId)
-      toast.success(res.data?.message || 'Parent portal access revoked.', { duration: 6000 })
-      onRefresh()
-    } catch {}
-  }
-
-  const handleRemove = async (guardianId, name) => {
-    if (!window.confirm(`Remove ${name} as guardian?`)) return
-    try {
-      await studentApi.removeGuardian(studentId, guardianId)
-      toast.success('Guardian removed.')
-      onRefresh()
-    } catch {}
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-          Guardians / Parents ({guardians.length})
-        </p>
-        {mode !== 'add' && (
-          <button type="button" onClick={() => setMode('add')}
-            className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 px-2.5 py-1.5 rounded-lg hover:bg-brand-50 transition-colors">
-            <UserPlus size={13} /> Add Guardian
-          </button>
-        )}
-      </div>
-
-      {guardians.length === 0 && mode !== 'add'
-        ? <p className="text-sm text-slate-400 text-center py-4">No guardians linked yet.</p>
-        : (
-          <div className="space-y-2">
-            {guardians.map(g => (
-              <div key={g.id}>
-                {mode === g.id ? (
-                  <GuardianForm
-                    key={`edit-${g.id}-${g.is_emergency_contact}-${g.is_authorized_pickup}`}
-                    mode="edit"
-                    initial={{ surname: g.surname, first_name: g.first_name, middle_name: g.middle_name || '', relationship: g.relationship, home_address: g.home_address || '',
-                      email: g.email || '', phone: g.phone || '',
-                      is_authorized_pickup: g.is_authorized_pickup, is_emergency_contact: g.is_emergency_contact ?? false,
-                      has_account: g.has_account ?? false, invite: false,
-                      // carried through so the form can resolve the access state
-                      account_status: g.account_status, invitation: g.invitation, access: g.access, has_password: g.has_password }}
-                    onSubmit={(form) => handleEdit(g.id, form)}
-                    onCancel={closeForm}
-                  />
-                ) : (
-                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-sm font-bold text-brand-700 flex-shrink-0">
-                        {nameInitial(g)}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-slate-800">{formatName(g)}</p>
-                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                          <span className="text-xs text-slate-500">{g.relationship}</span>
-                          {g.email && <span className="flex items-center gap-1 text-xs text-slate-400 truncate"><Mail size={10}/>{g.email}</span>}
-                          {g.phone && <span className="flex items-center gap-1 text-xs text-slate-400"><Phone size={10}/>{g.phone}</span>}
-                          {g.is_authorized_pickup && (
-                            <span className="flex items-center gap-1 text-xs text-emerald-600 font-medium">
-                              <ShieldCheck size={10}/> Pickup
-                            </span>
-                          )}
-                          {g.is_emergency_contact && (
-                            <span className="text-xs text-red-600 font-semibold">🚨 Emergency</span>
-                          )}
-                          {g.has_account && (
-                            <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium', accessClasses(accessOf(g).id))}>
-                              {accessLabel(accessOf(g).id)}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-slate-400 mt-1">{accessDetail(g)}</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-1 flex-shrink-0 ml-2">
-                      {/* Access actions sit on the row, not in the form: reissuing or
-                          revoking is a decision about access, not an edit to the person. */}
-                      {g.email && canInvite(accessOf(g).id) && (
-                        <button onClick={() => handleInvite(g.id, formatName(g))} title={grantLabel(g)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors">
-                          <RotateCw size={13}/>
-                        </button>
-                      )}
-                      {canRevoke(accessOf(g).id) && (
-                        <button onClick={() => handleRevoke(g.id, formatName(g))} title="Revoke Access"
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
-                          <Ban size={13}/>
-                        </button>
-                      )}
-                      <button onClick={() => setMode(g.id)} title="Edit"
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-amber-500 hover:bg-amber-50 transition-colors">
-                        <Pencil size={13}/>
-                      </button>
-                      <button onClick={() => handleRemove(g.id, formatName(g))} title="Remove guardian"
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
-                        <Trash2 size={13}/>
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )
-      }
-
-      {mode === 'add' && (
-        <GuardianForm
-          mode="add"
-          initial={emptyGuardian()}
-          onSubmit={handleAdd}
-          onCancel={closeForm}
-        />
-      )}
-    </div>
-  )
-}
 
 // ── Archive / Restore Confirm ─────────────────────────────────
 //
@@ -1097,29 +784,13 @@ export default function Students() {
         {editTarget && <StudentForm initial={editTarget} onSubmit={handleEdit} onClose={() => setEditTarget(null)} gradeOptions={scopedGrades}/>}
       </Modal>
 
-      <Modal open={!!editGuardians} onClose={() => setEditGuardians(null)} title="Manage Guardians / Parents" size="lg">
+      <Modal open={!!editGuardians} onClose={() => setEditGuardians(null)} title="Manage Guardians / Parents" size="xl" selfScroll>
         {editGuardians && (
-          <div className="space-y-4">
-            <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl">
-              <div className="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center font-bold text-brand-700">
-                {nameInitial(editGuardians.student)}
-              </div>
-              <div>
-                <p className="font-semibold text-slate-800 text-sm">{formatName(editGuardians.student)}</p>
-                <p className="text-xs text-slate-500 font-mono">
-                  LRN: {editGuardians.student.lrn} · {editGuardians.student.grade_level} {editGuardians.student.section}
-                </p>
-              </div>
-            </div>
-            <GuardianManager
-              studentId={editGuardians.student.id}
-              guardians={editGuardians.student.guardians || []}
-              onRefresh={refreshGuardians}
-            />
-            <div className="pt-2 border-t border-slate-100">
-              <button onClick={() => setEditGuardians(null)} className="btn-secondary w-full justify-center">Done</button>
-            </div>
-          </div>
+          <GuardianManager
+            student={editGuardians.student}
+            onRefresh={refreshGuardians}
+            onClose={() => setEditGuardians(null)}
+          />
         )}
       </Modal>
 
