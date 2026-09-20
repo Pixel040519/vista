@@ -10,6 +10,7 @@ import clsx from 'clsx'
 import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
 import { useAuth } from '../context/AuthContext'
 import { ROLES, ROLE_LABELS } from '../utils/roles'
+import ParentAccounts from '../components/ParentAccounts'
 
 // ── School Data ───────────────────────────────────────────────
 const GRADE_LEVELS = [
@@ -856,6 +857,8 @@ function GuardForm({ initial, onSubmit, onClose, mode }) {
 export default function AccountManagement() {
   const { isSuperAdmin } = useAuth()
   const [tab, setTab] = useState('teachers')
+  const [showParentCreate, setShowParentCreate] = useState(false)
+  const [parentCount, setParentCount] = useState(0)
   const [teachers, setTeachers]   = useState([])
   const [loading, setLoading]     = useState(true)
   const [search, setSearch]       = useState('')
@@ -1037,7 +1040,9 @@ export default function AccountManagement() {
               ? `${active.length} active · ${inactive.length} inactive teacher${teachers.length !== 1 ? 's' : ''}`
               : tab === 'admins'
               ? `${admins.length} admin account${admins.length !== 1 ? 's' : ''}`
-              : `${guards.length} guard account${guards.length !== 1 ? 's' : ''}`}
+              : tab === 'guards'
+              ? `${guards.length} guard account${guards.length !== 1 ? 's' : ''}`
+              : `${parentCount} parent account${parentCount !== 1 ? 's' : ''}`}
           </p>
         </div>
         {tab === 'teachers' && (
@@ -1053,6 +1058,11 @@ export default function AccountManagement() {
         {tab === 'guards' && (
           <button onClick={() => setShowGuardCreate(true)} className="btn-primary">
             <Plus size={16} /> Add Guard
+          </button>
+        )}
+        {tab === 'parents' && (
+          <button onClick={() => setShowParentCreate(true)} className="btn-primary">
+            <Plus size={16} /> Add Parent
           </button>
         )}
       </div>
@@ -1087,7 +1097,27 @@ export default function AccountManagement() {
             )}>
             Guards
           </button>
+          <button onClick={() => setTab('parents')}
+            className={clsx(
+              'px-4 py-2 text-sm font-semibold transition-colors border-b-2 -mb-px',
+              tab === 'parents'
+                ? 'border-brand-500 text-brand-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            )}>
+            Parents
+          </button>
         </div>
+      )}
+
+      {/* The Parents tab is its own component — a roster of parent portal
+          accounts, plus the one thing a learner's page cannot do: attach
+          another learner to an account that already exists. */}
+      {tab === 'parents' && (
+        <ParentAccounts
+          createOpen={showParentCreate}
+          onCloseCreate={() => setShowParentCreate(false)}
+          onCountChange={setParentCount}
+        />
       )}
 
       {tab === 'teachers' && <>

@@ -20,33 +20,55 @@
 const { query } = require('../config/database');
 const { AppError } = require('../middleware/error.middleware');
 
-/** The set of `"<grade_level>|<name>"` keys defined in one school year. */
-const loadSectionKeys = async (schoolYearId) => {
+/** Case- and spacing-insensitive key for matching a name the user typed. */
+const norm = (s) => String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+/**
+ * `"<grade_level>|<name>"` (both normalised) -> the **stored** spelling of the
+ * name, for every section defined in one school year. The value is the real
+ * name rather than a presence flag because callers match on what someone typed
+ * and then have to save what `sections` actually holds.
+ */
+const loadSectionNames = async (schoolYearId) => {
   const r = await query(
     'SELECT grade_level, name FROM sections WHERE school_year_id=$1 AND is_active=TRUE',
     [schoolYearId]
   );
-  return new Set(r.rows.map(s => `${s.grade_level}|${s.name}`));
+  return new Map(r.rows.map(s => [`${norm(s.grade_level)}|${norm(s.name)}`, s.name]));
 };
 
 /**
  * Throw 400 if any row names a section that does not exist for its grade level
  * in the given school year. A blank section is always allowed — an unassigned
- * learner is legal, and both callers treat it that way.
+ * learner is legal, and every caller treats it that way.
+ *
+ * **Matching ignores case and inner spacing, and the row is rewritten in place
+ * to the stored spelling.** A section lives in five tables as a bare name
+ * string (see the header above), so "mabini" saved verbatim is not the section
+ * `sections` holds: the learner would sit in a section no roster joins to and
+ * no rename would ever reach. Validating and canonicalising therefore have to
+ * be the same step — a caller that checked leniently and then saved what it was
+ * given would be worse than one that refused. The batch upload is what needs
+ * it, since those values are typed into Excel by hand; the other callers pass
+ * values that came from a dropdown, where this is a no-op.
  *
  * @param {string} schoolYearId
- * @param {Array<{grade_level: string, section: string|null}>} rows
+ * @param {Array<{grade_level: string, section: string|null}>} rows  mutated in place
  * @param {(row, index) => string} describe  names the offending row in the message
  */
 const assertSectionsExist = async (schoolYearId, rows, describe) => {
   const withSection = rows.filter(r => r.section && String(r.section).trim());
   if (!withSection.length) return;
 
-  const valid = await loadSectionKeys(schoolYearId);
+  const names = await loadSectionNames(schoolYearId);
   const bad = [];
   rows.forEach((r, i) => {
-    if (r.section && !valid.has(`${r.grade_level}|${r.section}`)) {
+    if (!r.section || !String(r.section).trim()) return;
+    const stored = names.get(`${norm(r.grade_level)}|${norm(r.section)}`);
+    if (stored === undefined) {
       bad.push(`${describe(r, i)}: section "${r.section}" does not exist for ${r.grade_level}`);
+    } else {
+      r.section = stored;
     }
   });
   if (bad.length) throw new AppError(bad.join('; '), 400);
@@ -197,7 +219,7 @@ const loadSection = async (id) => {
 };
 
 module.exports = {
-  loadSectionKeys,
+  loadSectionNames,
   assertSectionsExist,
   sectionUsage,
   describeUsage,

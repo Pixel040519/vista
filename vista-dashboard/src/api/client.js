@@ -93,6 +93,13 @@ export const studentApi = {
   // `studentId` (optional) marks parents who already look after that learner.
   searchParents:  (q, studentId) =>
     api.get('/students/parents/search', { params: { q, ...(studentId ? { student_id: studentId } : {}) } }),
+  // The Parents tab in Account Management. `searchParents` above is a picker —
+  // it needs a query and caps at 10; this is the roster, with each account's
+  // children and its derived access state.
+  listParents:    (params) => api.get('/students/parents', { params }),
+  // Creates the account AND its children in one request. `children` is never
+  // empty: a parent account with no learner is a state nothing else can express.
+  createParent:   (data)   => api.post('/students/parents', data),
   addGuardian:    (id, d)   => api.post(`/students/${id}/guardians`, d),
   // What saving a guardian with this email would do. Silent: it runs on blur,
   // and a failure only means no early warning — the save still enforces it.

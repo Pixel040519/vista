@@ -127,7 +127,10 @@ Student gender is **Male or Female** only. `students_gender_check` allowed `'Oth
 `2026_09_13_remove_gender_other.sql`, which refuses to run while any learner still holds it
 rather than guessing a replacement. It matches the sex field on DepEd school forms (SF1, SF9)
 and the Male/Female grouping of every class record. The Joi schemas in `student.routes.js`,
-the Add/Edit Student forms and the batch upload all enforce the same two values. The column
+the Add/Edit Student forms and the batch upload all enforce the same two values —
+**case-insensitively, converting to the stored casing** (`.valid(…).insensitive()`),
+since a batch sheet is typed by hand and `students_gender_check` compares the
+string exactly. Grade level and section are corrected the same way. The column
 stays nullable, so a surface that groups by gender must still list learners with none.
 
 ## Cross-cutting Conventions
@@ -966,6 +969,21 @@ history intact and can be restored later. An unlink action existed briefly and w
 taken out: it left a contact-only entry still carrying the account's address, which
 every other rule here forbids, and it answered a question ("who is this person")
 that removing and re-adding already answers.
+
+**There are two surfaces, and they own different things.** A learner's **Manage
+Guardians** owns the person — name, number, address, and authorizing an email on
+that learner. Account Management's **Parents** tab owns the account: every one at
+a glance, editing the person, and attaching another learner to one that already
+exists. Editing there is a second **entry point**, not a second rule: it calls the
+same `PUT /guardians/:gid` Manage Guardians calls, which writes the shared fields
+to every `parent_student` row of the account and to `users`, so the two surfaces
+cannot drift. It also
+creates a parent, for a family new to VISTA — **with their children in the same
+save**, never before them. A `users` row with no `parent_student` row is a state
+nothing else can express: the parent signs in to an empty app, appears on no
+learner's record, and is hard-deleted by the guardian delete path, which removes
+a parent left with no learners. So `children` is `.min(1)` and both land in one
+transaction. Neither surface sets a password, and neither sends anything.
 
 **Revoking is per *account*, not per learner.** One email is one login across
 every child, so `DELETE /students/:id/guardians/:gid/invitation` cuts the parent

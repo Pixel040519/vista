@@ -11,6 +11,28 @@ const GRADE_LEVELS = [
   'Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6',
 ]
 const GENDERS = ['Male','Female']
+
+// A spreadsheet is typed by hand, so "grade 1", "GRADE 1" and "Grade  1" all
+// turn up. They are **canonicalised**, not merely accepted: `students.grade_level`
+// and `students.section` are bare strings that every roster query matches on —
+// and `sections` is keyed by name — so storing "grade 1" verbatim would leave
+// the learner in a grade level nothing lists and a section nothing joins to.
+// Inner whitespace is collapsed for the same reason.
+const canonicalGrade = (v) => {
+  const k = String(v ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+  return GRADE_LEVELS.find(g => g.toLowerCase() === k) ?? null
+}
+// Same rule for gender: `students_gender_check` and every surface that groups
+// by it compare the string exactly, so "male" is corrected, not just allowed.
+const canonicalGender = (v) =>
+  GENDERS.find(g => g.toLowerCase() === String(v ?? '').trim().toLowerCase()) ?? null
+// The canonical spelling of a section is whatever Curriculum → Sections stored,
+// so it can only come from the fetched map, never from a constant here.
+const canonicalSection = (grade, name, sectionsByGrade) => {
+  const k = String(name ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+  if (!k) return ''
+  return sectionsByGrade?.get(canonicalGrade(grade) ?? grade)?.get(k) ?? null
+}
 const COLUMNS = ['lrn','surname','first_name','middle_name','date_of_birth','gender','grade_level','section','home_address']
 const MAX_ROWS = 200
 
@@ -105,6 +127,10 @@ const FIELD_LABELS = {
   gender: 'Gender', grade_level: 'Grade level', section: 'Section', home_address: 'Home address',
   relationship: 'Relationship', phone: 'Phone', email: 'Email',
   authorized_pickup: 'Pickup', emergency_contact: 'Emergency contact', invite: 'Invite', guardians: 'Guardians',
+  // Row-level, on purpose: it matches no cell, so nothing is tinted. A wholly
+  // repeated guardian has no field that is wrong — the row itself is the
+  // mistake — and pointing at Surname read as "the surname needs correcting".
+  duplicate: 'Duplicate',
 }
 const issue = (field, text) => ({ field, text })
 
@@ -137,10 +163,10 @@ function validateRow(r, lrnCounts, sciLrnIndexes, idx, sectionsByGrade) {
   else if (!GRADE_LEVELS.includes(grade_level)) errors.push(issue('grade_level', `"${grade_level}" isn't a grade level. Use Kinder or Grade 1 to Grade 6`))
 
   // Section is optional. If provided, it must exist under that grade level for
-  // the active school year (matches backend check).
+  // the active school year (matches backend check). Matched without regard to
+  // case or inner spacing; the stored spelling wins on save.
   if (section && sectionsByGrade && GRADE_LEVELS.includes(grade_level)) {
-    const valid = sectionsByGrade.get(grade_level)
-    if (!valid || !valid.has(section)) {
+    if (!canonicalSection(grade_level, section, sectionsByGrade)) {
       errors.push(issue('section', `${grade_level} has no section named "${section}". Use an existing one, or add it in Curriculum → Sections first`))
     }
   }
@@ -176,25 +202,69 @@ const canonicalRelationship = (v) =>
 const sameName = (a, b) =>
   String(a ?? '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
 
+// Compared as a number, not as text: the sheet may write 0917 123 4567 where
+// another row wrote +63 917 1234567, and those are the same phone.
+const samePhone = (a, b) => {
+  const digits = (v) => (normalizePhone(v) ?? String(v ?? '')).replace(/\D/g, '')
+  return digits(a) === digits(b)
+}
+
 // The parent account a guardian row's email belongs to, if any. `accounts` is
 // null while the lookup is still in flight.
 const accountFor = (g, accounts) => (g.email ? accounts?.get(g.email.toLowerCase()) : undefined)
 
+// The sheet may introduce a parent **once** — full details beside an email —
+// and then name them by that email alone on every other learner, the same
+// courtesy it already extends to an address that has an account. The first row
+// carrying a complete set (surname, first name, phone) claims the address for
+// the file; sparse rows inherit from it. Built file-wide rather than in sheet
+// order, so the detailed row may sit under any learner. An address with a real
+// account is not collected — the account outranks anything typed here.
+function buildFileParents(guardians, accounts) {
+  const m = new Map()
+  for (const g of guardians ?? []) {
+    const key = String(g.email ?? '').trim().toLowerCase()
+    if (!key || m.has(key) || accountFor(g, accounts)) continue
+    if (g.surname && g.first_name && g.phone) m.set(key, g)
+  }
+  return m
+}
+const fileParentFor = (g, fileParents) => {
+  const key = String(g.email ?? '').trim().toLowerCase()
+  const src = key ? fileParents?.get(key) : undefined
+  return src && src !== g ? src : undefined
+}
+
 // What will actually be saved for a row: a linked row takes its name, email and
-// phone from the account (the server copies them the same way), anything else
-// is the sheet as typed.
-function resolveGuardian(g, accounts) {
+// phone from the account (the server copies them the same way), a sparse row
+// takes them from whichever row introduced that email, anything else is the
+// sheet as typed. Relationship, pickup and emergency are never inherited —
+// they are facts about this learner, not about the parent.
+function resolveGuardian(g, accounts, fileParents) {
   const account = accountFor(g, accounts)
-  if (!account) return { ...g, account: null }
+  if (account) {
+    return {
+      ...g,
+      account,
+      surname: account.surname,
+      first_name: account.first_name,
+      middle_name: account.middle_name || '',
+      email: account.email,
+      phone: account.phone || '',
+      home_address: g.home_address || account.home_address || '',
+    }
+  }
+  const src = fileParentFor(g, fileParents)
+  if (!src) return { ...g, account: null }
   return {
     ...g,
-    account,
-    surname: account.surname,
-    first_name: account.first_name,
-    middle_name: account.middle_name || '',
-    email: account.email,
-    phone: account.phone || '',
-    home_address: g.home_address || account.home_address || '',
+    account: null,
+    from_file: !g.surname || !g.first_name || !g.phone,
+    surname: g.surname || src.surname,
+    first_name: g.first_name || src.first_name,
+    middle_name: g.middle_name || src.middle_name || '',
+    phone: g.phone || src.phone || '',
+    home_address: g.home_address || src.home_address || '',
   }
 }
 
@@ -203,11 +273,12 @@ function resolveGuardian(g, accounts) {
 // Adding a guardian to a learner who already exists is Manage Guardians.
 //
 // A row whose email belongs to a parent account needs only the LRN,
-// relationship and the two Yes/No flags; the account supplies the rest. Any
-// other row also needs a name and phone.
-function validateGuardians(guardians, studentLrns, accounts) {
+// relationship and the two Yes/No flags; the account supplies the rest. So does
+// a row whose email is detailed on another row of this file. Any other row also
+// needs a name and phone.
+function validateGuardians(guardians, studentLrns, accounts, fileParents) {
   const perStudent = new Map() // lrn -> { count, emails, names }
-  const orAccount = 'required, unless the email belongs to a parent account'
+  const orAccount = 'required, unless the email has a parent account or is detailed on another row'
   // One email is one person across the whole file, not only within a learner.
   // The same address on several learners under the SAME name is one parent
   // entered on each of their children and is fine; under a different name it is
@@ -235,6 +306,9 @@ function validateGuardians(guardians, studentLrns, accounts) {
       if ((g.surname && !sameName(g.surname, account.surname)) || (g.first_name && !sameName(g.first_name, account.first_name))) {
         errors.push(issue('email', `belongs to parent account ${account.surname}, ${account.first_name}, but the name doesn't match. Fix the email, or clear the name cells to use the account`))
       }
+    } else if (fileParentFor(g, fileParents)) {
+      // Introduced on another row of this file; resolveGuardian fills the rest,
+      // and any disagreement between two detailed rows is caught below.
     } else if (!mayBeLinked) {
       if (!g.surname) errors.push(issue('surname', orAccount))
       if (!g.first_name) errors.push(issue('first_name', orAccount))
@@ -263,19 +337,63 @@ function validateGuardians(guardians, studentLrns, accounts) {
       const seen = perStudent.get(lrn)
       seen.count++
       if (seen.count > MAX_GUARDIANS_PER_STUDENT) errors.push(issue('guardians', `more than ${MAX_GUARDIANS_PER_STUDENT} for this student`))
-      const r = resolveGuardian(g, accounts)
+      const r = resolveGuardian(g, accounts, fileParents)
       const email = r.email.toLowerCase()
-      if (email && seen.emails.has(email)) errors.push(issue('email', 'is listed twice for this student'))
+      // Relationship is part of who this is, not a detail beside the name. Two
+      // people in one family really do share a name — a father and a grandfather
+      // both "Dela Cruz, Juan" — so the name alone is not an identity, and
+      // refusing the second one would refuse a sheet that was simply true.
+      // What cannot repeat is the *address*, and `dupEmail` below still says so.
+      const rel = (canonicalRelationship(r.relationship) ?? r.relationship ?? '').toLowerCase()
+      const name = `${r.surname}|${r.first_name}|${rel}`.toLowerCase()
+      // One mistake gets one message, and the three rules below overlap: a row
+      // repeating an earlier row's email usually repeats its name too, and a
+      // repeated email is also, necessarily, one address under two names. So
+      // they are ordered widest-first rather than all pushed.
+      const dupEmail = !!email && seen.emails.has(email)
+      const dupName = !!(r.surname && r.first_name) && seen.names.has(name)
+      if (dupName) {
+        // The whole guardian is duplicated, which describes the row better than
+        // singling out the email — the fix is to drop the row, not edit a field.
+        errors.push(issue('duplicate', 'this guardian is already listed for this student'))
+      } else if (dupEmail) {
+        // Two different people on one address. Names the learner on screen,
+        // which the file-wide message below cannot, and fixing it settles that
+        // one too. The API agrees: POST /bulk throws here before it ever groups
+        // the sheet by email.
+        errors.push(issue('email', 'is listed twice for this student'))
+      }
       if (email) seen.emails.add(email)
-      const name = `${r.surname}|${r.first_name}`.toLowerCase()
-      if (r.surname && r.first_name && seen.names.has(name)) errors.push(issue('surname', 'this guardian is listed twice for this student'))
       seen.names.add(name)
 
-      if (email) {
-        const first = firstByEmail.get(email)
-        if (!first) firstByEmail.set(email, r)
-        else if (!sameName(first.surname, r.surname) || !sameName(first.first_name, r.first_name)) {
-          errors.push(issue('email', 'is used elsewhere in this file under a different name'))
+      // Still asked when only the name repeated, since then this is a different
+      // address and the question is about other learners, not this one.
+      //
+      // Compared on what the row **typed**, never on what it resolved to: a
+      // sparse row inherits the very values it would be checked against, so
+      // comparing resolved ones would agree with itself and report nothing.
+      // Both sides must have said something for there to be a disagreement.
+      //
+      // The phone follows the name: one email is one person, so one number.
+      // Without it the sheet could give a parent two numbers on two learners,
+      // and — once any row of theirs said `invite` — the account took the first
+      // and every later row silently saved that instead of what it showed here.
+      // The reference is kept per field, so a row that gave a name but no phone
+      // does not leave two later, conflicting phones unchecked.
+      if (email && !dupEmail) {
+        let grp = firstByEmail.get(email)
+        if (!grp) { grp = { name: null, phone: null }; firstByEmail.set(email, grp) }
+        if (g.surname && g.first_name) {
+          if (!grp.name) grp.name = g
+          else if (!sameName(grp.name.surname, g.surname) || !sameName(grp.name.first_name, g.first_name)) {
+            errors.push(issue('email', 'is used elsewhere in this file under a different name'))
+          }
+        }
+        if (g.phone) {
+          if (!grp.phone) grp.phone = g
+          else if (!samePhone(grp.phone.phone, g.phone)) {
+            errors.push(issue('phone', 'differs from the number given for this email on another row. One email is one person, so one number'))
+          }
         }
       }
     }
@@ -345,6 +463,11 @@ function normalizeCell(c, v) {
   }
   const raw = String(v).trim()
   if (c === 'date_of_birth') return parseTextDob(raw) ?? raw
+  // Corrected here rather than at submit, so the preview shows the spelling
+  // that will actually be stored. An unrecognisable value is left as typed, or
+  // the error below could not quote what the admin wrote.
+  if (c === 'grade_level') return canonicalGrade(raw) ?? raw
+  if (c === 'gender') return canonicalGender(raw) ?? raw
   // CSV cells that Excel wrote as "1.23457E+11" get expanded back into a
   // full integer string so the preview is readable.
   return expandSciNotation(raw)
@@ -417,6 +540,7 @@ function UploadGuide() {
           <p>One row per guardian, matched to a student by {em('LRN')}.</p>
           <p>Always fill {em('relationship')}, {em('pickup')} and {em('emergency')} (Yes/No).</p>
           <p>Parent has an account? Just add their {em('email')} — name and phone fill in. Otherwise enter surname, first name and phone.</p>
+          <p>Same parent on another student? Enter them once, then give the {em('email')} alone on their other rows.</p>
           <p>{em('invite')} — Yes to authorize that {em('email')} for the VISTA Parent app. Blank means No.</p>
           <p className="text-slate-500">A blank address uses the student&apos;s. No passwords are set and no messages are sent by this upload.</p>
         </div>
@@ -458,10 +582,14 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
     curriculumApi.getSections()
       .then(res => {
         if (cancelled) return
+        // grade level -> (lowercased, space-collapsed name -> stored spelling).
+        // The value is the canonical name rather than a bare presence flag,
+        // because a sheet may write it in any case and what gets saved has to
+        // be the spelling `sections` holds.
         const map = new Map()
         for (const s of res.data?.sections || []) {
-          if (!map.has(s.grade_level)) map.set(s.grade_level, new Set())
-          map.get(s.grade_level).add(s.name)
+          if (!map.has(s.grade_level)) map.set(s.grade_level, new Map())
+          map.get(s.grade_level).set(s.name.trim().replace(/\s+/g, ' ').toLowerCase(), s.name)
         }
         setSectionsByGrade(map)
       })
@@ -685,9 +813,15 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
     return map
   }, [guardians])
   const studentLrns = useMemo(() => new Set(rows.map(r => r.lrn)), [rows])
+  // Computed once and shared by the validator and the preview rows, so both
+  // agree on which row introduced each email.
+  const fileParents = useMemo(
+    () => buildFileParents(guardians, parentAccounts),
+    [guardians, parentAccounts]
+  )
   const guardianErrors = useMemo(
-    () => (guardians ? validateGuardians(guardians, studentLrns, parentAccounts) : []),
-    [guardians, studentLrns, parentAccounts]
+    () => (guardians ? validateGuardians(guardians, studentLrns, parentAccounts, fileParents) : []),
+    [guardians, studentLrns, parentAccounts, fileParents]
   )
   const checkingAccounts = parentAccounts === null
 
@@ -736,6 +870,10 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
     try {
       const payload = rows.map(r => ({
         ...r,
+        // grade_level was canonicalised at parse; section needs the fetched
+        // sections, so it is corrected here. Validation has already refused
+        // anything that does not resolve, so the fallback never reaches a save.
+        section: canonicalSection(r.grade_level, r.section, sectionsByGrade) ?? r.section,
         guardians: (guardiansByLrn.get(r.lrn) || []).map(gi => toGuardianPayload(guardians[gi])),
       }))
       const res = await studentApi.bulk(payload)
@@ -755,7 +893,7 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
 
   const renderGuardian = (gi) => {
     const raw = guardians[gi]
-    const g = resolveGuardian(raw, parentAccounts)
+    const g = resolveGuardian(raw, parentAccounts, fileParents)
     const errs = guardianErrors[gi] || []
     const bad = (f) => errs.some(e => e.field === f)
     const pickup = parseFlag(g.authorized_pickup)
@@ -770,9 +908,13 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
                 ? <Cell bad>{[g.surname, g.first_name].filter(Boolean).join(', ')}</Cell>
                 : [g.surname, g.first_name].filter(Boolean).join(', ') || <span className="text-slate-300">—</span>}
             </span>
-            {g.account && (
+            {g.account ? (
               <span className="flex items-center gap-1 text-[11px] text-brand-600" title="Name, phone and email come from this parent account">
                 <Link2 size={11}/> From parent account
+              </span>
+            ) : g.from_file && (
+              <span className="flex items-center gap-1 text-[11px] text-slate-500" title="This email is detailed on another row of this file; the name, phone and address come from there">
+                <Link2 size={11}/> From another row
               </span>
             )}
           </div>
@@ -1036,7 +1178,7 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
                               </td>
                               <td className="px-2.5 py-2.5 whitespace-nowrap">
                                 <Cell bad={bad('grade_level')} value={r.grade_level}/>
-                                {r.section && <> · <Cell bad={bad('section')} value={r.section}/></>}
+                                {r.section && <> · <Cell bad={bad('section')} value={canonicalSection(r.grade_level, r.section, sectionsByGrade) ?? r.section}/></>}
                               </td>
                               {showGuardians && <td className="px-2.5 py-2.5">{gIdx.length || <span className="text-slate-300">—</span>}</td>}
                               <td className="px-2.5 py-2.5 text-right whitespace-nowrap">

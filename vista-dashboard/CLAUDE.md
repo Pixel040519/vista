@@ -66,7 +66,17 @@ Two parallel `navGroups` arrays — `adminNavGroups` and `teacherNavGroups` — 
 
 `Modal` (`components/UI/index.jsx`) renders via `createPortal` into `document.body` — always above the sidebar regardless of stacking context. On mobile slides up from the bottom (`items-end`, `rounded-b-none`); on `sm:` and above it centers.
 
-Sizes are `sm` (`max-w-md`), `md` (`max-w-lg`, default), `lg` (`max-w-2xl`), `xl` (`max-w-4xl`) and `2xl` (`max-w-6xl`). `2xl` exists for Batch Upload's side-panel layout. `title` is rendered inside an `<h3>`, so a subtitle has to be passed as block `<span>`s, not `<p>`.
+Sizes are `sm` (`max-w-md`), `md` (`max-w-lg`, default), `lg` (`max-w-2xl`), `xl` (`max-w-4xl`) and `2xl` (`max-w-6xl`). `2xl` exists for Batch Upload's side-panel layout.
+
+**`selfScroll` is a contract, not a hint.** It swaps the body from
+`overflow-y-auto` to **`overflow-hidden`** and hands the scrolling to the
+children — so a child that does not scroll is simply **clipped** at
+`max-h-[84vh]`, with everything past that line unreachable and no scrollbar to
+say so. The Add Parent modal lost its second child row, its "Add another child"
+button and its whole footer that way. Pass it only when the content really does
+own its overflow (`flex-1 min-h-0 overflow-y-auto` on the part that scrolls,
+`shrink-0` on a pinned footer), as Manage Guardians and Add Parent now do;
+otherwise leave it off and let the body scroll. `title` is rendered inside an `<h3>`, so a subtitle has to be passed as block `<span>`s, not `<p>`.
 
 ## Tables
 
@@ -78,6 +88,13 @@ utility — so a header given `text-center` silently stays left while its center
 under it misaligned. Body cells have no such rule, so `text-center` works on `td`. The Grades
 page centers every grade, Descriptor and Remarks column this way (header and cells alike)
 and keeps only the learner name left-aligned; the old Grades page had the misalignment.
+
+**The same rule bites row hover.** `.table-base tbody tr` sets
+`hover:bg-slate-50/60`, and that selector outranks a bare `hover:bg-…` on the
+`<tr>` — so a stronger hover needs `hover:!bg-…` or it silently does nothing.
+Worth doing where rows are **clickable**: the Parents tab opens a panel on click
+and uses `hover:!bg-brand-50`, because the default tint is faint enough to read
+as a stripe rather than as an affordance.
 
 ## Input / cursor conventions
 
@@ -120,7 +137,7 @@ Teachers: Class dropdown + search with labels; Grade Level and Section columns h
 
 **Edit and Add replace the detail panel with a form**, and while one is open the list and Add button are disabled — switching guardians would silently drop what was typed. Save is disabled until something changed, and the footer says "Unsaved changes". A new guardian is selected once saved; a removed one hands selection to the first. The success toast is the **server's message** verbatim for 6 seconds, which names which of the four access outcomes happened (invited / reissued / restored / linked to an existing account).
 
-**Access actions sit behind one "Manage access" menu** (`AccessRow`), beside the status chip and registered email: Add invitation (contact with an email), Reissue invitation (pending, in progress, expired), Restore Access (revoked with a password — `grantLabel()`), **Revoke access** (`canRevoke()`), each with a one-line description, the destructive ones red and set apart by a divider. Only the actions the state allows are listed, and with none — a contact-only guardian with no email — there is no button, just "Add an email with Edit to invite them". The menu opens **upward**, because it is the last section of a column that scrolls and would otherwise be clipped; it closes on an outside click, Escape, choosing an item, or selecting another guardian. Revoke and Remove guardian each open a small confirmation `Modal`: Revoke says it applies to **every child** on the account; Remove guardian says the app account is deleted too when this learner was its only child, which is what the API does.
+**The Parent app section reports access; it no longer manages it** (`AccessStatus`): the status chip, the registered email and a line of detail, and nothing to press. The old `AccessRow` menu — Reissue, Restore, Revoke — is gone, because all three act on the **account** and therefore reach every child on it, which is a scope a single learner’s page cannot show and should not be the place to decide from. They live in **Account Management → Parents**, which lists the account with all of its children, and the section says so. **Granting access stays here**, in the Add form and in Edit on a guardian who has no account (`mode === 'add' || !selected?.has_account`): that belongs to the guardian being entered rather than to an account that already exists, and it is the **only** path to it — a contact-only guardian has no `users` row, so the Parents tab cannot list them. Correcting a registered email before activation stays here for the same reason. Remove guardian keeps its confirmation, which still says the app account goes too when this learner was its only child.
 
 **Adding starts with a choice: Already has a parent account, or New guardian** — unanswered by default, as in the Add Student wizard, because the mistake it prevents is a second, separate entry for a parent whose account already covers a sibling. Linking searches `studentApi.searchParents(q, student.id)` (debounced, stale answers dropped); passing the learner makes the API mark `already_linked`, so a parent who already looks after this learner is listed disabled with that reason rather than offered and then refused. Each result carries its `account_status` as a chip. Picking one shows a summary card with **Change**, then only what belongs to this learner — relationship, Pickup & emergency, and a home address only when the account has none on file — plus a note on what the link means for that account's status (appears in the app; appears once activated; access is revoked). The save posts `link_parent_id` with the account's names, which the schema requires and the server overwrites from the account anyway. A search with no match offers **Enter them as a new guardian**.
 
@@ -130,7 +147,11 @@ Teachers: Class dropdown + search with labels; Grade Level and Section columns h
 
 **An email that already has a parent account holds the form.** `components/GuardianEmailCheck.jsx` (`useGuardianEmailCheck(studentId)`, `describeEmailCheck(result)`) is shared by Manage Guardians and the Add Student wizard's New guardian card. When the email field is left it asks `studentApi.checkGuardianEmail()`; if the address belongs to a parent account the input turns red with one message beneath it — **"This email already has a parent account."** — and **Link that account instead** beside it in the brand colour. Two more refusals read the same way and offer no button, since only retyping the address resolves them: **"Another guardian of this learner already uses this email."** and **"…already used by a guardian with a different name."** Save (Manage Guardians) or Next (the wizard, via the card's unposted `email_block`) is held until the admin either clears the email or presses the button, which switches to the linking flow with that account picked. There are no other hints on the field: no "will link", no name comparison, no staff-address note. When that account already looks after this learner (Manage Guardians only — the wizard has no learner yet) the message shows without the button, since there is nothing to link.
 
-**The wizard checks its own cards against each other**, because it passes no student id — the learner does not exist yet — so the API cannot see a duplicate among guardians that have not been inserted. `guardianProblems()` gives a later card repeating an earlier card's email the same "Another guardian of this learner already uses this email." It finds a card's position by its `key`, never by object identity: `updateGuardian()` re-checks a card that is not in `guardians` yet, so an `indexOf` on the object would quietly match nothing and the check would never fire. Batch Upload covers the cross-file half in its preview — the same address under a different name anywhere in the sheet (`firstByEmail`), beside the per-learner duplicate rule it already had. In Edit the button is not offered either; a contact-only guardian that is really that parent is removed and linked instead. The answer depends only on the email, so it goes stale only when the email changes. The API enforces the same rule on save and names no one.
+**The wizard checks its own cards against each other**, because it passes no student id — the learner does not exist yet — so the API cannot see a duplicate among guardians that have not been inserted. `guardianProblems()` gives a later card repeating an earlier card's email the same "Another guardian of this learner already uses this email." It finds a card's position by its `key`, never by object identity: `updateGuardian()` re-checks a card that is not in `guardians` yet, so an `indexOf` on the object would quietly match nothing and the check would never fire. Batch Upload covers the cross-file half in its preview — the same address under a different name anywhere in the sheet (`firstByEmail`), beside the per-learner duplicate rule it already had. **The three duplicate rules overlap, so they are ordered widest-first and only one fires.** A row repeating an earlier row's email usually repeats its name too, and a repeated email is also, necessarily, one address under two names — pushed independently, one mistake produced two or three messages across two cells. The order is: the **whole guardian** repeated on this learner ("Duplicate — this guardian is already listed for this student"); else the **email** repeated on this learner, which is two different people on one address and names the learner on screen; else the file-wide name conflict.
+
+**"The same guardian" is name *plus relationship*, not name alone.** Two people in one family really do share a name — a father and a grandfather both "Dela Cruz, Juan" — so a name on its own is not an identity, and keying the check on it refused a sheet that was simply true. Relationship is required and canonicalised on every row, so it is safe to key on. What still cannot repeat on one learner is the **email**: one address is one person, so the same name under two relationships is accepted while the same address twice is not, whatever the names say.
+
+`duplicate` is a **row-level pseudo-field** — it is in `FIELD_LABELS` for the message but matches no cell, so nothing is tinted and the row carries only its red border. It replaced `surname`, which tints the whole name cell (`bad('surname') || bad('first_name')`) and so read as "the surname needs correcting" when the name is the one thing that is certainly right: a wholly repeated guardian has no wrong field, the row itself is the mistake, and the fix is to delete it. `guardians` is the other such pseudo-field, for "more than N for this student". The file-wide check still runs when only the *name* repeated, because the address is then a different one and the question is about other learners. The API agrees on the middle case — `POST /bulk` throws on the per-learner email duplicate before it ever groups the sheet by email — and has no per-learner name rule of its own, since the preview blocks that row before submit. In Edit the button is not offered either; a contact-only guardian that is really that parent is removed and linked instead. The answer depends only on the email, so it goes stale only when the email changes. The API enforces the same rule on save and names no one.
 
 **One *editable* email input, in one place — but Contact always shows the address.** For a guardian without an account the input is in Contact and turns into a required **Registered Email Address** when Add Invitation is ticked. For one **with** an account the editable input moves into the Account Access section, where it exists only while `canChangeEmail(guardian)` — no password ever set — and carries the reason it is still open ("Can still be corrected because {name} never activated. Saving a new address cancels any code already requested."); once a password exists the address is plain read-only text there instead, **omitted from the save payload** so an edit to a name can never touch an activated login.
 
@@ -143,6 +164,10 @@ Contact keeps a **disabled** Registered Email Address field for that guardian ei
 **Dates.** The workbook is read **without `cellDates`**: SheetJS builds those Dates at local midnight, so reading them back in UTC put every birthday a day early on a UTC+8 machine. Date cells arrive as serial numbers and `excelSerialToIso()` converts them with UTC arithmetic (honouring `date1904`). Text dates go through `parseTextDob()`, which accepts `YYYY-MM-DD` and **`DD/MM/YYYY`** — the school's sheets are day-first, and slashed dates are always read that way rather than guessed per row. The preview spells the result out ("Feb 11, 2016") so the reading is checkable before upload.
 
 **Guardians sheet.** The template has a second **Guardians** tab — one row per guardian, keyed to the Students tab by LRN (LRN and phone columns pre-seeded as Text). Both tabs are found **by name**, so reordering them is harmless and a workbook without a Guardians tab (a CSV, an older template) uploads students only; that state is `guardians === null` and hides the tab, while `[]` means the tab exists but is empty. `validateGuardians()` checks the LRN against the Students tab **of the same file** (adding a guardian to an existing learner is Manage Guardians, not this), `RELATIONSHIPS` (a copy of the list in `components/GuardianManager.jsx` and `AddStudentWizard.jsx`), email shape, the two Yes/No flags (**required on every row**; blank or unrecognised is an error, not a guess), and duplicates per learner.
+
+**Grade level, section and gender are matched case- and spacing-insensitively, then corrected to the stored spelling.** `canonicalGrade()` and `canonicalGender()` run inside `normalizeCell()` at parse, so the preview, the validation and the payload all carry `Grade 1` however the sheet wrote it; `canonicalSection()` needs the fetched sections, so `sectionsByGrade` became `grade → (normalised name → stored name)` and the correction lands in the preview cell and the submit payload. The preview deliberately shows the corrected spelling rather than what was typed — it is what will be saved. An unrecognisable grade is left as typed so the error can quote it. The API canonicalises independently, since it is reachable without the preview.
+
+**A parent is typed once, then named by email.** `buildFileParents()` collects every guardian row carrying a full set (surname, first name, phone) under its email; any other row with only that email inherits name, middle name, phone and home address through `resolveGuardian()`, which prefers a real parent account over the file. It is **file-wide and order-independent** — the detailed row may sit under any learner, not necessarily the first — and it is computed once in a memo shared by the validator and the preview rows so the two cannot disagree about which row introduced an address. Inheriting rows show a grey **From another row** chip beside the name, the counterpart of the brand-coloured **From parent account**. Relationship, pickup and emergency are never inherited; they are per learner, as on the account path. The file-wide conflict check compares **typed** values and skips rows that said nothing — comparing resolved ones would have every sparse row agreeing with the row it just copied, hiding exactly the mistyped email the rule exists to catch. It covers the **phone as well as the name**, on the same "one email is one person" grounds: a sheet could otherwise give a parent two numbers on two learners, and once any row of theirs said `invite` the account took the first while every later row silently saved that instead of the number the preview was showing. The reference is kept per field, so a row with a name but no phone does not leave two later, conflicting phones unchecked, and `samePhone()` compares digits so `0917 123 4567` matches `+63 917 1234567`. The name conflict reads on the Email cell (the address is the thing to fix); the phone conflict reads on Phone.
 
 **Emails of parent accounts fill the row in.** After parsing, the modal sends the sheet's emails to `studentApi.checkParentEmails()` and keeps the answer in `parentAccounts` (`null` while in flight; `parseSeq` discards an answer for a file that has since been replaced). A row whose email matches needs only LRN, relationship and the flags. `resolveGuardian()` shows the account's name, phone and email in the preview under a "Parent account" note. A name typed beside such an email must match the account, or the row is an error, because a mistyped email would link the learner to another family. Any other row needs surname, first name and a PH mobile number (`normalizePhone()` → `+63 9XX XXXXXXX`). While the lookup is pending, emailed rows are not asked for a name, the badge reads "Checking guardian emails…" and submit is disabled. `guardianErrors` is a memo over `guardians`, the student LRNs and `parentAccounts`, not state, so it re-validates when the answer lands. The payload sends the sheet as typed; the server resolves the accounts again itself. An **`invite`** column (optional; blank means No, and Yes needs an email) authorizes that address for the parent app — the sheet could never create logins while that meant a password column, and an invitation has none. Rows show **Will invite — Pending Activation** or **Links to existing account** under the phone. No passwords are set and no messages are sent by the upload; see the node-api notes.
 
@@ -1347,6 +1372,67 @@ Admin-only write, everyone reads (filtered server-side by audience — see `anno
 
 ### Profile (`pages/Profile.jsx`)
 Any authenticated role at `/profile`. Account summary card (avatar, full_name, role pill, email, phone, "Member since"). Editable **Personal Information** form (surname/first_name/middle_name/phone; email is disabled with helper text). **Change Password** form (current + new + confirm with individual show/hide toggles); 401 surfaces inline as "Current password is incorrect" rather than a toast. Teacher-only **My Teaching Assignments** read-only card rendered from `activeAssignments`. Calls `updateUser(patch)` from AuthContext after save so the sidebar updates immediately.
+
+### Account Management → Parents (`components/ParentAccounts.jsx`)
+
+A fourth tab beside Teachers, Admins and Guards, open to **every admin** and
+bounded by grade scope rather than by role — a parent is student-derived, and
+scoped admins already manage guardians for their own learners. It is a roster in
+the same shape as its sibling tabs: search, state chips with counts, one table,
+a per-row **Manage access** menu. **A chip whose count is zero is not rendered**
+— a state nobody is in is not a filter worth offering — with the two exceptions
+the Enrollment page arrived at the hard way: **All**, which is how you get back,
+and the **selected** chip, which renders at `0` rather than vanishing, or
+reissuing the last expired invitation would remove the very control still
+filtering the list and leave an empty table that reads as "no parents". `AccountManagement.jsx` owns only the tab
+button, the header count and the **Add Parent** button; everything else is the
+component.
+
+**Everything it writes is a second *entry point*, never a second rule.**
+`ParentDetailsForm` edits the person through the very endpoint Manage Guardians
+calls, `PUT /guardians/:gid`, which writes the SHARED fields to every
+`parent_student` row of the account and to `users` — so the two surfaces cannot
+drift, and the panel says the save reaches every child. It offers **only** those
+shared fields; relationship, pickup and emergency are per learner and are listed
+under each child instead, where they mean something. The registered email is
+editable only while `has_password` is false (the API's own test — a revoked
+account has still proved it owns its address), and there is deliberately **no**
+`guardian-email-check` on it: that endpoint would look this very account up and
+report the address as taken by a parent account, refusing the parent their own
+email. The PUT excludes the row's own account, so the server is the right judge.
+
+What this tab owns beyond that is what a learner's page cannot show: **every
+account at once**, and **the whole of one account** — all its children, not just
+the learner you came from. `AddChild` attaches another learner by posting
+`link_parent_id`, so the server copies the account's identity onto the new row;
+a learner already on the account is listed **disabled with the reason**, since
+offered and then refused is worse than never offered. It also resolves a home
+address (the account's, else the learner's), because `guardianSchema` requires
+one even on the link path.
+
+**Add Parent creates the account and its children in one save.** `children` is
+never empty and the button is disabled until one is picked: an account with no
+learner is a state nothing in the app can express, and it is precisely what the
+guardian delete path garbage-collects. There is **no "send the invitation?"
+checkbox** — an account exists only because an email was authorized, so the box
+would offer a row the model has no state for; a note says what saving does
+instead (nothing is sent; the parent asks for a code from the app). Relationship,
+pickup and emergency are collected **per child**, never once for the parent.
+
+**The detail panel is portalled**, into `document.body` at `z-50`, for the same
+reason `Modal` is. Rendered in place it sits inside the page root's stacking
+context — `AccountManagement.jsx` opens with `animate-fade-in`, which creates one
+— so its `z-40` competed only with its own siblings and the **Topbar painted over
+it**, despite the Topbar being `sticky z-20`. `z-50` also clears the sidebar's
+`z-40`. Any new full-height overlay on a page belongs in a portal; the Behavior
+page's `SidePanel` already is one.
+
+**Access actions reuse the learner-scoped endpoints.** Each child carries its
+`guardian_id`, so Reissue and Revoke post to `(student_id, guardian_id)` exactly
+as Manage Guardians does — access is per account, so any child's pair reaches it,
+and a scoped admin is only ever handed in-scope children, which is what the API's
+own scope check then accepts. Revoke confirms first and says how many children it
+reaches. `grantLabel()` decides Reissue vs **Restore Access**, as elsewhere.
 
 ### Teacher-assignment dropdown (Accounts → Edit Teacher)
 Subjects already taken by another teacher for that `(grade_level, section)` are disabled in the dropdown and shown with the assigned teacher's name. Taken subjects render in red via inline `style` to override the parent `<select>` color; available subjects use normal color.

@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Plus, Pencil, Phone, Mail, Home, Users, Check, Minus, ChevronDown, Ban, RotateCw, Lock, Search,
+  Plus, Pencil, Phone, Mail, Home, Users, Check, Minus, Lock, Search,
 } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -9,8 +9,7 @@ import { useGuardianEmailCheck, describeEmailCheck } from './GuardianEmailCheck'
 import { studentApi } from '../api/client'
 import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
 import {
-  accessOf, accessClasses, accessLabel, accessShortLabel, accessDetail, grantLabel,
-  canInvite, canRevoke, canChangeEmail,
+  accessOf, accessClasses, accessLabel, accessShortLabel, accessDetail, canChangeEmail,
 } from '../utils/parentAccess'
 
 // Manage Guardians / Parents, as a list and a detail panel.
@@ -216,15 +215,9 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
     finally { setSaving(false) }
   }
 
-  const grant = async () => {
-    setBusy(true)
-    try { await run(() => studentApi.inviteGuardian(student.id, selected.id)) } catch {} finally { setBusy(false) }
-  }
-
   const confirmAction = async () => {
     setBusy(true)
     try {
-      if (confirm.kind === 'revoke') await run(() => studentApi.revokeGuardianAccess(student.id, selected.id))
       if (confirm.kind === 'remove') await run(() => studentApi.removeGuardian(student.id, selected.id))
       setConfirm(null)
     } catch {} finally { setBusy(false) }
@@ -593,7 +586,7 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
                     <p className="text-xs leading-relaxed text-slate-500">
                       {form.invite
                         ? <>The email above is authorized for the VISTA Parent app. <strong className="font-semibold text-slate-700">No message is sent now</strong> — they enter this email in the app, receive a one-time code and create their own password.</>
-                        : 'Leave off for a contact-only guardian. You can invite them later.'}
+                        : 'Leave off for a contact-only guardian. You can tick this later from Edit.'}
                     </p>
                     <p className="flex items-center gap-1.5 text-xs text-slate-500"><Lock size={12}/> VISTA never asks you to set or view a parent’s password.</p>
                   </div>
@@ -622,7 +615,6 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
                         </p>
                       </div>
                     )}
-                    <p className="text-xs text-slate-500">Reissue, revoke and restore are on the guardian’s details, once this is saved.</p>
                   </div>
                 )}
               </Section>
@@ -640,10 +632,11 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
             </div>
           </form>
         ) : selected ? (
-          // One quiet page: three light sections with no boxes around them, and
-          // every access action behind a single "Manage access" menu, where each
-          // carries its one-line description. The longer explanations live in the
-          // confirmation dialogs, where they are read at the moment they matter.
+          // One quiet page: three light sections with no boxes around them.
+          // The Parent app section only REPORTS the state — reissuing, restoring
+          // and revoking moved to Account Management -> Parents, because they act
+          // on the account and reach every child on it, which is not a fact this
+          // learner's page is in a position to present.
           <div className="flex flex-col min-h-0">
             <div className="flex-1 sm:overflow-y-auto px-5 sm:px-8 py-6 space-y-7">
               <div className="flex items-center gap-3.5">
@@ -688,8 +681,7 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
               </Section>
 
               <Section title="Parent app">
-                <AccessRow guardian={selected} busy={busy}
-                  onGrant={grant} onRevoke={() => openConfirm('revoke')}/>
+                <AccessStatus guardian={selected}/>
               </Section>
             </div>
 
@@ -715,12 +707,6 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
 
       {selected && (
         <>
-          <Confirm open={confirm?.kind === 'revoke'} title="Revoke app access?" confirmLabel="Revoke access"
-            busy={busy} onConfirm={confirmAction} onCancel={() => setConfirm(null)}>
-            <p><strong className="text-slate-800">{formatName(selected)}</strong> will no longer be able to sign in to the VISTA Parent app — for <strong className="text-slate-800">every child</strong> linked to their account, not only {learner}.</p>
-            <p>Their contact details, pickup permission and history stay. You can restore access later.</p>
-          </Confirm>
-
           <Confirm open={confirm?.kind === 'remove'} title="Remove guardian?" confirmLabel="Remove guardian"
             busy={busy} onConfirm={confirmAction} onCancel={() => setConfirm(null)}>
             <p><strong className="text-slate-800">{formatName(selected)}</strong> will no longer be listed as {learner}’s guardian and cannot pick them up.</p>
@@ -753,40 +739,18 @@ function Permission({ on, children }) {
   )
 }
 
-const grantDescription = (g, state) => {
-  if (state === 'none') return 'Authorizes their email for the parent app. Nothing is sent.'
-  if (state === 'revoked') {
-    return g.has_password
-      ? 'They can sign in again with their existing password.'
-      : 'Gives them a fresh invitation to activate. Nothing is sent.'
-  }
-  return 'Starts a fresh 30 days and cancels any unused code. Nothing is sent.'
-}
-
-// Status, email and one "Manage access" menu holding whichever actions this
-// state allows. The menu opens upward: this is the last section of a column
-// that scrolls, and opening downward would be clipped at its edge.
-function AccessRow({ guardian: g, busy, onGrant, onRevoke }) {
+// Status and email, reported and not acted on.
+//
+// The "Manage access" menu that used to live here is gone: re-issuing,
+// restoring and revoking act on the ACCOUNT, so they reach every child on it —
+// a scope this learner's page cannot show and should not decide from. They are
+// in Account Management -> Parents, which lists the account with all of its
+// children. What stays here is granting access to a guardian who has none,
+// because that belongs to the guardian being entered rather than to an account
+// that already exists, and it is the only path to it: a contact-only guardian
+// has no `users` row, so the Parents tab cannot list them.
+function AccessStatus({ guardian: g }) {
   const state = accessOf(g).id
-  const [open, setOpen] = useState(false)
-  const wrap = useRef(null)
-
-  useEffect(() => { setOpen(false) }, [g.id])
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e) => { if (wrap.current && !wrap.current.contains(e.target)) setOpen(false) }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
-
-  const items = []
-  if (canInvite(state) && g.email) {
-    items.push({ key: 'grant', icon: state === 'none' ? Plus : RotateCw, label: grantLabel(g), desc: grantDescription(g, state), onClick: onGrant })
-  }
-  if (canRevoke(state)) {
-    items.push({ key: 'revoke', icon: Ban, label: 'Revoke access', desc: 'Stops sign-in for every child on this account. Asks to confirm.', danger: true, onClick: onRevoke })
-  }
-
   const detail = state === 'none'
     ? (g.email ? 'Not invited to the parent app' : 'Add an email with Edit to invite them')
     : accessDetail(g)
@@ -798,37 +762,13 @@ function AccessRow({ guardian: g, busy, onGrant, onRevoke }) {
           {accessLabel(state)}
         </span>
         <span className="flex-1 min-w-0 text-sm text-slate-600 truncate">{state === 'none' ? '' : g.email}</span>
-        {items.length > 0 && (
-          <div ref={wrap} className="relative flex-shrink-0" onKeyDown={e => { if (e.key === 'Escape') setOpen(false) }}>
-            <button type="button" aria-haspopup="menu" aria-expanded={open} disabled={busy}
-              onClick={() => setOpen(o => !o)}
-              className={clsx('inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border text-sm font-medium transition-colors disabled:opacity-60',
-                open ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50')}>
-              Manage access
-              <ChevronDown size={15} className={clsx('transition-transform', open && 'rotate-180')}/>
-            </button>
-            {open && (
-              <div role="menu" className="absolute right-0 bottom-full mb-2 w-72 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 z-10">
-                {items.map((it, i) => (
-                  <Fragment key={it.key}>
-                    {it.danger && i > 0 && !items[i - 1].danger && <div className="h-px bg-slate-100 my-1 mx-2"/>}
-                    <button type="button" role="menuitem"
-                      onClick={() => { setOpen(false); it.onClick() }}
-                      className="w-full text-left flex gap-3 px-3 py-2.5 rounded-lg hover:bg-slate-50">
-                      <it.icon size={16} className={clsx('mt-0.5 flex-shrink-0', it.danger ? 'text-red-600' : 'text-brand-600')}/>
-                      <span className="flex flex-col gap-0.5">
-                        <span className={clsx('text-sm font-semibold', it.danger ? 'text-red-700' : 'text-slate-900')}>{it.label}</span>
-                        <span className="text-[13px] leading-snug text-slate-500">{it.desc}</span>
-                      </span>
-                    </button>
-                  </Fragment>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
       </div>
       {detail && <p className="text-[13px] text-slate-500">{detail}</p>}
+      {state !== 'none' && (
+        <p className="text-[13px] text-slate-500">
+          Re-issue, restore or revoke this account in Account Management &rarr; Parents — it covers every child on it.
+        </p>
+      )}
     </div>
   )
 }

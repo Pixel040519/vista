@@ -7,7 +7,7 @@ const { query, withTransaction } = require('../config/database')
 const { authenticate, authorizeAnyAdmin, authorizeSuperAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
 const { normaliseName } = require('../utils/nameHelper')
-const { ROLES, gradeScopeForRole, canManageGrade, isScopedAdmin, isAnyAdmin } = require('../utils/roles')
+const { ROLES, ALL_GRADES, gradeScopeForRole, canManageGrade, isScopedAdmin, isAnyAdmin } = require('../utils/roles')
 const { assertSectionsExist } = require('../utils/sections')
 const { MANUAL_STATUS_IDS, clampToManual, statusLabel } = require('../utils/enrollment')
 const { grantParentAccess, revokeParentAccess, changeInvitationEmail, latestInvitation, accessNote, alsoLinkedNote } = require('../utils/parentInvitations')
@@ -88,7 +88,11 @@ const studentSchema = Joi.object({
   first_name:        Joi.string().min(1).required(),
   middle_name:       Joi.string().optional().allow(''),
   date_of_birth:     Joi.date().required(),
-  gender:            Joi.string().valid('Male','Female').required(),
+  // `.insensitive()` accepts "male"/"FEMALE" from a hand-typed spreadsheet and
+  // **converts** the value to the stored casing, the same canonicalise-don't-
+  // merely-accept rule grade level and section follow: `students_gender_check`
+  // and every surface that groups by gender compare the string exactly.
+  gender:            Joi.string().trim().valid('Male','Female').insensitive().required(),
   grade_level:       Joi.string().required(),
   section:           Joi.string().optional().allow(''),
   profile_photo_url: Joi.string().uri().optional().allow(''),
@@ -113,7 +117,7 @@ const updateStudentSchema = Joi.object({
   first_name:        Joi.string().min(1).optional(),
   middle_name:       Joi.string().optional().allow(''),
   date_of_birth:     Joi.date().optional(),
-  gender:            Joi.string().valid('Male','Female').optional(),
+  gender:            Joi.string().trim().valid('Male','Female').insensitive().optional(),
   grade_level:       Joi.string().optional(),
   section:           Joi.string().optional().allow(''),
   profile_photo_url: Joi.string().uri().optional().allow(''),
@@ -448,6 +452,217 @@ router.get('/parents/search', authorizeAnyAdmin, async (req, res, next) => {
       [`%${q.trim()}%`, forStudent]
     )
     res.json({ parents: result.rows })
+  } catch (err) { next(err) }
+})
+
+// ── The Parents tab in Account Management ────────────────────────────────
+//
+// `/parents/search` above answers "which account is this?" for a picker and so
+// needs a query and caps at 10. The tab needs the opposite: the whole roster,
+// with each account's children and its derived access state, which is what the
+// two routes below are for. They live here rather than in account.routes.js
+// because everything they build on is here — `insertGuardian()`, the email
+// guards, and the invitation lateral.
+//
+// Access state is DERIVED (utils/parentAccess.js), not stored, so it cannot be
+// a WHERE clause: the rows are resolved in JS and filtered after. That is also
+// why paging is applied here rather than in SQL. A school's parents number in
+// the hundreds, so this is one cheap query; if it ever stops being one, the
+// fix is a stored state column, not a cleverer filter — and that would mean two
+// facts that can disagree, which is what deriving avoids.
+
+// GET /api/students/parents?search=&state=&grade_level=&limit=&offset=
+router.get('/parents', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const { search = '', state = '', grade_level = '', limit = 25, offset = 0 } = req.query
+    const scope = gradeScopeForRole(req.user.role)
+
+    const result = await query(
+      `SELECT u.id, u.surname, u.first_name, u.middle_name, u.full_name,
+              u.email, u.phone, u.account_status,
+              -- What canChangeEmail() keys on. The registered address stops
+              -- being the school's to edit once the parent has set a password,
+              -- and the test is that, never account_status -- a revoked account
+              -- has still proved it owns the address.
+              -- (No backticks in here: this is a JS template literal, and one
+              -- would end the string mid-query.)
+              (u.password_hash IS NOT NULL) AS has_password,
+              MAX(ps.home_address) AS home_address,
+              CASE WHEN inv.invited_at IS NULL THEN NULL ELSE json_build_object(
+                'invited_at',      inv.invited_at,
+                'expires_at',      inv.expires_at,
+                'consumed_at',     inv.consumed_at,
+                'revoked_at',      inv.revoked_at,
+                'has_live_code',   inv.has_live_code,
+                'invited_by_name', inv.invited_by_name
+              ) END AS invitation,
+              COALESCE(json_agg(json_build_object(
+                'student_id',           s.id,
+                -- The parent_student row, which is what the invitation routes
+                -- are keyed on. Access is per ACCOUNT, so any child's pair
+                -- reaches it; a scoped admin only ever holds in-scope ones,
+                -- which is what keeps assertStudentInScope satisfied.
+                'guardian_id',          ps.id,
+                'surname',              s.surname,
+                'first_name',           s.first_name,
+                'grade_level',          s.grade_level,
+                'section',              s.section,
+                'is_active',            s.is_active,
+                'relationship',         ps.relationship,
+                'is_authorized_pickup', ps.is_authorized_pickup,
+                'is_emergency_contact', ps.is_emergency_contact
+              ) ORDER BY s.grade_level, s.surname, s.first_name), '[]') AS children
+         FROM users u
+         JOIN parent_student ps ON ps.parent_id = u.id
+         JOIN students s        ON s.id = ps.student_id
+         LEFT JOIN LATERAL (
+           SELECT pi.invited_at, pi.expires_at, pi.consumed_at, pi.revoked_at,
+                  (pi.code_hash IS NOT NULL AND pi.code_expires_at > NOW()) AS has_live_code,
+                  ib.full_name AS invited_by_name
+             FROM parent_invitations pi
+             LEFT JOIN users ib ON ib.id = pi.invited_by
+            WHERE pi.user_id = u.id
+            ORDER BY pi.invited_at DESC
+            LIMIT 1
+         ) inv ON TRUE
+        WHERE u.role = 'parent'
+        GROUP BY u.id, inv.invited_at, inv.expires_at, inv.consumed_at,
+                 inv.revoked_at, inv.has_live_code, inv.invited_by_name
+        ORDER BY u.surname, u.first_name`
+    )
+
+    // A parent is in scope when at least ONE of their children is. The rest are
+    // counted but not named — the same redaction `presentStudent()` makes, and
+    // for the same reason: a scoped admin may act on the account (revoking is
+    // per account, so it reaches every child) without learning who the other
+    // learners are.
+    const rows = []
+    for (const r of result.rows) {
+      const mine = r.children.filter(c => scope.includes(c.grade_level))
+      if (!mine.length) continue
+      rows.push({
+        ...r,
+        children: mine,
+        other_children: r.children.length - mine.length,
+        access: resolveParentAccess({
+          hasAccount: true,
+          accountStatus: r.account_status,
+          invitation: r.invitation,
+        }),
+      })
+    }
+
+    // Counted over the caller's whole scope, before search and state narrow it,
+    // so the chips keep their numbers while one of them is selected — the same
+    // rule the Students and Enrollment pages follow.
+    const summary = rows.reduce((acc, r) => {
+      acc[r.access.id] = (acc[r.access.id] || 0) + 1
+      return acc
+    }, {})
+
+    const q = String(search).trim().toLowerCase()
+    const filtered = rows.filter((r) => {
+      if (state && r.access.id !== state) return false
+      if (grade_level && !r.children.some(c => c.grade_level === grade_level)) return false
+      if (!q) return true
+      return [r.full_name, r.email, r.phone].some(v => String(v || '').toLowerCase().includes(q))
+        || r.children.some(c => `${c.surname}, ${c.first_name}`.toLowerCase().includes(q))
+    })
+
+    const from = Math.max(0, Number(offset) || 0)
+    const size = Math.min(100, Math.max(1, Number(limit) || 25))
+    res.json({
+      parents: filtered.slice(from, from + size),
+      total: filtered.length,
+      all_total: rows.length,
+      summary,
+    })
+  } catch (err) { next(err) }
+})
+
+// POST /api/students/parents — create an account and its children together.
+//
+// The children are part of the CREATE, never a step after it. A `users` row with
+// no `parent_student` row is a state nothing else in the app can express: the
+// parent would sign in to an empty app, appear on no learner's record, and be
+// hard-deleted by `DELETE /guardians/:guardianId`, which removes a parent left
+// with no learners. So `children` is `.min(1)` and the whole thing is one
+// transaction — the account and every link land together or not at all.
+//
+// `invite` is not a choice here. An account exists only because an email was
+// authorized, so creating one without inviting would ask for a row the model
+// has no state for; the form says so rather than offering a switch.
+const parentChildSchema = Joi.object({
+  student_id:           Joi.string().uuid().required(),
+  relationship:         Joi.string().max(50).required(),
+  is_authorized_pickup: Joi.boolean().default(false),
+  is_emergency_contact: Joi.boolean().default(false),
+})
+const createParentSchema = Joi.object({
+  surname:     Joi.string().trim().required(),
+  first_name:  Joi.string().trim().required(),
+  middle_name: Joi.string().trim().optional().allow(''),
+  phone:       Joi.string().pattern(/^\+63 9\d{2} \d{7}$/).required()
+    .messages({ 'string.pattern.base': 'phone must be a PH mobile number (+63 9XX XXXXXXX)' }),
+  email:       Joi.string().email().trim().required(),
+  children:    Joi.array().items(parentChildSchema).min(1).max(10).required()
+    .messages({ 'array.min': 'Add at least one child — an account with no learner cannot exist.' }),
+})
+
+router.post('/parents', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const { error, value } = createParentSchema.validate(req.body, { abortEarly: false, stripUnknown: true })
+    if (error) throw new AppError(error.details.map(d => d.message).join('; '), 422)
+
+    const ids = value.children.map(c => c.student_id)
+    if (new Set(ids).size !== ids.length) {
+      throw new AppError('The same learner is listed twice.', 422)
+    }
+
+    const learners = await query(
+      `SELECT id, surname, first_name, grade_level, home_address
+         FROM students WHERE id = ANY($1::uuid[]) AND is_active = TRUE`,
+      [ids]
+    )
+    if (learners.rows.length !== ids.length) {
+      throw new AppError('One of the learners no longer exists or has been archived.', 404)
+    }
+    // Per learner, not once: attaching a child is a write on that learner's
+    // record, so each one has to be inside the caller's grade scope.
+    for (const s of learners.rows) enforceGradeScope(req, s.grade_level)
+    const byId = new Map(learners.rows.map(s => [s.id, s]))
+
+    const out = await withTransaction(async (client) => {
+      let parentId = null
+      let account = null
+      for (const [i, c] of value.children.entries()) {
+        const learner = byId.get(c.student_id)
+        const shared = {
+          relationship:         c.relationship,
+          is_authorized_pickup: c.is_authorized_pickup,
+          is_emergency_contact: c.is_emergency_contact,
+          home_address:         learner.home_address,
+        }
+        // The first child creates the account — `insertGuardian()`'s non-link
+        // path runs refuseParentAccountEmail() and assertGuardianEmailFree()
+        // first, so a taken address is refused here with the same wording every
+        // other surface uses. The rest link to what it returned.
+        const g = i === 0
+          ? { ...shared, surname: value.surname, first_name: value.first_name,
+              middle_name: value.middle_name, email: value.email, phone: value.phone, invite: true }
+          : { ...shared, link_parent_id: parentId }
+        const r = await insertGuardian(client, c.student_id, g, req.user.id)
+        if (i === 0) { parentId = r.parentId; account = r.account }
+      }
+      return { parentId, account }
+    })
+
+    const names = learners.rows.map(s => `${s.surname}, ${s.first_name}`)
+    res.status(201).json({
+      parent_id: out.parentId,
+      message: `${value.surname}, ${value.first_name} was added as a guardian of ${names.join(' and ')}. `
+             + `${value.email} is authorized for the VISTA Parent app — they activate it themselves from the app.`,
+    })
   } catch (err) { next(err) }
 })
 
@@ -884,6 +1099,21 @@ const findParentAccountsByEmail = async (emails) => {
 const sameName = (a, b) =>
   String(a ?? '').trim().replace(/\s+/g, ' ').toLowerCase() === String(b ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
 
+// Phones reach here as `+63 9XX XXXXXXX`, but compared on digits alone so the
+// rule is about the number rather than how it was punctuated.
+const samePhone = (a, b) =>
+  String(a ?? '').replace(/\D/g, '') === String(b ?? '').replace(/\D/g, '')
+
+// The stored spelling of a grade level, from any casing or spacing, or null if
+// it names none. Canonicalising rather than accepting loosely is the point:
+// `students.grade_level` is matched as a plain string by every roster query in
+// Node and FastAPI, so a row stored as "grade 1" belongs to no grade level at
+// all. Used by the batch upload, whose values are typed into Excel by hand.
+const canonicalGrade = (v) => {
+  const k = String(v ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+  return ALL_GRADES.find(g => g.toLowerCase() === k) ?? null
+}
+
 // A guardian row naming a parent account takes its identity from the account.
 // A name typed beside the email must agree with it: a mistyped email that
 // happens to match another family would otherwise give a stranger this learner
@@ -957,6 +1187,18 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
 
     const rows = value.students
 
+    // A spreadsheet is typed by hand, so a grade level arrives in any case and
+    // with any spacing. It is corrected here, before anything reads it: the
+    // scope check below compares against the ladder, and `students.grade_level`
+    // is a bare string every roster query matches on — so an uncorrected
+    // "grade 1" tells a scoped admin their own grade is outside their scope,
+    // and for a super admin stores a grade level nothing in the app lists.
+    rows.forEach((r, i) => {
+      const g = canonicalGrade(r.grade_level)
+      if (!g) throw new AppError(`Row ${i + 1}: "${r.grade_level}" isn't a grade level. Use one of ${ALL_GRADES.join(', ')}.`, 422)
+      r.grade_level = g
+    })
+
     if (isScopedAdmin(req.user.role)) {
       const offenders = []
       rows.forEach((r, i) => {
@@ -1013,6 +1255,24 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
 
     const accounts = await findParentAccountsByEmail(rows.flatMap(r => r.guardians.map(g => g.email)))
     const accountFor = (g) => (g.email ? accounts.get(g.email.trim().toLowerCase()) : undefined)
+
+    // The sheet may introduce a parent **once** and refer to them by email
+    // alone on every other learner — the same courtesy it already extends to an
+    // address that has an account. A row carrying the full set (surname, first
+    // name, phone) claims that address for the file; rows with only the email
+    // inherit from it. Collected file-wide rather than in sheet order, so the
+    // detailed row can sit under any learner, not necessarily the first.
+    const fileParents = new Map()
+    rows.forEach(r => r.guardians.forEach((g) => {
+      const key = String(g.email || '').trim().toLowerCase()
+      if (!key || accountFor(g) || fileParents.has(key)) return
+      if (g.surname && g.first_name && g.phone) fileParents.set(key, g)
+    }))
+    const fileParentFor = (g) => {
+      const key = String(g.email || '').trim().toLowerCase()
+      return key ? fileParents.get(key) : undefined
+    }
+
     const guardianProblems = []
     rows.forEach((r, i) => r.guardians.forEach((g) => {
       const who = `Row ${i + 1} (LRN ${r.lrn}) guardian ${g.email || [g.surname, g.first_name].filter(Boolean).join(', ') || '(blank)'}`
@@ -1021,32 +1281,72 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
         if (guardianAccountMismatch(g, account)) {
           guardianProblems.push(`${who}: the email belongs to parent account ${account.surname}, ${account.first_name}, but the name does not match`)
         }
+      } else if (fileParentFor(g)) {
+        // Detailed on another row of this file; the fill below completes it.
       } else if (!g.surname || !g.first_name || !g.phone) {
-        guardianProblems.push(`${who}: surname, first name and phone are required unless the email belongs to a parent account`)
+        guardianProblems.push(`${who}: surname, first name and phone are required unless the email belongs to a parent account or is detailed on another row`)
       }
     }))
 
-    // One email is one person, inside the file as well. The same address under
-    // two names is a typo or two people sharing a mailbox — either way the first
-    // invitation would mint an account under one of them and strand the other.
-    // The same address under the same name on several learners is one parent
-    // entered on each of their children, which is ordinary and stays allowed.
+    // One email is one person, inside the file as well — so every row that says
+    // who that person is has to agree. The same address under two names is a
+    // typo or two people sharing a mailbox, and the first invitation would mint
+    // an account under one of them and strand the other; **the phone follows
+    // the same rule**, because the account is created from whichever row the
+    // loop reaches first and every later row of that email then takes the link
+    // path, which copies the account's number — so a second, different number
+    // was silently discarded while the preview still showed it. The same
+    // address under the same details on several learners is one parent entered
+    // on each of their children, which is ordinary and stays allowed.
+    //
+    // Each field is compared on what the rows **typed** and only where both
+    // sides said something: a sparse row inherits these very values below, so
+    // comparing what it resolves to would have it agree with itself. The
+    // reference is tracked per field, not per row, or a first row that gave a
+    // name but no phone would leave two later, conflicting phones unchecked.
     const byEmail = new Map()
     rows.forEach((r, i) => r.guardians.forEach((g) => {
       const key = String(g.email || '').trim().toLowerCase()
       if (!key) return
-      const first = byEmail.get(key)
-      if (!first) { byEmail.set(key, { row: i + 1, lrn: r.lrn, g, invite: !!g.invite }); return }
-      if (!sameName(first.g.surname, g.surname) || !sameName(first.g.first_name, g.first_name)) {
-        guardianProblems.push(
-          `Row ${i + 1} (LRN ${r.lrn}) guardian ${g.email}: the same email is used on row ${first.row} (LRN ${first.lrn}) under a different name`
-        )
-      }
+      const at = { row: i + 1, lrn: r.lrn }
+      let grp = byEmail.get(key)
+      if (!grp) { grp = { invite: false, name: null, phone: null }; byEmail.set(key, grp) }
       // Access belongs to the account, not to one child: a Yes anywhere in the
       // person's rows invites them once, and every row of theirs links to it.
-      if (g.invite) first.invite = true
+      if (g.invite) grp.invite = true
+
+      if (g.surname && g.first_name) {
+        if (!grp.name) grp.name = { ...at, surname: g.surname, first_name: g.first_name }
+        else if (!sameName(grp.name.surname, g.surname) || !sameName(grp.name.first_name, g.first_name)) {
+          guardianProblems.push(
+            `Row ${at.row} (LRN ${at.lrn}) guardian ${g.email}: the same email is used on row ${grp.name.row} (LRN ${grp.name.lrn}) under a different name`
+          )
+        }
+      }
+      if (g.phone) {
+        if (!grp.phone) grp.phone = { ...at, phone: g.phone }
+        else if (!samePhone(grp.phone.phone, g.phone)) {
+          guardianProblems.push(
+            `Row ${at.row} (LRN ${at.lrn}) guardian ${g.email}: the same email is used on row ${grp.phone.row} (LRN ${grp.phone.lrn}) with a different phone number`
+          )
+        }
+      }
     }))
     if (guardianProblems.length) throw new AppError(guardianProblems.join('; '), 422)
+
+    // Only now, with the disagreements reported on the values as typed, does a
+    // sparse row take the rest of its identity from the row that introduced it.
+    // Relationship and the two flags are never filled: they are facts about this
+    // learner, not about the parent, exactly as for a linked account.
+    rows.forEach(r => r.guardians.forEach((g) => {
+      const src = accountFor(g) ? undefined : fileParentFor(g)
+      if (!src || src === g) return
+      if (!g.surname) g.surname = src.surname
+      if (!g.first_name) g.first_name = src.first_name
+      if (!g.middle_name) g.middle_name = src.middle_name
+      if (!g.phone) g.phone = src.phone
+      if (!g.home_address) g.home_address = src.home_address
+    }))
 
     // What the loop below actually sends per row: the group's answer, not the
     // row's own, so a blank beside a Yes does not leave that learner unlinked.
