@@ -1,48 +1,26 @@
-// Single source for school announcements.
+// School announcements on the website.
 //
-// PLACEHOLDER CONTENT. These entries are samples with invented dates, kept so the
-// Announcements page and the home page's news widget have something to render. The
-// school posts real updates to its Facebook page — replace this array (or wire it to
-// a feed) before launch.
+// They come from VISTA: an admin posts one and ticks "Also show on the public
+// website", and GET /api/public/announcements serves it (see
+// src/assets/lib/publicContent.js). There is deliberately NO bundled fallback
+// list — the one that used to live here was placeholder content with invented
+// dates, and an announcement is only worth showing if it is real. When VISTA is
+// unreachable the page says so and points to the Facebook page instead.
 export const FACEBOOK_PAGE = 'https://www.facebook.com/NRYS1939';
 
-export const announcements = [
-  {
-    id: 1,
-    date: 'April 20, 2026',
-    category: 'Enrollment',
-    title: 'Enrollment for SY 2026-2027 Officially Open',
-    excerpt:
-      'We are now accepting enrollees for the upcoming school year from Pre-Nursery to Senior High School. Early bird discounts apply until May 15.',
-    isPinned: true,
-  },
-  {
-    id: 2,
-    date: 'April 10, 2026',
-    category: 'Event',
-    title: 'Annual Parent-Teacher Association (PTA) Meeting',
-    excerpt:
-      'Join us for the final PTA meeting of the academic year. We will discuss year-end activities, student clearances, and graduation preparations.',
-    isPinned: false,
-  },
-  {
-    id: 3,
-    date: 'March 28, 2026',
-    category: 'Academic',
-    title: 'Release of 3rd Quarter Progress Reports',
-    excerpt:
-      "The 3rd quarter report cards are now available for viewing. Parents may claim the physical copies at the Registrar's Office during office hours.",
-    isPinned: false,
-  },
-  {
-    id: 4,
-    date: 'March 15, 2026',
-    category: 'Holiday',
-    title: 'Suspension of Classes for Holy Week',
-    excerpt:
-      'Please be guided that there will be no classes in observance of the Holy Week. Regular operations will resume on the following Monday.',
-    isPinned: false,
-  },
-];
+const DATE = new Intl.DateTimeFormat('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
 
-export default announcements;
+// A row from the API → what the Announcements page and NewsWidget render.
+export function announcementFromApi(row) {
+  return {
+    id: row.id,
+    date: row.published_at ? DATE.format(new Date(row.published_at)) : '',
+    category: row.category,
+    title: row.title,
+    excerpt: row.summary || row.content,
+    content: row.content,
+    summary: row.summary,
+    image: row.image_url,
+    isPinned: row.is_pinned,
+  };
+}

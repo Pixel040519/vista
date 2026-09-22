@@ -5,6 +5,7 @@ import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import { Label, CheckIcon } from '../components/ui';
 import { VISTA_LOGIN_URL } from '../../config';
+import { useFacilities } from '../lib/publicContent';
 
 const quickFacts = [
   { label: 'Founded', value: '1939' },
@@ -51,71 +52,6 @@ const academicLevels = [
   },
 ];
 
-// Each facility carries one caption per angle; the photo files are
-// /facilities/gallery/<slug>-1.jpg … -N.jpg, with -1 doubling as the grid cover.
-const facilities = [
-  {
-    name: 'Gymnasium',
-    slug: 'gymnasium',
-    angles: [
-      'From the upper gallery',
-      'The full court and stage',
-      'Along the sideline',
-      'From the baseline',
-    ],
-  },
-  {
-    name: 'Library',
-    slug: 'library',
-    angles: [
-      'Shelving down the main aisle',
-      'Between the stacks',
-      'The browsing island',
-      'Reading tables',
-    ],
-  },
-  {
-    name: 'Science laboratory',
-    slug: 'science-lab',
-    angles: [
-      'Preparation benches',
-      'Benches from the back of the room',
-      'Storage cabinets and displays',
-      'Display shelves at the far wall',
-    ],
-  },
-  {
-    name: 'Computer laboratory',
-    slug: 'computer-lab',
-    angles: ['Workstations at the front', 'From the doorway', 'Rows from the back'],
-  },
-  {
-    name: 'Auditorium',
-    slug: 'auditorium',
-    angles: ['The rake, seen from the stage', 'Toward the stage', 'From the rear seats'],
-  },
-  {
-    name: 'Culinary center',
-    slug: 'culinary',
-    angles: [
-      'Preparation tables',
-      'The cooking stations',
-      'Work surfaces along the wall',
-      'The full room',
-    ],
-  },
-  {
-    name: 'Dance studio',
-    slug: 'dance-studio',
-    angles: ['Mirrors along the long wall', 'From the far corner', 'Toward the windows'],
-  },
-  {
-    name: 'Tots play area',
-    slug: 'play-area',
-    angles: ['The climbing frame and slide', 'From the other side', 'The wider play room'],
-  },
-];
-
 const portalRoles = [
   {
     who: 'Teachers',
@@ -152,21 +88,29 @@ const portalRoles = [
   },
 ];
 
+const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight',
+  'Nine', 'Ten', 'Eleven', 'Twelve'];
+const countWord = (n) => NUMBER_WORDS[n] || String(n);
+
 const Home = () => {
   const navigate = useNavigate();
+
+  // VISTA's gallery when it answers, the bundled one until then (or instead).
+  const facilities = useFacilities();
 
   // { room, photo } while the facility viewer is open, null when closed.
   const [viewer, setViewer] = useState(null);
   const activeRoom = viewer ? facilities[viewer.room] : null;
+  const activePhoto = activeRoom ? activeRoom.photos[viewer.photo] : null;
 
   const step = useCallback(
     (delta) =>
       setViewer((v) => {
         if (!v) return v;
-        const count = facilities[v.room].angles.length;
+        const count = facilities[v.room].photos.length;
         return { ...v, photo: (v.photo + delta + count) % count };
       }),
-    []
+    [facilities]
   );
 
   // Keyboard control, and stop the page behind the viewer from scrolling.
@@ -373,7 +317,7 @@ const Home = () => {
           <div className="mx-auto max-w-7xl px-6 py-16 sm:px-12 lg:px-24 lg:py-20">
             <Label className="mb-3 block text-slate-500 dark:text-slate-400">Facilities</Label>
             <h2 className="mb-3 text-3xl font-bold tracking-tight text-[#001f3f] sm:text-4xl dark:text-white">
-              Eight rooms that do one job each
+              {countWord(facilities.length)} rooms that do one job each
             </h2>
             <p className="mb-9 max-w-2xl text-lg leading-relaxed text-slate-600 dark:text-slate-300">
               Every learning area on the curriculum has a room built for it — not a classroom with
@@ -386,11 +330,11 @@ const Home = () => {
                   key={room.slug}
                   type="button"
                   onClick={() => setViewer({ room: i, photo: 0 })}
-                  aria-label={`${room.name} — view ${room.angles.length} photos`}
+                  aria-label={`${room.name} — view ${room.photos.length} photos`}
                   className="group relative h-40 cursor-pointer overflow-hidden rounded-xl bg-slate-300 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[#002855] focus-visible:ring-offset-2 sm:h-48 dark:focus-visible:ring-yellow-400 dark:focus-visible:ring-offset-[#001f44]"
                 >
                   <img draggable="false"
-                    src={`/facilities/thumbs/${room.slug}.jpg`}
+                    src={room.cover}
                     alt={room.name}
                     loading="lazy"
                     decoding="async"
@@ -412,7 +356,7 @@ const Home = () => {
                       <circle cx="8.5" cy="8.5" r="1.5" />
                       <path d="m21 15-5-5L5 21" />
                     </svg>
-                    {room.angles.length}
+                    {room.photos.length}
                   </span>
                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#001f3f]/90 to-transparent px-4 pb-3 pt-7">
                     <Label className="text-white">{room.name}</Label>
@@ -512,8 +456,10 @@ const Home = () => {
 
       <Footer />
 
-      {/* FACILITY VIEWER */}
-      {activeRoom && (
+      {/* FACILITY VIEWER — activePhoto is checked too: the gallery can swap from
+          the bundled set to VISTA's while the viewer is open, and the index it
+          holds may not exist in the new one. */}
+      {activeRoom && activePhoto && (
         <div
           role="dialog"
           aria-modal="true"
@@ -531,8 +477,8 @@ const Home = () => {
                 {activeRoom.name}
               </h3>
               <Label className="text-slate-400">
-                {viewer.photo + 1} of {activeRoom.angles.length} ·{' '}
-                {activeRoom.angles[viewer.photo]}
+                {viewer.photo + 1} of {activeRoom.photos.length}
+                {activePhoto.caption ? ` · ${activePhoto.caption}` : ''}
               </Label>
             </div>
             <button
@@ -550,8 +496,8 @@ const Home = () => {
           {/* Stage — arrows overlay the photo so it can use the full width */}
           <div className="relative flex min-h-0 flex-1 items-center justify-center px-3 sm:px-8">
             <img draggable="false"
-              src={`/facilities/gallery/${activeRoom.slug}-${viewer.photo + 1}.jpg`}
-              alt={`${activeRoom.name} — ${activeRoom.angles[viewer.photo]}`}
+              src={activePhoto.src}
+              alt={activePhoto.caption ? `${activeRoom.name} — ${activePhoto.caption}` : activeRoom.name}
               onClick={(e) => e.stopPropagation()}
               className="max-h-full max-w-full rounded-lg object-contain"
             />
@@ -590,12 +536,12 @@ const Home = () => {
             className="flex shrink-0 justify-center gap-2 overflow-x-auto px-5 py-5 sm:px-8"
             onClick={(e) => e.stopPropagation()}
           >
-            {activeRoom.angles.map((angle, i) => (
+            {activeRoom.photos.map((photo, i) => (
               <button
-                key={angle}
+                key={photo.src}
                 type="button"
                 onClick={() => setViewer((v) => ({ ...v, photo: i }))}
-                aria-label={angle}
+                aria-label={photo.caption || `Photo ${i + 1}`}
                 aria-current={i === viewer.photo}
                 className={`h-14 w-20 shrink-0 overflow-hidden rounded-md border-2 transition-opacity ${
                   i === viewer.photo
@@ -604,7 +550,7 @@ const Home = () => {
                 }`}
               >
                 <img draggable="false"
-                  src={`/facilities/gallery/${activeRoom.slug}-${i + 1}.jpg`}
+                  src={photo.thumb}
                   alt=""
                   className="h-full w-full object-cover"
                 />

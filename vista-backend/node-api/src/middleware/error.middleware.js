@@ -11,6 +11,15 @@ const errorHandler = (err, req, res, next) => {
     return res.status(400).json({ error: 'Referenced record does not exist.' });
   }
 
+  // Multer limits (file too large, too many files). Without this they carry
+  // no statusCode and reach the client as a 500.
+  if (err.name === 'MulterError') {
+    const msg = err.code === 'LIMIT_FILE_SIZE' ? 'Photo must be 4 MB or smaller.'
+      : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE' ? 'Too many files in one upload.'
+      : err.message;
+    return res.status(400).json({ error: msg });
+  }
+
   // Joi validation errors
   if (err.isJoi) {
     return res.status(422).json({ error: err.details[0].message });

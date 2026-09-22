@@ -150,11 +150,28 @@ export const dismissalApi = {
 }
 
 // ── Announcements ─────────────────────────────────────────────
+// Create and update are multipart because a post may carry an image; `data` is
+// a FormData built by the page.
+const MULTIPART = { headers: { 'Content-Type': 'multipart/form-data' } }
+
 export const announcementApi = {
   list:   ()         => api.get('/announcements'),
-  create: (data)     => api.post('/announcements', data),
-  update: (id, data) => api.put(`/announcements/${id}`, data),
+  create: (data)     => api.post('/announcements', data, MULTIPART),
+  update: (id, data) => api.put(`/announcements/${id}`, data, MULTIPART),
   remove: (id)       => api.delete(`/announcements/${id}`),
+}
+
+// ── Facility gallery (super admin; shown on the public website) ─
+export const facilityApi = {
+  list:         ()             => api.get('/facilities'),
+  create:       (data)         => api.post('/facilities', data),
+  update:       (id, data)     => api.put(`/facilities/${id}`, data),
+  reorder:      (ids)          => api.put('/facilities/order', { ids }),
+  remove:       (id)           => api.delete(`/facilities/${id}`),
+  addPhotos:    (id, formData) => api.post(`/facilities/${id}/photos`, formData, MULTIPART),
+  reorderPhotos:(id, ids)      => api.put(`/facilities/${id}/photos/order`, { ids }),
+  captionPhoto: (photoId, caption) => api.put(`/facilities/photos/${photoId}`, { caption }),
+  removePhoto:  (photoId)      => api.delete(`/facilities/photos/${photoId}`),
 }
 
 // ── Notifications ─────────────────────────────────────────────

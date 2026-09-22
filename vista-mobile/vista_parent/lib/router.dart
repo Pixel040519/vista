@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'providers.dart';
 import 'screens/activate_screen.dart';
+import 'screens/announcements_screen.dart';
 import 'screens/child_detail_screen.dart';
 import 'screens/children_screen.dart';
 import 'screens/edit_profile_screen.dart';
@@ -61,6 +62,12 @@ GoRouter buildRouter(WidgetRef ref) {
       GoRoute(
         path: '/notifications',
         builder: (_, __) => const NotificationsScreen(),
+      ),
+      GoRoute(
+        path: '/announcements',
+        builder: (_, s) => AnnouncementsScreen(
+          highlightId: s.uri.queryParameters['id'],
+        ),
       ),
       GoRoute(
         path: '/profile',

@@ -1078,18 +1078,60 @@ Photos land under `vista-backend/node-api/uploads/authorized-pickup/<uuid>.<ext>
 
 ## File uploads (`middleware/upload.middleware.js`)
 
-`buildUploader(bucket)` returns a configured multer instance (disk storage, `<uuid>.<ext>` filenames, 4 MB cap, `image/jpeg|png|webp` MIME whitelist). Two pre-built helpers are exported: `uploadAuthorizedPickupPhoto` and `uploadProfilePhoto`. `photoUrlFromPath(req, relPath)` derives a public URL from a stored path; `unlinkUploadedFile(relPath)` is a best-effort cleanup that swallows `ENOENT` so a missing-on-disk record never blocks the user-facing operation. Everything under `uploads/` is gitignored — production deploys must mount a persistent volume there or migrate to object storage.
+`buildUploader(bucket)` returns a configured multer instance (disk storage, `<uuid>.<ext>` filenames, 4 MB cap, `image/jpeg|png|webp` MIME whitelist). Pre-built helpers: `uploadAuthorizedPickupPhoto`, `uploadProfilePhoto`, and — for public content — `uploadAnnouncementImage` and `uploadFacilityPhotos`, which write to a staging `incoming/` bucket.
+
+**Anything that will be published goes through `utils/imageProcess.js`** (`processImage(file, bucket, { maxWidth, thumbWidth })`). The multer file is the client's bytes under the client's claimed MIME type and still carries its EXIF, GPS included; sharp decoding it is the real type check (a renamed `.txt` is a 400), `.rotate()` applies EXIF orientation (phone photos otherwise render sideways), and re-encoding to JPEG writes no metadata at all. It always deletes its input. Profile and pickup photos predate it and are stored as uploaded. A `MulterError` (too large, too many files) now maps to a 400 in `errorHandler` rather than a 500. `/uploads` sends `Cross-Origin-Resource-Policy: cross-origin` so the landing page, a different origin, can display these photos past helmet's same-origin default.
+
+Also exported: `photoUrlFromPath(req, relPath)` derives a public URL from a stored path; `unlinkUploadedFile(relPath)` is a best-effort cleanup that swallows `ENOENT` so a missing-on-disk record never blocks the user-facing operation. Everything under `uploads/` is gitignored — production deploys must mount a persistent volume there or migrate to object storage.
 
 ## Announcements (`announcement.routes.js` — `/api/announcements`)
 
-All endpoints require auth. Writes are admin-only; posters may only edit/delete their own.
+All endpoints require auth. Writes are admin-only; create and update are **multipart**
+(optional `image` field) and validated with Joi.
 
-- `GET /` — visible rows are filtered by `target_audience` against the caller's role via `audiencesForRole()`: admins see `all` + `admins`, teachers see `all` + `teachers`, parents see `all` + `parents`. The `admins` audience is invisible to teachers and parents.
-- `POST /` — `authorizeAnyAdmin`. Accepts `target_audience ∈ {all, admins, parents, teachers}` (defaults to `all`). `posted_by` is stamped from JWT.
-- `PUT /:id` — `authorizeAnyAdmin` + `posted_by === req.user.id` ownership check (403 otherwise, 404 if not active). Poster can change title, content, or audience.
-- `DELETE /:id` — same ownership rule. Soft-deletes via `is_active = FALSE` so the GET filter (`is_active = TRUE`) hides the row.
+- `GET /` — admins see every live post plus drafts and scheduled ones (their own; everyone's
+  for `super_admin`) so they can manage from it. Teachers and parents see only **live** posts
+  (`published_at <= NOW()`, not expired) for their audience via `audiencesForRole()`. Pinned
+  live posts first. Each row carries a derived `state` (`draft`/`scheduled`/`published`/
+  `expired`, `STATE_SQL`), `image_url` and `posted_by_name`.
+- `POST /`, `PUT /:id` — `status` is `draft` | `publish` | `schedule` (+ `publish_at`).
+  Re-saving a live post keeps its `published_at`, so a typo fix does not float it back to the
+  top as new. An image needs `image_consent: true`; `remove_image` clears one.
+- `DELETE /:id` — soft (`is_active = FALSE`); notification rows still reference it.
 
-No grade-scope gating — announcements are school-wide; scoped admins (`admin_ece` / `admin_elem`) can post/edit/delete their own alongside super_admin.
+**Who may do what** (`assertCanEdit`): `super_admin` edits or deletes any post, including one
+left by an admin who has gone. Scoped admins edit only their own, and never a public one.
+Only `super_admin` may set **`is_public`** (403), and never on an `admins`/`teachers` post
+(422, and a table CHECK) — a staff-only notice must not reach the internet.
+
+**`notify_parents`** (`notifyParents()`) inserts one `notifications` row
+(`type 'announcement'`, `reference_id` = the post) per `role='parent'` user with
+`account_status='active'`, and stamps `notified_at` in the same transaction; the FCM push
+(`pushService.sendAnnouncement`, Android channel `vista_announcements`) runs **after** the
+commit. It is a no-op unless the post reaches parents, is live now, and has never notified —
+a scheduled post has no moment at which it could run, and notifying before a post is visible
+would send parents to something they cannot open. So re-saving never pushes twice.
+
+## Facility gallery (`facility.routes.js` — `/api/facilities`)
+
+`authenticate` + `authorizeSuperAdmin` on every route — the website is one office's voice.
+`GET /` (hidden ones included), `POST /`, `PUT /order` (`{ ids }`), `PUT /:id` (name,
+`is_active`; the slug is kept on rename), `DELETE /:id` (rows first, then files). Photos:
+`POST /:id/photos` (multipart `photos`, up to 10, `consent: true` required — every file is
+re-encoded before any row is written, so one bad file refuses the batch),
+`PUT /:id/photos/order` (the first is the cover), `PUT /photos/:photoId` (caption),
+`DELETE /photos/:photoId`. `scripts/seedFacilities.js` imports the landing page's bundled
+gallery once (idempotent, skips existing slugs).
+
+## Public content (`public.routes.js` — `/api/public`, NO AUTH)
+
+**The only unauthenticated reads in the API.** `GET /announcements?limit=` (≤50; public, live,
+active only) and `GET /facilities` (active facilities with at least one photo). Kept narrow
+on purpose: every column is listed by name — never `SELECT *`, which would publish whatever
+the next migration adds — `posted_by` and anything about a user or learner never appear,
+`publicReadPerIp` (300 / 15 min) runs in every environment, and responses carry
+`Cache-Control: public, max-age=60`. The landing page's origin must be in `ALLOWED_ORIGINS`
+(unset = any origin, which is only acceptable in development).
 
 ## Students (`crud.routes.js`, `student.routes.js`)
 

@@ -16,12 +16,14 @@ services plus the Flutter mobile apps:
 - **`vista-backend/node-api/`** — Express.js REST API (port 5000)
 - **`vista-backend/fastapi-ai/`** — Python FastAPI AI microservice (port 8000)
 - **`vista-dashboard/`** — React + Vite frontend (port 5173, proxies `/api` → 5000)
-- **`vista-landingpage/`** — React + Vite **public marketing site** (port 5174). Static; no auth, no API calls.
+- **`vista-landingpage/`** — React + Vite **public marketing site** (port 5174). No auth; its only API traffic is optional read-only `GET /api/public/*`.
 - **`vista-mobile/`** — Flutter apps (`vista_parent`, `vista_guard`) against the Node API.
 
 The landing page is **not** part of the application. It is the school's brochure site and must
-keep rendering with the backend down; it reaches VISTA only by linking to the dashboard's
-`/login` at `VITE_VISTA_URL`. The two Vite apps pin different ports on purpose — they both
+keep rendering with the backend down. It reaches VISTA in two ways: a link to the dashboard's
+`/login` at `VITE_VISTA_URL`, and — optionally, when `VITE_API_URL` is set — reads of the
+announcements and facility gallery that admins publish (see "Public content" below). Both
+reads fail soft to bundled content. The two Vite apps pin different ports on purpose — they both
 defaulted to 5173 and silently fought over it.
 
 ## Development Commands
@@ -58,17 +60,25 @@ PYTHONIOENCODING=utf-8 venv/Scripts/uvicorn main:app --reload --port 8000
 
 ## Environment Setup
 
-Copy `vista-backend/.env.example` to `vista-backend/node-api/.env`. Required vars:
+Copy `vista-backend/.env.example` to **`vista-backend/.env`** — not `node-api/.env`.
+`node-api/src/config/env.js` resolves the path three levels up from `src/config`, which is
+`vista-backend/`, and FastAPI's bare `load_dotenv()` finds the same file by searching upward
+from `fastapi-ai/services/`, so one file configures both services. A `node-api/.env` is
+never read; values put there silently do nothing. Required vars:
 - `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_PORT` — PostgreSQL connection
 - `JWT_SECRET`, `JWT_REFRESH_SECRET`, `JWT_EXPIRES_IN` — JWT auth
 - `PORT` — API port (default 5000)
 - `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` (`SMTP_SECURE` only on port 465) — parent activation and password-reset codes. **Without these an invited parent can never receive a code**, so the activation flow stops at its first screen. The failure is deliberately quiet on the wire — the request still answers with its generic success, because doing anything else would leak whether the address was invited — so the only sign is `[mailer] no SMTP configured; dropped "…" to …` in the API log. Check there first when a code never arrives. Any provider works; a Gmail account with 2FA and an App Password is enough for development.
+- `ALLOWED_ORIGINS` — comma-separated browser origins allowed to call the API. **Unset means any origin** (`server.js` falls back to `*`), which is fine locally and wrong in production. Must include the landing page's origin, which reads `/api/public/*`.
+- `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` — FCM push (pickup alerts, announcements). Optional: without them push is a logged no-op.
+- `AI_SERVICE_URL` — where Node reaches FastAPI; defaults to `http://localhost:8000`.
 - `MAIL_TRANSPORT=console` — development only. Prints codes to the API log instead of sending them, so the flow can be walked with no mail server. It **refuses to start** when `NODE_ENV=production`, because logging codes is what the rest of that design exists to avoid.
 
 ## Architecture
 
 ```
-Landing page (:5174) ──link──▶ Dashboard /login        (no API traffic of its own)
+Landing page (:5174) ──link──▶ Dashboard /login
+                     ──GET───▶ Node /api/public/*      (optional, no auth, read-only)
 
 React Dashboard → Node.js API (/api/*) → PostgreSQL
 Flutter apps    ↗                       → FastAPI (/api/ai/* proxied to :8000)
@@ -76,10 +86,11 @@ Flutter apps    ↗                       → FastAPI (/api/ai/* proxied to :800
 
 The frontend **never calls FastAPI directly** — all AI endpoints go through Node's `ai.routes.js` where JWT + role checks live. The FastAPI service stays role-agnostic.
 
-The landing page sits outside this entirely: it is a static site whose only connection to
-VISTA is an `<a href>` into the dashboard's login. Adding API calls to it would mean new
-**public, unauthenticated** endpoints in Node, where every route is currently JWT-gated — that
-is a deliberate decision, not a small one.
+The landing page sits outside this: it links into the dashboard's login, and reads
+`/api/public/*` — **the only unauthenticated reads in Node**, where every other route is
+JWT-gated. That exception was a deliberate decision and is kept deliberately narrow: GET only,
+explicit column lists, only rows an admin made public, rate-limited per IP. Do not widen it
+casually; a new public read is a new thing the whole internet can call.
 
 ## Database
 
@@ -116,6 +127,8 @@ Key tables:
 - `competency_domains` / `competency_skills` / `ece_competency_records` — competency tracker for **descriptively-assessed** grade levels. `rating_scale` (`'EGFNA'` | `'CODVBG'` | `'ABCDE'`) is stamped on every record and a pairwise CHECK ties it to the legal codes for that scale. Unique on `(student_id, skill_id, school_year_id, quarter)`.
 - `parent_invitations` — one row per portal invitation: `user_id`, the authorized `email`, `invited_by`/`invited_at`, `expires_at` (30 days), `consumed_at`, `revoked_at`/`revoked_by`, plus the **live one-time code on the same row** (`code_hash`, `code_issued_at`, `code_expires_at`, `code_attempts`). Keeping the code here rather than in a table of its own is what makes "issuing a new code invalidates the previous unused one" automatic instead of a rule to enforce. `code_hash` is NULL at invite time, because no message is sent then. A partial unique index allows exactly **one live invitation per account** (`WHERE consumed_at IS NULL AND revoked_at IS NULL`), and `ON DELETE CASCADE` on `user_id` is load-bearing — removing a parent's last guardian row hard-deletes their `users` row.
 - `password_reset_codes` — the same code discipline for an active account's self-service reset. Deliberately **not** folded into `parent_invitations`: an invitation is a thing an admin creates, sees and revokes, while a reset code is ephemeral and belongs to the account holder.
+- `announcements` — one notice system with several reaches: `target_audience` (`'all'` | `'admins'` | `'teachers'` | `'parents'`) within VISTA, plus **`is_public`**, which also puts it on the landing page. A CHECK allows `is_public` only with `'all'`/`'parents'`, so a staff-only post can never reach the internet. `published_at` NULL = draft, future = scheduled; `expires_at` takes it down; the visible *state* is derived from those, never stored. `notified_at` records that parents were notified, so an edit can never push twice. `image_path` is always a server re-encoded file. See "Public content".
+- `facilities` / `facility_photos` — the landing page's facility gallery. First photo by `sort_order` is the cover; `is_active = FALSE` hides a facility from the site without deleting it.
 - `grade_level_assessment` — per `(school_year_id, grade_level)`: `assessment_mode` (`'numeric'` | `'descriptive'`) + `rating_scale` (required for descriptive, NULL for numeric). Zero rows = built-in defaults, so it is additive. See "Assessment mode" below.
 
 Supported grade levels: **Kinder, Grades 1–6**. Pre-Nursery, Nursery and Pre-Kinder
@@ -1009,6 +1022,28 @@ Still open: Google Sign-In is designed for but not built — the UI carries the
 slot and a sign-in-method column, and the invitation must remain the gate if it
 is added (a Google identity is only ever matched against an already-authorized
 address, never allowed to create an account).
+
+## Public content (announcements + facility gallery)
+
+Admins manage what the landing page shows from VISTA instead of a developer editing the site.
+Migration `2026_09_22_public_content.sql`; seed the existing gallery once with
+`node vista-backend/node-api/scripts/seedFacilities.js` (idempotent).
+
+- **The public website is the super admin's.** Only `super_admin` may set `is_public` or reach
+  `/api/facilities`. Scoped admins keep posting inside VISTA (to staff or parents) and editing
+  their own posts — but not a public one. `super_admin` may edit or delete any post.
+- **One post, several reaches.** A post to parents shows in the `vista_parent` app; the
+  opt-in **Notify parents** writes a `notifications` row per active parent account and sends an
+  FCM push, once (`notified_at`), and only for a post that is live now.
+- **Every uploaded image is re-encoded** by `utils/imageProcess.js` (sharp): decoding it is the
+  real type check, `.rotate()` applies EXIF orientation, and re-encoding drops all EXIF,
+  GPS included. Uploads require a consent checkbox (no identifiable learners, or parental
+  consent on file) — Data Privacy Act, RA 10173.
+- **The landing page must render with the API down.** It reads with a 4 s timeout and
+  falls back: the gallery to the bundled photos, announcements to an empty state pointing to
+  Facebook. There is deliberately no bundled announcement list — the old one was invented.
+- Out of scope on purpose: handbook text (vision, mission, principles, hymn), tuition, and
+  anything about a learner. Those stay in code.
 
 ## Role-Based Access (summary)
 

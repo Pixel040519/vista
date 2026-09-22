@@ -54,6 +54,25 @@ async function removeDeadTokens(tokens) {
   await query(`DELETE FROM device_tokens WHERE token = ANY($1)`, [tokens]);
 }
 
+// Send one message to many tokens and prune the ones FCM reports as gone.
+async function multicast(message, rows) {
+  const response = await admin.messaging().sendEachForMulticast(message);
+
+  const dead = [];
+  response.responses.forEach((resp, idx) => {
+    if (!resp.success && resp.error) {
+      const code = resp.error.code || '';
+      if (code.includes('registration-token-not-registered') ||
+          code.includes('invalid-argument')) {
+        dead.push(rows[idx].token);
+      }
+    }
+  });
+  if (dead.length) await removeDeadTokens(dead);
+
+  return { sent: response.successCount, failed: response.failureCount, cleaned: dead.length };
+}
+
 // Send a pickup alert when a guard successfully releases a student at the gate.
 // Caller: POST /api/dismissal/verify success branch. Silent failure is OK —
 // the gate log is the source of truth, push is a best-effort convenience.
@@ -85,27 +104,47 @@ async function sendPickupAlert({ studentId, studentName, guardianName, scannedAt
       tokens: rows.map(r => r.token),
     };
 
-    const response = await admin.messaging().sendEachForMulticast(message);
-
-    const dead = [];
-    response.responses.forEach((resp, idx) => {
-      if (!resp.success && resp.error) {
-        const code = resp.error.code || '';
-        if (code.includes('registration-token-not-registered') ||
-            code.includes('invalid-argument')) {
-          dead.push(rows[idx].token);
-        }
-      }
-    });
-    if (dead.length) await removeDeadTokens(dead);
-
-    return { sent: response.successCount, failed: response.failureCount, cleaned: dead.length };
+    return await multicast(message, rows);
   } catch (err) {
     console.error('[push] sendPickupAlert failed:', err.message);
     return { sent: 0, error: err.message };
   }
 }
 
+// FCM caps a multicast at 500 tokens.
+const MULTICAST_LIMIT = 500;
+
+// Push a school announcement to every given parent with a registered device.
+// Caller: announcement.routes.js, after the transaction that wrote
+// the notification rows has committed — the in-app list is the source of truth,
+// the push is a best-effort nudge towards it. Its own Android channel keeps
+// announcements separately mutable from pickup alerts.
+async function sendAnnouncement(userIds, { id, title, summary }) {
+  try {
+    if (!ensureInit()) return { sent: 0, skipped: 'firebase-not-initialized' };
+
+    const rows = await tokensForUsers(userIds);
+    if (!rows.length) return { sent: 0, skipped: 'no-device-tokens' };
+
+    const total = { sent: 0, failed: 0, cleaned: 0 };
+    for (let i = 0; i < rows.length; i += MULTICAST_LIMIT) {
+      const batch = rows.slice(i, i + MULTICAST_LIMIT);
+      const r = await multicast({
+        notification: { title, body: summary },
+        data: { type: 'announcement', announcement_id: String(id) },
+        android: { notification: { channelId: 'vista_announcements' } },
+        tokens: batch.map(t => t.token),
+      }, batch);
+      total.sent += r.sent; total.failed += r.failed; total.cleaned += r.cleaned;
+    }
+    return total;
+  } catch (err) {
+    console.error('[push] sendAnnouncement failed:', err.message);
+    return { sent: 0, error: err.message };
+  }
+}
+
 module.exports = {
   sendPickupAlert,
+  sendAnnouncement,
 };

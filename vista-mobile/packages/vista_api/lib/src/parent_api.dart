@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 
 import 'api_client.dart';
+import 'models/announcement.dart';
 import 'models/attendance.dart';
 import 'models/authorized_pickup_person.dart';
 import 'models/behavior.dart';
@@ -250,6 +251,19 @@ class ParentApi {
           .map((m) => AppNotification.fromJson(m.cast<String, dynamic>()))
           .toList();
       return list;
+    } on DioException catch (e) {
+      ApiClient.rethrowAsVistaException(e);
+    }
+  }
+
+  /// Live school announcements for parents, pinned first.
+  Future<List<Announcement>> announcements() async {
+    try {
+      final r = await client.raw.get('/api/announcements');
+      return (r.data['announcements'] as List? ?? const [])
+          .cast<Map>()
+          .map((m) => Announcement.fromJson(m.cast<String, dynamic>()))
+          .toList();
     } on DioException catch (e) {
       ApiClient.rethrowAsVistaException(e);
     }

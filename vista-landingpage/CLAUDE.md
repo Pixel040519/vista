@@ -3,10 +3,12 @@
 The school's **public marketing site** for Northern Rizal Yorklin School. React 19 + Vite 8 +
 Tailwind v4, served on **port 5174**.
 
-It is not part of the VISTA application. It has **no authentication, no API calls and no
-backend dependency of any kind** — it is a static brochure site that links across to the
-dashboard for login. Keep it that way unless there is a deliberate decision otherwise: the
-page must render with the Node API down.
+It is not part of the VISTA application. It has **no authentication and no hard backend
+dependency** — it is a brochure site that links across to the dashboard for login, and
+*optionally* reads two things admins publish from VISTA: public announcements and the
+facility gallery (`GET /api/public/*`). The page must still render with the Node API down,
+so every one of those reads fails soft. Adding any other API dependency is a deliberate
+decision, not a small one.
 
 ```bash
 cd vista-landingpage
@@ -33,6 +35,29 @@ cross-origin anchors, never react-router routes.
   "Open the portal". All are `<a target="_blank" rel="noreferrer">`.
 - `import.meta.env` is **inlined at build time**, so production needs `VITE_VISTA_URL` set
   before `npm run build`; it cannot be changed afterwards without rebuilding.
+
+## Reading from VISTA (`src/assets/lib/publicContent.js`)
+
+- `VITE_API_URL` (`src/config.js` → `API_URL`) points at the Node API. **Unset means fully
+  static**, which is also exactly what the site falls back to when the API is unreachable.
+  Like `VITE_VISTA_URL` it is inlined at build time. The API's `ALLOWED_ORIGINS` must include
+  this site's origin, and `/uploads` sends `Cross-Origin-Resource-Policy: cross-origin` so
+  the photos load here.
+- **Locally it lives in `.env.local`** (gitignored by `*.local`): `VITE_API_URL=http://localhost:5000`.
+  Without that file the dev server is silently static — edits made on the dashboard's
+  Facility Gallery or public announcements never show here, and nothing errors, because
+  the bundled fallback is indistinguishable from "the API has no changes". Check this first
+  when dashboard edits "don't reflect". Vite restarts itself when an env file changes.
+- `getPublic(path)` — 4 s `AbortController` timeout, returns `null` on any failure, never
+  throws into a render.
+- `useFacilities()` starts on `bundledFacilities` and swaps in VISTA's gallery only when it
+  answers with at least one facility — the section is never empty and never waits.
+- `useAnnouncements()` returns `{ status: 'loading' | 'ready' | 'unavailable', announcements }`.
+  There is **no bundled fallback list**: the placeholder that lived in
+  `data/announcements.js` had invented dates, and a fake notice is worse than none. On
+  `unavailable` the page says so and points to Facebook. `NewsWidget` renders nothing then.
+- The public API caches for 60 s (`Cache-Control`), so a browser keeps showing the last
+  answer for up to a minute after the API goes down.
 
 ## Design system
 
@@ -100,10 +125,16 @@ Copy is the school's own, not invented. The **Students' Handbook** is authoritat
   steward. An earlier version of this page dropped the steward stanza; keep all four.
 - Contact details, programme levels and the school hymn come from the existing site.
 
-**`src/assets/data/announcements.js` is placeholder content** with invented dates, and is
-labelled as such on the page. It is the single source for both the Announcements page and
-`NewsWidget`; those two used to hold separate copies that had already drifted. Replace the
-array — do not add a second copy.
+**Announcements come from VISTA**, not from this repo. `src/assets/data/announcements.js`
+now holds only `FACEBOOK_PAGE` and `announcementFromApi()`, the one mapper both the
+Announcements page and `NewsWidget` use — they once held separate copies that drifted.
+
+**`src/assets/data/facilities.js` is the bundled gallery** — the list of rooms and captions
+that used to be inline in `Home.jsx`. It is both the offline fallback and the source the
+backend's one-time `scripts/seedFacilities.js` imports into VISTA, after which admins manage
+the gallery from the dashboard. `bundledFacilities` / `facilitiesFromApi()` produce the one
+shape the page renders: `{ name, slug, cover, photos: [{ src, thumb, caption }] }`. The home
+heading counts the rooms (`countWord`) rather than hardcoding "Eight".
 
 Where a real figure is unknown it is either omitted or bracketed. There is deliberately **no
 tuition or fee schedule** and **no grading-policy claim** anywhere on the site.
@@ -111,8 +142,8 @@ tuition or fee schedule** and **no grading-policy claim** anywhere on the site.
 ## Known gaps
 
 - `NewsWidget.jsx` is no longer rendered by any page (Home's direction-B design has no
-  announcements section). The component still exists and reads the shared data.
-- The **facility photos** live in `public/facilities/`: `thumbs/` for the grid, `gallery/`
+  announcements section). The component still exists and reads `useAnnouncements(3)`.
+- The **bundled facility photos** live in `public/facilities/`: `thumbs/` for the grid, `gallery/`
   for the lightbox (`<slug>-1.jpg … -N.jpg`, with `-1` doubling as the cover), plus
   `quadrangle-wide.jpg` for the hero. Source images are the client's NRYS Facilities set and
   carry **EXIF orientation 6** — they render sideways unless the rotation is applied.

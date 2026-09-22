@@ -61,6 +61,14 @@ class NotificationsScreen extends ConsumerWidget {
                             '/child/${n.referenceId}?tab=dismissal');
                       }
                     }
+                    // An announcement opens expanded in the announcements list.
+                    if (n.type == 'announcement') {
+                      if (context.mounted) {
+                        context.push(n.referenceId != null
+                            ? '/announcements?id=${n.referenceId}'
+                            : '/announcements');
+                      }
+                    }
                   },
                 );
               },

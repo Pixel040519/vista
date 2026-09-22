@@ -48,7 +48,7 @@ School logo `src/assets/NRYS_logo.png` imported as `nrysLogo`. Used in the Sideb
 
 Two parallel `navGroups` arrays — `adminNavGroups` and `teacherNavGroups` — selected via `user?.role === ROLES.TEACHER ? teacherNavGroups : adminNavGroups`. Per-item `roles` filter still runs on top so cross-role items (SecurePass QR) keep working. Groups with no visible items auto-hide via `visibleItems.length === 0`.
 
-- **Admin** (all three admin roles, 4 groups): Overview · Student Management (Students, Grades, ECE Competency, Behavior) · Tools (SecurePass, Risk Overview, Announcements) · Administration (Accounts, Curriculum). ECE Competency is hidden from `admin_elem` via per-item `roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE]`; **Grades** is hidden from `admin_ece` via `roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM]` (the mirror — ECE tracks learning via ECE Competency, not the grades table). `/grades` route in `App.jsx` is also wrapped in a `PrivateRoute` excluding `admin_ece`. Lists within each page (Students, Risk Overview, etc.) are server-filtered by the caller's `gradeScopeForRole`, so scoped admins never see out-of-scope rows.
+- **Admin** (all three admin roles, 4 groups): Overview · Student Management (Students, Grades, ECE Competency, Behavior) · Tools (SecurePass, Risk Overview, Announcements, Facility Gallery — super_admin only) · Administration (Accounts, Curriculum). ECE Competency is hidden from `admin_elem` via per-item `roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE]`; **Grades** is hidden from `admin_ece` via `roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM]` (the mirror — ECE tracks learning via ECE Competency, not the grades table). `/grades` route in `App.jsx` is also wrapped in a `PrivateRoute` excluding `admin_ece`. Lists within each page (Students, Risk Overview, etc.) are server-filtered by the caller's `gradeScopeForRole`, so scoped admins never see out-of-scope rows.
 - **Teacher** (4 groups): Overview (Dashboard) · Today's Work (Attendance, Score Entry, ECE Competency — promoted to the top group so daily surfaces are one click away) · My Students (Students, Behavior, Risk Overview) · Communication (Announcements). Grades is admin-only (teachers view/enter grades via Score Entry). ECE Competency is safe for all teachers — the page renders an empty state if no Kinder assignments.
 
 **Super-admin-only gates** (not enforced at sidebar level, gated inside the page): the Curriculum page hides "Create New School Year" inside `SYSelector` and the SY edit pencil for non-super-admins, and the Subjects + Sections tabs only render grade-level cards for grades in the caller's `gradeScope` (super_admin sees all seven; `admin_ece` sees Kinder; `admin_elem` sees Grade 1–6). The Accounts page shows a `Teachers`/`Admins` tab bar only to super_admin (scoped admins see the teacher table directly with no tabs); the Admins tab mirrors the Teachers tab — search-by-name/email + All/Active/Inactive pill filter + `accountApi.listAdmins({ search, is_active })` with a 300 ms debounce. Each inactive (non-super_admin) admin row shows a Reactivate (`ShieldCheck`) button that PUTs `is_active: true`; the Deactivate (`Trash2`) button hides while the row is inactive so the two actions don't overlap.
@@ -1367,8 +1367,34 @@ Each subject card expands to student rows; each student row shows a rated count 
 
 ECE Catalog tab was removed from `CurriculumManagement.jsx` — subjects are managed in the existing Subjects tab.
 
-### Announcements (`pages.jsx` `Announcements`)
-Admin-only write, everyone reads (filtered server-side by audience — see `announcement.routes.js`). Admins get a **Post Announcement** button plus an `All / My Posts` pill toggle in the header; `My Posts` filters client-side to `a.posted_by === user.id` and the empty state flips to "You haven't posted anything yet." Each card shows pencil + trash action buttons only when the current user is the poster (`a.posted_by === user.id`); the pencil reuses the same Modal prefilled with title/content/audience (submit label flips to "Save Changes"), and the trash opens a small confirm modal with a red Delete button. Audience dropdown has four options: **Everyone** (brand pill), **Admins Only** (amber pill — internal-only, invisible to teachers/parents), **Parents Only**, **Teachers Only** (both blue pill).
+### Announcements (`pages/Announcements.jsx`)
+Moved out of `pages.jsx` into its own file. Admin-only write, everyone reads (filtered
+server-side — see `announcement.routes.js`). One post can reach staff, parents in the
+`vista_parent` app, and — **super admin only** — the public website.
+
+- The form posts `FormData` (`announcementApi.create/update` send multipart) with title,
+  summary, content, category, audience, **Also show on the public website** (rendered only
+  for super_admin, disabled for the Teachers/Admins audiences), pinned, **When** (Publish
+  now / Schedule for later / Save as draft), an optional take-down time, **Notify parents**,
+  and an optional photo. Choosing a photo reveals a required consent checkbox.
+- **Notify parents** is enabled only when the audience reaches parents, the post is being
+  published now, and it has not notified before (`notified_at`) — the same three conditions
+  the API applies, so the checkbox never promises what the save will not do.
+- `canManage()` mirrors the API's `assertCanEdit()`: super_admin manages every post; a
+  scoped admin only their own non-public ones.
+- Cards show a derived state chip (Draft / Scheduled / Published / Expired), category,
+  audience, a **Website** badge and a **Parents notified** badge. Filter chips (All, My
+  posts, On website [super_admin], Published, Scheduled, Drafts) are client-side over the
+  one list. `datetime-local` inputs are local wall-clock time and converted to ISO on send.
+
+### Facility Gallery (`pages/FacilityGallery.jsx`)
+`/facilities`, `PrivateRoute roles={[ROLES.SUPER_ADMIN]}`, sidebar item under Tools with the
+same `roles`. Manages the photos the public website shows under "Our facilities": a facility
+list (add, rename, reorder, hide from the site, delete) beside the selected facility's photo
+grid (upload up to 10 with a required consent checkbox, caption inline, move earlier/later,
+**make cover** — the first photo is the cover, delete). Every mutation returns the updated
+facility, which replaces the cached one. Until any facility exists the website keeps
+showing the photos it was built with.
 
 ### Profile (`pages/Profile.jsx`)
 Any authenticated role at `/profile`. Account summary card (avatar, full_name, role pill, email, phone, "Member since"). Editable **Personal Information** form (surname/first_name/middle_name/phone; email is disabled with helper text). **Change Password** form (current + new + confirm with individual show/hide toggles); 401 surfaces inline as "Current password is incorrect" rather than a toast. Teacher-only **My Teaching Assignments** read-only card rendered from `activeAssignments`. Calls `updateUser(patch)` from AuthContext after save so the sidebar updates immediately.

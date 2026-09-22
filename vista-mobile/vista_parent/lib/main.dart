@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'env.dart';
 import 'fcm.dart';
@@ -23,6 +24,7 @@ class VistaParentApp extends ConsumerStatefulWidget {
 
 class _VistaParentAppState extends ConsumerState<VistaParentApp> {
   bool _fcmStarted = false;
+  GoRouter? _router;
 
   @override
   Widget build(BuildContext context) {
@@ -34,14 +36,17 @@ class _VistaParentAppState extends ConsumerState<VistaParentApp> {
       if (user != null) {
         _fcmStarted = true;
         try {
-          await setupFcm(ref.read(parentApiProvider));
+          await setupFcm(
+            ref.read(parentApiProvider),
+            onOpen: (route) => _router?.push(route),
+          );
         } catch (_) {
           // Firebase not yet provisioned on this build — app still works.
         }
       }
     });
 
-    final router = buildRouter(ref);
+    final router = _router = buildRouter(ref);
     return MaterialApp.router(
       title: 'VISTA Parent',
       theme: buildVistaTheme(),

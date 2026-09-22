@@ -40,3 +40,8 @@ final notificationsProvider =
     FutureProvider<List<AppNotification>>((ref) async {
   return ref.watch(parentApiProvider).notifications();
 });
+
+final announcementsProvider =
+    FutureProvider<List<Announcement>>((ref) async {
+  return ref.watch(parentApiProvider).announcements();
+});

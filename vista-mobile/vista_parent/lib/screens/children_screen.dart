@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../providers.dart';
 import '../theme.dart';
 import '../widgets/risk_chip.dart';
+import 'announcements_screen.dart';
 
 class ChildrenScreen extends ConsumerWidget {
   const ChildrenScreen({super.key});
@@ -104,6 +105,7 @@ class ChildrenScreen extends ConsumerWidget {
         onRefresh: () async {
           ref.invalidate(childrenProvider);
           ref.invalidate(notificationsProvider);
+          ref.invalidate(announcementsProvider);
           await ref.read(childrenProvider.future);
         },
         child: children.when(
@@ -137,18 +139,69 @@ class ChildrenScreen extends ConsumerWidget {
                 ],
               );
             }
-            return ListView.separated(
+            return ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
-              itemBuilder: (c, i) {
-                if (i == 0) return _SectionTitle(count: list.length);
-                return _ChildCard(student: list[i - 1]);
-              },
-              separatorBuilder: (_, i) =>
-                  SizedBox(height: i == 0 ? 16 : 12),
-              itemCount: list.length + 1,
+              children: [
+                const _LatestAnnouncements(),
+                _SectionTitle(count: list.length),
+                const SizedBox(height: 16),
+                for (var i = 0; i < list.length; i++) ...[
+                  if (i > 0) const SizedBox(height: 12),
+                  _ChildCard(student: list[i]),
+                ],
+              ],
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+/// The newest school announcements (pinned first), above the children list.
+/// Takes no space at all when there are none, or when they fail to load — the
+/// children are what this screen is for, so this must never get in their way.
+class _LatestAnnouncements extends ConsumerWidget {
+  const _LatestAnnouncements();
+
+  static const _shown = 2;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final items = ref.watch(announcementsProvider).valueOrNull ?? const [];
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.campaign_outlined, size: 20, color: VistaColors.brand),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'School Announcements',
+                  style: TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w700, color: VistaColors.navy950),
+                ),
+              ),
+              TextButton(
+                onPressed: () => context.push('/announcements'),
+                child: Text(items.length > _shown ? 'See all (${items.length})' : 'See all'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (final a in items.take(_shown)) ...[
+            AnnouncementCard(
+              announcement: a,
+              onTap: () => context.push('/announcements?id=${a.id}'),
+            ),
+            const SizedBox(height: 10),
+          ],
+        ],
       ),
     );
   }

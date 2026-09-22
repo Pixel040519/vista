@@ -29,6 +29,8 @@ const deviceRoutes = require('./routes/device.routes');
 const pickupRoutes = require('./routes/pickup.routes');
 const enrollmentRoutes = require('./routes/enrollment.routes');
 const advisoryRoutes   = require('./routes/advisory.routes');
+const facilityRoutes   = require('./routes/facility.routes');
+const publicRoutes     = require('./routes/public.routes');
 
 const { errorHandler } = require('./middleware/error.middleware');
 
@@ -61,7 +63,13 @@ app.use(express.urlencoded({ extended: true }));
 // ─── Static uploads ────────────────────────────────────────────
 // Profile + authorized-pickup photos uploaded via multer land here. Served
 // publicly so the parent and guard mobile apps can render them with NetworkImage.
-app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+// helmet's default Cross-Origin-Resource-Policy (same-origin) would stop the
+// landing page, which is a different origin, from displaying announcement and
+// facility photos, so it is relaxed for this static path only.
+app.use('/uploads', (req, res, next) => {
+  res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+}, express.static(path.join(__dirname, '..', 'uploads')));
 
 // ─── Health Check ──────────────────────────────────────────────
 app.get('/health', (req, res) => {
@@ -91,6 +99,8 @@ app.use('/api/devices', deviceRoutes);       // FCM device-token registry
 app.use('/api/pickup-persons', pickupRoutes); // Parent: authorized non-account fetchers
 app.use('/api/enrollment', enrollmentRoutes); // Admin: per-school-year student enrollment
 app.use('/api/advisory', advisoryRoutes);     // Teacher: read-only view of the section they advise
+app.use('/api/facilities', facilityRoutes);   // Super admin: the website's facility gallery
+app.use('/api/public', publicRoutes);         // NO AUTH: read-only content for the landing page
 
 // ─── 404 Handler ──────────────────────────────────────────────
 app.use((req, res) => {

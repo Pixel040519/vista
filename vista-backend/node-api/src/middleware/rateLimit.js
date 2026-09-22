@@ -59,7 +59,20 @@ const verifyCodePerEmail = rateLimit({
 /** Sign-in. Not part of the invitation work, but the same reasoning applies. */
 const loginPerIp = rateLimit({ ...base, limit: 40 })
 
+/**
+ * The public content reads behind the landing page (routes/public.routes.js).
+ * Generous — one visitor loads a couple of these per page — but a ceiling,
+ * since these are the only reads that need no token.
+ */
+const publicReadPerIp = rateLimit({
+  ...base,
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  message: { error: 'Too many requests. Please try again shortly.' },
+})
+
 module.exports = {
+  publicReadPerIp,
   requestCodePerIp,
   requestCodePerEmail,
   verifyCodePerIp,

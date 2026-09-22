@@ -1,13 +1,15 @@
 // src/components/NewsWidget.jsx
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { announcements } from '../data/announcements';
+import { useAnnouncements } from '../lib/publicContent';
 
 const NewsWidget = () => {
   const navigate = useNavigate();
 
   // Same source the Announcements page reads; the widget shows only the newest few.
-  const recentPosts = announcements.slice(0, 3);
+  const { announcements } = useAnnouncements(3);
+  const recentPosts = announcements;
+  if (!recentPosts.length) return null;
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white/80 dark:border-white/10 dark:bg-[#001f44]/80 p-6 backdrop-blur shadow-sm dark:shadow-lg transition-colors duration-300">

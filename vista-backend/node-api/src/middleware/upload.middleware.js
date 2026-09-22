@@ -37,6 +37,13 @@ function buildUploader(bucket) {
 const uploadAuthorizedPickupPhoto = buildUploader('authorized-pickup').single('photo');
 const uploadProfilePhoto = buildUploader('profile').single('photo');
 
+// Public content. These land in a staging bucket and are always re-encoded by
+// utils/imageProcess.js before anything is stored — the file multer writes is
+// the client's bytes under the client's claimed MIME type, and it still
+// carries its EXIF (GPS included), so it is never what gets published.
+const uploadAnnouncementImage = buildUploader('incoming').single('image');
+const uploadFacilityPhotos = buildUploader('incoming').array('photos', 10);
+
 // Build a publicly-reachable URL from a stored relative path. The base URL is
 // derived from the incoming request so the same file resolves correctly on
 // localhost, the LAN IP, and the Android emulator loopback (10.0.2.2).
@@ -63,6 +70,8 @@ function unlinkUploadedFile(relPath) {
 module.exports = {
   uploadAuthorizedPickupPhoto,
   uploadProfilePhoto,
+  uploadAnnouncementImage,
+  uploadFacilityPhotos,
   photoUrlFromPath,
   unlinkUploadedFile,
   UPLOAD_ROOT,

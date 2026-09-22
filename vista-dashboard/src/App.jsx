@@ -20,6 +20,7 @@ import ScoreEntry from './pages/ScoreEntry'
 import EceCompetency from './pages/EceCompetency'
 import MyClass from './pages/MyClass'
 import Profile from './pages/Profile'
+import FacilityGallery from './pages/FacilityGallery'
 import { ROLES, ANY_ADMIN } from './utils/roles'
 
 
@@ -89,6 +90,10 @@ export default function App() {
             } />
 
             <Route path="announcements" element={<Announcements />} />
+
+            <Route path="facilities" element={
+              <PrivateRoute roles={[ROLES.SUPER_ADMIN]}><FacilityGallery /></PrivateRoute>
+            } />
 
             <Route path="profile" element={<Profile />} />
 

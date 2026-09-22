@@ -218,10 +218,55 @@ CREATE TABLE announcements (
     title VARCHAR(255) NOT NULL,
     content TEXT NOT NULL,
     posted_by UUID REFERENCES users(id),
-    target_audience VARCHAR(20) DEFAULT 'all',  -- all, parents, teachers
+    target_audience VARCHAR(20) DEFAULT 'all'   -- all, admins, teachers, parents
+        CONSTRAINT announcements_audience_check CHECK (target_audience IN ('all', 'admins', 'teachers', 'parents')),
     is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+    -- 2026_09_22_public_content.sql
+    is_public BOOLEAN NOT NULL DEFAULT FALSE,     -- also shown on the landing page
+    category VARCHAR(20) NOT NULL DEFAULT 'General'
+        CONSTRAINT announcements_category_check
+        CHECK (category IN ('General', 'Enrollment', 'Event', 'Academic', 'Holiday', 'Suspension')),
+    summary VARCHAR(300),
+    image_path TEXT,
+    is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
+    published_at TIMESTAMPTZ,                     -- NULL = draft, future = scheduled
+    expires_at TIMESTAMPTZ,
+    notified_at TIMESTAMPTZ,                      -- parents notified; never twice
+    updated_at TIMESTAMPTZ,
+    updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    CONSTRAINT announcements_public_audience_check CHECK (NOT is_public OR target_audience IN ('all', 'parents')),
+    CONSTRAINT announcements_expiry_check CHECK (expires_at IS NULL OR published_at IS NULL OR expires_at > published_at)
 );
+
+CREATE INDEX idx_announcements_public
+  ON announcements (published_at DESC) WHERE is_active = TRUE AND is_public = TRUE;
+
+-- ============================================================
+-- FACILITY GALLERY (landing page) — 2026_09_22_public_content.sql
+-- ============================================================
+CREATE TABLE facilities (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(100) NOT NULL,
+    slug VARCHAR(100) NOT NULL UNIQUE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- The first photo by sort_order is the facility's cover.
+CREATE TABLE facility_photos (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    facility_id UUID NOT NULL REFERENCES facilities(id) ON DELETE CASCADE,
+    image_path TEXT NOT NULL,
+    thumb_path TEXT,
+    caption VARCHAR(200),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_facility_photos_facility ON facility_photos (facility_id, sort_order);
 
 -- ============================================================
 -- VISTA Migration: Teacher Assignments
