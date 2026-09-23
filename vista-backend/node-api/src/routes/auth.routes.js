@@ -186,7 +186,10 @@ router.post('/refresh', async (req, res, next) => {
     if (!result.rows.length) throw new AppError('User not found.', 401);
     res.json(generateTokens(result.rows[0]));
   } catch (err) {
-    if (err.name === 'JsonWebTokenError') return next(new AppError('Invalid refresh token.', 403));
+    // An expired refresh token used to fall through to a 500.
+    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+      return next(new AppError('Invalid refresh token.', 401));
+    }
     next(err);
   }
 });

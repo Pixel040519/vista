@@ -148,7 +148,7 @@ stays nullable, so a surface that groups by gender must still list learners with
 
 - **Name fields** are always `surname` / `first_name` / `middle_name`. Never a single `full_name`.
 - **Frontend never calls FastAPI directly** — all AI traffic goes through the Node proxy in `ai.routes.js`.
-- **JWT auth** on all protected routes (access + refresh tokens). The Node API validates tokens before every protected handler.
+- **JWT auth** on all protected routes (access + refresh tokens). The Node API validates tokens before every protected handler. A missing, invalid or expired token is **401**; 403 is reserved for an authenticated caller who lacks permission. Both clients refresh only on 401, so a token problem answered with 403 strands the session — see the node-api notes.
 - **School year invariants** (enforced in DB transactions): exactly one row may be `is_active`; zero or more may be `is_upcoming`; all others are archived. Past years (end year ≤ current year) cannot be set to upcoming. The `resolveSYId` helper falls back to the active SY when no `sy_id` is provided. Teacher assignments and grading structures are copied when creating a new SY with "copy from".
 
 ## Grading periods & transmutation

@@ -1,6 +1,6 @@
 # Node API — CLAUDE.md
 
-Express.js REST API on port 5000. Entry point `src/server.js`; one route file per feature domain in `src/routes/`; PostgreSQL pool (max 20) in `config/database.js`; JWT middleware in `middleware/auth.js`. **There is no migration runner** — the `migrate` npm script points at a `config/migrate.js` that does not exist; migrations in `database/migrations/` are applied by hand with `psql` and are each written to be safe to re-run.
+Express.js REST API on port 5000. Entry point `src/server.js`; one route file per feature domain in `src/routes/`; PostgreSQL pool (max 20) in `config/database.js`; JWT middleware in `middleware/auth.middleware.js`. **There is no migration runner** — the `migrate` npm script points at a `config/migrate.js` that does not exist; migrations in `database/migrations/` are applied by hand with `psql` and are each written to be safe to re-run.
 
 ## Roles & authorization (`utils/roles.js`, `middleware/auth.middleware.js`)
 
@@ -15,6 +15,8 @@ Five roles: `super_admin`, `admin_ece`, `admin_elem`, `teacher`, `parent`. `util
 Middleware exports (`auth.middleware.js`): `authenticate`, `authorize(...roles)`, `authorizeAnyAdmin`, `authorizeSuperAdmin`, `authorizeAdminOrTeacher`, and `enforceGradeScope(req, gradeLevel)` which throws 403 if the caller cannot manage that grade.
 
 **Error contract**: `errorHandler` reads **`err.statusCode`**, not `err.status`. An error that sets only `status` falls through to a 500 — `enforceGradeScope` did exactly that, so every out-of-scope rejection surfaced as a 500 rather than a 403 until it was fixed. Prefer `AppError(message, statusCode)`; if you hand-roll an error, set `statusCode`.
+
+**401 vs 403 is load-bearing.** 401 means *not authenticated* — no token, an invalid or **expired** access token (`authenticate`), or an invalid or expired refresh token (`POST /api/auth/refresh`). 403 means *authenticated but not allowed* — `authorize()`, `enforceGradeScope`, assignment checks. Both clients (the dashboard's axios interceptor and `vista_api`'s `ApiClient`) refresh the access token **only on 401**, so an expired token answered with 403 is never refreshed: that was the bug behind parents seeing `VistaApiException(403): Invalid or expired token.` on every request once their 1-day access token lapsed. An expired refresh token used to reach the client as a 500 (`TokenExpiredError` was not caught); it is now a 401 too. Never return 403 for a token problem.
 
 **Route conventions:**
 - School year writes (`POST/PUT/DELETE /api/curriculum/school-years`), admin-account CRUD (`/api/accounts/admins`) and the enrolment actions that are school-wide or rewrite history (`DELETE /api/enrollment`, both promotion endpoints) → `authorizeSuperAdmin`.
