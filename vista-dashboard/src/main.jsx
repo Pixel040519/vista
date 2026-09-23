@@ -15,7 +15,6 @@ import StudentDetail from './pages/StudentDetail'
 import Attendance from './pages/Attendance'
 import Grades from './pages/Grades'
 import Behavior from './pages/Behavior'
-import SecurePass from './pages/SecurePass'
 import RiskOverview from './pages/RiskOverview'
 import Announcements from './pages/Announcements'
 import Login from './pages/Login'
@@ -51,7 +50,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="attendance" element={<Attendance />} />
             <Route path="grades" element={<Grades />} />
             <Route path="behavior" element={<Behavior />} />
-            <Route path="securepass" element={<SecurePass />} />
             <Route path="risk" element={<RiskOverview />} />
             <Route path="announcements" element={<Announcements />} />
           </Route>

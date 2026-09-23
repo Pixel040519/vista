@@ -3,7 +3,7 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import {
   LayoutDashboard, Users, ClipboardCheck, BookOpen,
-  Heart, QrCode, AlertTriangle, Megaphone, UserCog,
+  Heart, AlertTriangle, Megaphone, UserCog,
   LogOut, GraduationCap, ChevronRight, X, PenLine, Baby, ClipboardList, Building2
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -34,7 +34,6 @@ const adminNavGroups = [
   {
     label: 'Tools',
     items: [
-      { to: '/securepass',    icon: QrCode,         label: 'SecurePass QR', roles: [...ANY_ADMIN, ROLES.TEACHER] },
       { to: '/risk',          icon: AlertTriangle,  label: 'Risk Overview', roles: ANY_ADMIN },
       { to: '/announcements', icon: Megaphone,      label: 'Announcements'  },
       // The website's facility photos — the public site is the super admin's alone.

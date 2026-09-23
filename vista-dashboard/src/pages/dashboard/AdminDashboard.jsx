@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Users, UserCheck, UserX, AlertTriangle, TrendingDown, Activity, ChevronRight, Shield } from 'lucide-react'
+import { Users, UserCheck, UserX, AlertTriangle, TrendingDown, Activity, ChevronRight } from 'lucide-react'
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
@@ -40,7 +40,6 @@ export default function AdminDashboard() {
   const risk = data?.risk_distribution  || {}
   const sent = data?.behavioral_sentiment_7d || {}
   const total = data?.overview?.total_students || 0
-  const dismissal = data?.dismissal_status || {}
   const declines = data?.academic_declines || []
   const trendData = (data?.attendance_trend_7d || []).map(d => ({
     ...d,
@@ -197,47 +196,10 @@ export default function AdminDashboard() {
             </div>
           </div>
 
-          {/* Bottom Row — shrinks to 2 cols when Academic Declines is hidden */}
+          {/* Bottom Row — sentiment alone when Academic Declines is hidden */}
           <div className={showAcademicDeclines
-            ? 'grid grid-cols-1 lg:grid-cols-4 gap-5'
-            : 'grid grid-cols-1 lg:grid-cols-2 gap-5'}>
-            {/* SecurePass Oversight */}
-            <div className="card p-5">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-sm font-semibold text-slate-800">SecurePass Oversight</h3>
-                  <p className="text-xs text-slate-400">Gate activity today</p>
-                </div>
-                <Shield size={16} className={dismissal.curfew_breached ? 'text-red-400' : 'text-slate-300'} />
-              </div>
-              <div className="flex items-end gap-2">
-                <span className={`text-3xl font-bold ${dismissal.curfew_breached ? 'text-red-600' : 'text-brand-600'}`}>
-                  {dismissal.still_on_campus ?? 0}
-                </span>
-                <span className="text-xs text-slate-500 mb-1">still on campus</span>
-              </div>
-              {dismissal.curfew_breached && (
-                <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
-                  <AlertTriangle size={12} /> Past {dismissal.curfew_time} curfew
-                </p>
-              )}
-              <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t border-slate-100">
-                <div>
-                  <p className="text-xs text-slate-400">Dismissed</p>
-                  <p className="text-lg font-semibold text-slate-700">{dismissal.today_dismissed ?? 0}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-slate-400">Failed scans</p>
-                  <p className={`text-lg font-semibold ${(dismissal.failed_scans ?? 0) > 0 ? 'text-amber-600' : 'text-slate-700'}`}>
-                    {dismissal.failed_scans ?? 0}
-                  </p>
-                </div>
-              </div>
-              <Link to="/securepass" className="text-xs text-brand-600 font-medium hover:text-brand-700 flex items-center gap-1 mt-4">
-                Open SecurePass <ChevronRight size={13} />
-              </Link>
-            </div>
-
+            ? 'grid grid-cols-1 lg:grid-cols-3 gap-5'
+            : 'grid grid-cols-1 gap-5'}>
             {/* Behavioral Sentiment */}
             <div className="card p-5">
               <div className="mb-4">

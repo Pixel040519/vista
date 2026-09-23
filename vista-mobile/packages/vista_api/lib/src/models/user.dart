@@ -24,10 +24,8 @@ class VistaUser {
   final List<String> gradeScope;
 
   static const roleParent = 'parent';
-  static const roleSecurityGuard = 'security_guard';
 
   bool get isParent => role == roleParent;
-  bool get isSecurityGuard => role == roleSecurityGuard;
 
   factory VistaUser.fromJson(Map<String, dynamic> json) => VistaUser(
         id: json['id'].toString(),

@@ -54,13 +54,6 @@ class NotificationsScreen extends ConsumerWidget {
                       await ref.read(parentApiProvider).markNotificationRead(n.id);
                       ref.invalidate(notificationsProvider);
                     }
-                    // Deep-link pickup alerts straight to the child's dismissal tab.
-                    if (n.type == 'dismissal' && n.referenceId != null) {
-                      if (context.mounted) {
-                        context.push(
-                            '/child/${n.referenceId}?tab=dismissal');
-                      }
-                    }
                     // An announcement opens expanded in the announcements list.
                     if (n.type == 'announcement') {
                       if (context.mounted) {

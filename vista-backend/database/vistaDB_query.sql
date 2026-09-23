@@ -29,11 +29,6 @@ CREATE TABLE students (
     grade_level VARCHAR(20) NOT NULL,        -- Kinder, Grade 1-6
     section VARCHAR(50),
     profile_photo_url TEXT,
-    qr_code TEXT,                            -- Dynamic QR for SecurePass
-    qr_expires_at TIMESTAMP,
-    qr_generated_by UUID REFERENCES users(id),  -- User who generated the active QR
-    qr_fetcher_type VARCHAR(8),              -- 'self' | 'auth' | NULL (legacy/admin)
-    qr_fetcher_id UUID,                      -- users.id (self) or authorized_pickup_persons.id (auth)
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
@@ -47,30 +42,8 @@ CREATE TABLE parent_student (
     parent_id UUID REFERENCES users(id) ON DELETE CASCADE,
     student_id UUID REFERENCES students(id) ON DELETE CASCADE,
     relationship VARCHAR(50) DEFAULT 'Parent',  -- Parent, Guardian, etc.
-    is_authorized_pickup BOOLEAN DEFAULT TRUE,
     UNIQUE(parent_id, student_id)
 );
-
--- ============================================================
--- AUTHORIZED PICKUP PERSONS (non-account fetchers)
--- ============================================================
--- Persons a parent authorizes to pick up a specific child without giving them
--- a portal account (yaya, lola, driver, etc.). Used by the Pickup QR fetcher
--- selector and rendered with a photo on the guard scan result.
-CREATE TABLE authorized_pickup_persons (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
-    surname VARCHAR(80) NOT NULL,
-    first_name VARCHAR(80) NOT NULL,
-    middle_name VARCHAR(80),
-    relationship VARCHAR(50) NOT NULL,
-    photo_path TEXT,                          -- Relative path under /uploads
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
-CREATE INDEX idx_authorized_pickup_parent_student
-    ON authorized_pickup_persons(parent_id, student_id);
 
 -- ============================================================
 -- TEACHER-CLASS ASSIGNMENT
@@ -178,22 +151,6 @@ CREATE TABLE academic_predictions (
     school_year VARCHAR(20),
     predicted_at TIMESTAMP DEFAULT NOW(),
     model_version VARCHAR(50)
-);
-
--- ============================================================
--- SECUREPASS QR DISMISSAL LOGS
--- ============================================================
-CREATE TABLE dismissal_logs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    student_id UUID REFERENCES students(id),
-    authorized_by UUID REFERENCES users(id),   -- Parent/Guardian
-    scanned_by UUID REFERENCES users(id),       -- Staff who scanned
-    qr_token VARCHAR(255) NOT NULL,
-    status VARCHAR(20) CHECK (status IN ('Success', 'Failed', 'Expired')),
-    gate_label VARCHAR(20),                     -- Entrance label set in guard app (e.g. "Gate 1")
-    fetcher_type VARCHAR(8),                    -- 'self' | 'auth' | NULL (legacy)
-    fetcher_authorized_id UUID REFERENCES authorized_pickup_persons(id) ON DELETE SET NULL,
-    scanned_at TIMESTAMP DEFAULT NOW()
 );
 
 -- ============================================================
@@ -325,10 +282,6 @@ ALTER TABLE students
 ALTER TABLE parent_student
   ALTER COLUMN relationship SET DEFAULT 'Guardian';
 
--- Ensure is_authorized_pickup has a default
-ALTER TABLE parent_student
-  ALTER COLUMN is_authorized_pickup SET DEFAULT TRUE;
-
 -- Add created_at if missing
 ALTER TABLE parent_student
   ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
@@ -362,8 +315,7 @@ ALTER TABLE parent_student
 
 -- Ensure defaults
 ALTER TABLE parent_student
-  ALTER COLUMN relationship         SET DEFAULT 'Guardian',
-  ALTER COLUMN is_authorized_pickup SET DEFAULT TRUE;
+  ALTER COLUMN relationship         SET DEFAULT 'Guardian';
 
 -- Back-fill full_name + email + phone from linked users (if any)
 UPDATE parent_student ps

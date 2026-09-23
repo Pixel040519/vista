@@ -48,21 +48,18 @@ class Guardian {
     required this.id,
     required this.fullName,
     this.relationship,
-    this.isAuthorizedPickup = false,
     this.isEmergencyContact = false,
   });
 
   final String id;
   final String fullName;
   final String? relationship;
-  final bool isAuthorizedPickup;
   final bool isEmergencyContact;
 
   factory Guardian.fromJson(Map<String, dynamic> json) => Guardian(
         id: json['id'].toString(),
         fullName: (json['full_name'] ?? '') as String,
         relationship: json['relationship'] as String?,
-        isAuthorizedPickup: json['is_authorized_pickup'] == true,
         isEmergencyContact: json['is_emergency_contact'] == true,
       );
 }

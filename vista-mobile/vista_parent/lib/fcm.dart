@@ -12,23 +12,12 @@ String? routeForPush(Map<String, dynamic> data) {
     case 'announcement':
       final id = data['announcement_id']?.toString();
       return id == null ? '/announcements' : '/announcements?id=$id';
-    case 'pickup':
-      final id = data['student_id']?.toString();
-      return id == null ? null : '/child/$id?tab=dismissal';
   }
   return null;
 }
 
-/// Each push type gets its own Android channel, so a parent can silence
-/// school announcements without also silencing gate pickup alerts.
-const _pickupChannel = AndroidNotificationDetails(
-  'vista_pickup',
-  'Pickup Alerts',
-  channelDescription: 'Fires when your child is picked up at the gate.',
-  importance: Importance.high,
-  priority: Priority.high,
-);
-
+/// Announcements have their own Android channel, so a parent can silence
+/// them without silencing anything the app sends later.
 const _announcementChannel = AndroidNotificationDetails(
   'vista_announcements',
   'School Announcements',
@@ -85,13 +74,12 @@ Future<void> setupFcm(ParentApi api, {void Function(String route)? onOpen}) asyn
   FirebaseMessaging.onMessage.listen((msg) async {
     final n = msg.notification;
     if (n == null) return;
-    final isAnnouncement = msg.data['type'] == 'announcement';
     await local.show(
       n.hashCode,
       n.title,
       n.body,
       NotificationDetails(
-        android: isAnnouncement ? _announcementChannel : _pickupChannel,
+        android: _announcementChannel,
         iOS: const DarwinNotificationDetails(),
       ),
       payload: routeForPush(msg.data),

@@ -38,7 +38,7 @@ const MAX_ROWS = 200
 
 // Same list as the guardian form in pages/Students.jsx.
 const RELATIONSHIPS = ['Mother','Father','Guardian','Grandmother','Grandfather','Aunt','Uncle','Sibling','Other']
-const GUARDIAN_COLUMNS = ['lrn','surname','first_name','middle_name','relationship','phone','email','home_address','authorized_pickup','emergency_contact','invite']
+const GUARDIAN_COLUMNS = ['lrn','surname','first_name','middle_name','relationship','phone','email','home_address','emergency_contact','invite']
 const MAX_GUARDIAN_ROWS = 600
 const MAX_GUARDIANS_PER_STUDENT = 10 // matches POST /students/bulk
 
@@ -48,9 +48,9 @@ const TEMPLATE_ROWS = [
 ]
 
 const GUARDIAN_TEMPLATE_ROWS = [
-  ['123456789012','Dela Cruz','Rosa','Santos','Mother','09171234567','rosa.delacruz@email.com','','Yes','Yes'],
-  ['123456789012','Dela Cruz','Pedro','','Father','09181234567','','','Yes','No'],
-  ['234567890123','Reyes','Lorna','','Grandmother','09191234567','','789 Luna St., Antipolo, Rizal','Yes','Yes'],
+  ['123456789012','Dela Cruz','Rosa','Santos','Mother','09171234567','rosa.delacruz@email.com','','Yes'],
+  ['123456789012','Dela Cruz','Pedro','','Father','09181234567','','','No'],
+  ['234567890123','Reyes','Lorna','','Grandmother','09191234567','','789 Luna St., Antipolo, Rizal','Yes'],
 ]
 
 // Build one template sheet. `textCols` are the columns Excel would otherwise
@@ -100,7 +100,7 @@ async function downloadTemplate() {
   ), 'Students')
   XLSX.utils.book_append_sheet(wb, buildTemplateSheet(
     XLSX, GUARDIAN_COLUMNS, GUARDIAN_TEMPLATE_ROWS, [0, 5], MAX_GUARDIAN_ROWS,
-    [16, 14, 14, 14, 13, 15, 28, 40, 17, 17],
+    [16, 14, 14, 14, 13, 15, 28, 40, 17],
   ), 'Guardians')
   XLSX.writeFile(wb, 'students-batch-template.xlsx')
 }
@@ -126,7 +126,7 @@ const FIELD_LABELS = {
   lrn: 'LRN', surname: 'Surname', first_name: 'First name', date_of_birth: 'Date of birth',
   gender: 'Gender', grade_level: 'Grade level', section: 'Section', home_address: 'Home address',
   relationship: 'Relationship', phone: 'Phone', email: 'Email',
-  authorized_pickup: 'Pickup', emergency_contact: 'Emergency contact', invite: 'Invite', guardians: 'Guardians',
+  emergency_contact: 'Emergency contact', invite: 'Invite', guardians: 'Guardians',
   // Row-level, on purpose: it matches no cell, so nothing is tinted. A wholly
   // repeated guardian has no field that is wrong — the row itself is the
   // mistake — and pointing at Surname read as "the surname needs correcting".
@@ -238,7 +238,7 @@ const fileParentFor = (g, fileParents) => {
 // What will actually be saved for a row: a linked row takes its name, email and
 // phone from the account (the server copies them the same way), a sparse row
 // takes them from whichever row introduced that email, anything else is the
-// sheet as typed. Relationship, pickup and emergency are never inherited —
+// sheet as typed. Relationship and emergency contact are never inherited —
 // they are facts about this learner, not about the parent.
 function resolveGuardian(g, accounts, fileParents) {
   const account = accountFor(g, accounts)
@@ -302,7 +302,7 @@ function validateGuardians(guardians, studentLrns, accounts, fileParents) {
     if (account) {
       // A name typed beside the email has to agree with the account: a mistyped
       // email matching another family would give a stranger this learner in
-      // their parent app, pickup QR included.
+      // their parent app.
       if ((g.surname && !sameName(g.surname, account.surname)) || (g.first_name && !sameName(g.first_name, account.first_name))) {
         errors.push(issue('email', `belongs to parent account ${account.surname}, ${account.first_name}, but the name doesn't match. Fix the email, or clear the name cells to use the account`))
       }
@@ -319,8 +319,6 @@ function validateGuardians(guardians, studentLrns, accounts, fileParents) {
     if (!g.relationship) errors.push(issue('relationship', 'required'))
     else if (!canonicalRelationship(g.relationship)) errors.push(issue('relationship', `must be one of ${RELATIONSHIPS.join(', ')}`))
 
-    if (!g.authorized_pickup) errors.push(issue('authorized_pickup', 'required: Yes or No'))
-    else if (parseFlag(g.authorized_pickup) === null) errors.push(issue('authorized_pickup', 'must be Yes or No'))
     if (!g.emergency_contact) errors.push(issue('emergency_contact', 'required: Yes or No'))
     else if (parseFlag(g.emergency_contact) === null) errors.push(issue('emergency_contact', 'must be Yes or No'))
 
@@ -411,7 +409,6 @@ const toGuardianPayload = (g) => ({
   phone: g.phone ? normalizePhone(g.phone) ?? '' : '',
   email: g.email,
   home_address: g.home_address,
-  is_authorized_pickup: parseFlag(g.authorized_pickup),
   is_emergency_contact: parseFlag(g.emergency_contact),
   invite: parseFlag(g.invite) ?? false,
 })
@@ -538,7 +535,7 @@ function UploadGuide() {
       {step(3, <>Add guardians <span className="text-xs font-normal text-slate-400">optional</span></>, (
         <div className="space-y-1 text-xs text-slate-600 leading-relaxed">
           <p>One row per guardian, matched to a student by {em('LRN')}.</p>
-          <p>Always fill {em('relationship')}, {em('pickup')} and {em('emergency')} (Yes/No).</p>
+          <p>Always fill {em('relationship')} and {em('emergency')} (Yes/No).</p>
           <p>Parent has an account? Just add their {em('email')} — name and phone fill in. Otherwise enter surname, first name and phone.</p>
           <p>Same parent on another student? Enter them once, then give the {em('email')} alone on their other rows.</p>
           <p>{em('invite')} — Yes to authorize that {em('email')} for the VISTA Parent app. Blank means No.</p>
@@ -896,12 +893,11 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
     const g = resolveGuardian(raw, parentAccounts, fileParents)
     const errs = guardianErrors[gi] || []
     const bad = (f) => errs.some(e => e.field === f)
-    const pickup = parseFlag(g.authorized_pickup)
     const emergency = parseFlag(g.emergency_contact)
     const invite = parseFlag(g.invite)
     return (
       <div key={gi} className={clsx('px-3 py-2 border-b last:border-b-0', errs.length ? 'border-red-100' : 'border-slate-100')}>
-        <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,0.8fr)_minmax(0,1fr)_9rem] gap-x-3 gap-y-1 items-center text-[13px]">
+        <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,0.8fr)_minmax(0,1fr)_5rem] gap-x-3 gap-y-1 items-center text-[13px]">
           <div className="min-w-0">
             <span className="font-medium text-slate-900">
               {bad('surname') || bad('first_name')
@@ -929,20 +925,12 @@ export default function BatchUploadModal({ open, onClose, onSuccess }) {
                   ? <span className="block text-[11px] text-blue-700">Will invite &mdash; Pending Activation</span>
                   : null}
           </span>
-          {/* Fixed column and a fixed slot per flag, so Pickup and Emergency
-              line up down the list whichever of them a guardian has. */}
-          <div className="grid grid-cols-[3.5rem_5rem] gap-1.5 items-center">
-            <span>
-              {bad('authorized_pickup')
-                ? <Cell bad value={raw.authorized_pickup}/>
-                : pickup && <span className="px-1.5 py-0.5 rounded-md text-xs bg-emerald-50 text-emerald-700">Pickup</span>}
-            </span>
-            <span>
-              {bad('emergency_contact')
-                ? <Cell bad value={raw.emergency_contact}/>
-                : emergency && <span className="px-1.5 py-0.5 rounded-md text-xs bg-amber-50 text-amber-700">Emergency</span>}
-            </span>
-          </div>
+          {/* Fixed column, so Emergency lines up down the list. */}
+          <span>
+            {bad('emergency_contact')
+              ? <Cell bad value={raw.emergency_contact}/>
+              : emergency && <span className="px-1.5 py-0.5 rounded-md text-xs bg-amber-50 text-amber-700">Emergency</span>}
+          </span>
         </div>
         {errs.length > 0 && <div className="mt-1"><IssueLines issues={errs}/></div>}
       </div>

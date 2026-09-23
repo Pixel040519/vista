@@ -1,8 +1,8 @@
 // Firebase Cloud Messaging push-notification service.
 // Initialised lazily so the API doesn't crash on boot when Firebase env vars
 // are missing (dev environments, test runs, CI). If the creds aren't set, any
-// send call becomes a no-op that logs and returns — the dismissal/verify hook
-// should never fail because FCM is misconfigured.
+// send call becomes a no-op that logs and returns — a write that pushes should
+// never fail because FCM is misconfigured.
 
 const admin = require('firebase-admin');
 const { query } = require('../config/database');
@@ -73,44 +73,6 @@ async function multicast(message, rows) {
   return { sent: response.successCount, failed: response.failureCount, cleaned: dead.length };
 }
 
-// Send a pickup alert when a guard successfully releases a student at the gate.
-// Caller: POST /api/dismissal/verify success branch. Silent failure is OK —
-// the gate log is the source of truth, push is a best-effort convenience.
-async function sendPickupAlert({ studentId, studentName, guardianName, scannedAt }) {
-  try {
-    if (!ensureInit()) return { sent: 0, skipped: 'firebase-not-initialized' };
-
-    const parents = await query(
-      `SELECT DISTINCT parent_id FROM parent_student
-        WHERE student_id = $1 AND parent_id IS NOT NULL`,
-      [studentId]
-    );
-    const parentIds = parents.rows.map(r => r.parent_id);
-    if (!parentIds.length) return { sent: 0, skipped: 'no-linked-parents' };
-
-    const rows = await tokensForUsers(parentIds);
-    if (!rows.length) return { sent: 0, skipped: 'no-device-tokens' };
-
-    const message = {
-      notification: {
-        title: `${studentName} has been picked up`,
-        body: `${guardianName} just signed out ${studentName} at the gate.`,
-      },
-      data: {
-        type: 'pickup',
-        student_id: String(studentId),
-        scanned_at: scannedAt ? new Date(scannedAt).toISOString() : new Date().toISOString(),
-      },
-      tokens: rows.map(r => r.token),
-    };
-
-    return await multicast(message, rows);
-  } catch (err) {
-    console.error('[push] sendPickupAlert failed:', err.message);
-    return { sent: 0, error: err.message };
-  }
-}
-
 // FCM caps a multicast at 500 tokens.
 const MULTICAST_LIMIT = 500;
 
@@ -118,7 +80,7 @@ const MULTICAST_LIMIT = 500;
 // Caller: announcement.routes.js, after the transaction that wrote
 // the notification rows has committed — the in-app list is the source of truth,
 // the push is a best-effort nudge towards it. Its own Android channel keeps
-// announcements separately mutable from pickup alerts.
+// announcements separately mutable from any other alert the app shows.
 async function sendAnnouncement(userIds, { id, title, summary }) {
   try {
     if (!ensureInit()) return { sent: 0, skipped: 'firebase-not-initialized' };
@@ -145,6 +107,5 @@ async function sendAnnouncement(userIds, { id, title, summary }) {
 }
 
 module.exports = {
-  sendPickupAlert,
   sendAnnouncement,
 };

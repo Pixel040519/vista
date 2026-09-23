@@ -5,7 +5,7 @@ import 'package:image_picker/image_picker.dart';
 
 /// Shared bottom-sheet helper. Opens "Take photo" / "Choose from gallery" and
 /// returns the picked [File], or null if the user dismissed. Used by the
-/// authorized-pickup form and the parent's own profile avatar.
+/// parent's own profile avatar.
 Future<File?> pickPhoto(BuildContext context) async {
   final source = await showModalBottomSheet<ImageSource>(
     context: context,

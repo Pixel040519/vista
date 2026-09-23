@@ -12,7 +12,7 @@ import {
 
 // The Parents tab of Account Management — Version A of the design.
 //
-// It is a roster, the same shape as Teachers, Admins and Guards: search, state
+// It is a roster, the same shape as Teachers and Admins: search, state
 // chips, one table, a per-row Manage access menu. Everything it writes goes
 // through an endpoint that already existed, so this is a second ENTRY POINT to
 // each rule and never a second rule: `PUT /guardians/:gid` for the person's own
@@ -319,7 +319,7 @@ function AccessMenu({ parent, onDone }) {
           <p>
             One email is one login, so this reaches{' '}
             <strong className="text-slate-900">{kids === 1 ? 'their child' : `all ${kids} of their children`}</strong>,
-            not just one. Their guardian records, pickup authorization and history are untouched, and access can be
+            not just one. Their guardian records and history are untouched, and access can be
             restored later.
           </p>
         </div>
@@ -434,10 +434,6 @@ function ParentPanel({ parent, onClose, onChanged }) {
                   </div>
                 </div>
                 <span className={clsx('px-2 py-0.5 rounded-full text-[11px] font-semibold',
-                  c.is_authorized_pickup ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500')}>
-                  {c.is_authorized_pickup ? 'Pickup' : 'No pickup'}
-                </span>
-                <span className={clsx('px-2 py-0.5 rounded-full text-[11px] font-semibold',
                   c.is_emergency_contact ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500')}>
                   {c.is_emergency_contact ? 'Emergency' : 'No emergency'}
                 </span>
@@ -483,8 +479,8 @@ function ParentPanel({ parent, onClose, onChanged }) {
 
 /* ── The person's own details ─────────────────────────────────────────────
  * Only the SHARED fields — the ones `PUT /guardians/:gid` writes to every
- * `parent_student` row of the account and to `users`. Relationship, pickup and
- * emergency are deliberately absent: those are per learner, and the panel
+ * `parent_student` row of the account and to `users`. Relationship and
+ * emergency contact are deliberately absent: those are per learner, and the panel
  * already lists them under each child, where they mean something.
  *
  * This is a second entry point to one rule, not a second rule — the same
@@ -606,7 +602,6 @@ function AddChild({ parent, onCancel, onAdded }) {
   const [results, setResults] = useState([])
   const [picked, setPicked] = useState(null)
   const [rel, setRel] = useState('Mother')
-  const [pickup, setPickup] = useState(true)
   const [emergency, setEmergency] = useState(false)
   const [busy, setBusy] = useState(false)
   const seq = useRef(0)
@@ -645,7 +640,6 @@ function AddChild({ parent, onCancel, onAdded }) {
         first_name: parent.first_name,
         relationship: rel,
         home_address,
-        is_authorized_pickup: pickup,
         is_emergency_contact: emergency,
       })
       toast.success(res.data?.message || 'Child added.', { duration: 6000 })
@@ -715,10 +709,6 @@ function AddChild({ parent, onCancel, onAdded }) {
           </select>
         </label>
         <label className="flex items-center gap-2 text-[12.5px] text-slate-700">
-          <input type="checkbox" checked={pickup} onChange={e => setPickup(e.target.checked)} />
-          Pickup
-        </label>
-        <label className="flex items-center gap-2 text-[12.5px] text-slate-700">
           <input type="checkbox" checked={emergency} onChange={e => setEmergency(e.target.checked)} />
           Emergency
         </label>
@@ -745,7 +735,7 @@ function AddChild({ parent, onCancel, onAdded }) {
  */
 const emptyChild = () => ({
   key: Math.random().toString(36).slice(2),
-  student: null, relationship: 'Mother', is_authorized_pickup: true, is_emergency_contact: false,
+  student: null, relationship: 'Mother', is_emergency_contact: false,
 })
 
 function AddParentModal({ onClose, onCreated }) {
@@ -775,7 +765,6 @@ function AddParentModal({ onClose, onCreated }) {
         children: picked.map(c => ({
           student_id: c.student.id,
           relationship: c.relationship,
-          is_authorized_pickup: c.is_authorized_pickup,
           is_emergency_contact: c.is_emergency_contact,
         })),
       })
@@ -964,18 +953,13 @@ function ChildRow({ row, taken, onChange, onRemove }) {
           </select>
         </label>
         <label className="flex items-center gap-2 text-[12.5px] text-slate-700">
-          <input type="checkbox" checked={row.is_authorized_pickup}
-            onChange={e => onChange({ is_authorized_pickup: e.target.checked })} />
-          Pickup
-        </label>
-        <label className="flex items-center gap-2 text-[12.5px] text-slate-700">
           <input type="checkbox" checked={row.is_emergency_contact}
             onChange={e => onChange({ is_emergency_contact: e.target.checked })} />
           Emergency
         </label>
       </div>
       <p className="text-[11px] leading-snug text-slate-400">
-        Relationship, pickup and emergency are set per child — they may fetch one and not another.
+        Relationship and emergency contact are set per child.
       </p>
     </div>
   )

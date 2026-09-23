@@ -55,7 +55,7 @@ async function getParentLinkedStudentIds(parentId) {
 
 // Checks students.academic_access_suspended. If suspended, responds HTTP 423
 // with the stored reason and returns true so the caller can early-exit.
-// Safety surfaces (attendance, behavior, dismissal, risk) MUST NOT call this —
+// Safety surfaces (attendance, behavior, risk) MUST NOT call this —
 // only academic surfaces (grades, ECE competency).
 async function rejectIfAcademicSuspended(res, studentId) {
   const r = await query(

@@ -1,12 +1,9 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from datetime import datetime, date, time
+from datetime import datetime, date
 
 from services.db import get_db
-
-CURFEW_HOUR = 17
-CURFEW_MIN = 30
 
 router = APIRouter()
 
@@ -133,36 +130,6 @@ async def get_dashboard_summary(db: AsyncSession = Depends(get_db)):
             "rate": round((attended / total) * 100, 1) if total else 0.0,
         })
 
-    # ── Dismissal Status (today) ──
-    dismissed_row = await db.execute(text("""
-        SELECT COUNT(DISTINCT student_id) AS c
-        FROM dismissal_logs
-        WHERE DATE(scanned_at) = CURRENT_DATE AND status = 'Success'
-    """))
-    today_dismissed = dismissed_row.fetchone().c or 0
-
-    failed_row = await db.execute(text("""
-        SELECT COUNT(*) AS c
-        FROM dismissal_logs
-        WHERE DATE(scanned_at) = CURRENT_DATE AND status IN ('Failed','Expired')
-    """))
-    failed_scans = failed_row.fetchone().c or 0
-
-    # "Still on campus" = students who attended today but haven't been scanned out
-    attended_today = (att_row.present or 0) + (att_row.late or 0)
-    still_on_campus = max(attended_today - today_dismissed, 0)
-    now = datetime.now()
-    past_curfew = (now.hour, now.minute) >= (CURFEW_HOUR, CURFEW_MIN)
-    curfew_breached = past_curfew and still_on_campus > 0
-
-    dismissal_status = {
-        "today_dismissed": today_dismissed,
-        "failed_scans": failed_scans,
-        "still_on_campus": still_on_campus,
-        "curfew_breached": curfew_breached,
-        "curfew_time": f"{CURFEW_HOUR:02d}:{CURFEW_MIN:02d}",
-    }
-
     # ── Academic Decline Alerts ──
     declines = await db.execute(text("""
         WITH ranked AS (
@@ -239,6 +206,5 @@ async def get_dashboard_summary(db: AsyncSession = Depends(get_db)):
         },
         "high_risk_alerts": alert_list,
         "attendance_trend_7d": trend_data,
-        "dismissal_status": dismissal_status,
         "academic_declines": decline_list,
     }

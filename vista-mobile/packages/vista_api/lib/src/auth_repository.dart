@@ -4,16 +4,16 @@ import 'api_client.dart';
 import 'errors.dart';
 import 'models/user.dart';
 
-/// Auth API glue. Handles login (including role-mismatch rejection for the
-/// guard app), token persistence, and `/me`.
+/// Auth API glue. Handles login (including optional role-mismatch rejection),
+/// token persistence, and `/me`.
 class AuthRepository {
   AuthRepository(this.client, {this.requiredRole});
 
   final ApiClient client;
 
   /// If set, login rejects with [RoleMismatchException] when the server
-  /// returns a user whose role != this value. vista_guard sets this to
-  /// `security_guard` so parent credentials can't open the guard app.
+  /// returns a user whose role != this value, so an app built for one role
+  /// can refuse credentials that belong to another.
   final String? requiredRole;
 
   Future<VistaUser> login(String email, String password) async {

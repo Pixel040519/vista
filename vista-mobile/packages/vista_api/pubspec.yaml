@@ -1,5 +1,5 @@
 name: vista_api
-description: Shared API client, auth repository, and DTOs for the VISTA Flutter apps (vista_parent + vista_guard).
+description: Shared API client, auth repository, and DTOs for the VISTA Flutter apps (vista_parent).
 publish_to: 'none'
 version: 0.1.0
 

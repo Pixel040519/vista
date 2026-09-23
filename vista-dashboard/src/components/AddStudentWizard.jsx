@@ -44,7 +44,7 @@ const emptyGuardian = () => ({
   parent: null, // the account picked in link mode
   surname: '', first_name: '', middle_name: '', relationship: 'Mother',
   phone: '', email: '', same_address: true, home_address: '',
-  is_authorized_pickup: true, is_emergency_contact: false,
+  is_emergency_contact: false,
   invite: false,
 })
 
@@ -80,10 +80,9 @@ function Select({ value, onChange, error, disabled, children }) {
 // A checkbox drawn as a tinted pill, for the two guardian flags.
 function FlagToggle({ checked, onChange, tone, children }) {
   const on = {
-    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-800',
     amber: 'border-amber-200 bg-amber-50 text-amber-800',
   }[tone]
-  const box = { emerald: 'bg-emerald-600', amber: 'bg-amber-600' }[tone]
+  const box = { amber: 'bg-amber-600' }[tone]
   return (
     <button type="button" onClick={() => onChange(!checked)}
       className={clsx('flex items-center gap-2.5 h-10 px-3 rounded-xl border text-[13px] font-medium transition-colors',
@@ -299,7 +298,6 @@ function GuardianCard({ g, index, errors, studentFirstName, studentAddress, onCh
             </Select>
           </Field>
           <div className="flex flex-wrap gap-2">
-            <FlagToggle tone="emerald" checked={g.is_authorized_pickup} onChange={v => set({ is_authorized_pickup: v })}>Can pick up</FlagToggle>
             <FlagToggle tone="amber" checked={g.is_emergency_contact} onChange={v => set({ is_emergency_contact: v })}>Emergency contact</FlagToggle>
           </div>
         </div>
@@ -327,7 +325,6 @@ function GuardianCard({ g, index, errors, studentFirstName, studentAddress, onCh
       {g.mode === 'new' && (
         <>
           <div className="flex flex-wrap items-center gap-2">
-            <FlagToggle tone="emerald" checked={g.is_authorized_pickup} onChange={v => set({ is_authorized_pickup: v })}>Can pick up</FlagToggle>
             <FlagToggle tone="amber" checked={g.is_emergency_contact} onChange={v => set({ is_emergency_contact: v })}>Emergency contact</FlagToggle>
           </div>
 
@@ -498,12 +495,12 @@ export default function AddStudentWizard({ gradeOptions, onSubmit, onClose }) {
               link_parent_id: g.parent.id,
               surname: g.parent.surname, first_name: g.parent.first_name, middle_name: g.parent.middle_name || '',
               relationship: g.relationship, home_address: addressFor(g),
-              is_authorized_pickup: g.is_authorized_pickup, is_emergency_contact: g.is_emergency_contact,
+              is_emergency_contact: g.is_emergency_contact,
             }
           : {
               surname: g.surname, first_name: g.first_name, middle_name: g.middle_name,
               relationship: g.relationship, phone: g.phone, email: g.email, home_address: addressFor(g),
-              is_authorized_pickup: g.is_authorized_pickup, is_emergency_contact: g.is_emergency_contact,
+              is_emergency_contact: g.is_emergency_contact,
               invite: g.invite,
             }),
       })
@@ -700,7 +697,6 @@ export default function AddStudentWizard({ gradeOptions, onSubmit, onClose }) {
                     <p className="text-[13px] text-slate-600">{g.relationship}</p>
                     <p className="text-[13px] text-slate-600">{phone || '—'}</p>
                     <div className="flex gap-1.5">
-                      {g.is_authorized_pickup && <span className="text-xs px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700">Pickup</span>}
                       {g.is_emergency_contact && <span className="text-xs px-2 py-0.5 rounded-md bg-amber-50 text-amber-700">Emergency</span>}
                     </div>
                   </div>

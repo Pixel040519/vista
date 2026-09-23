@@ -760,7 +760,7 @@ export default function StudentDetail() {
               {student.academic_access_suspended_reason || 'No reason recorded.'}
             </p>
             <p className="text-xs text-amber-700 mt-1">
-              Attendance, behavior, pickup QR, and dismissal history remain visible to the parent.
+              Attendance and behavior remain visible to the parent.
             </p>
           </div>
         </div>
@@ -861,9 +861,6 @@ export default function StudentDetail() {
                           <span className="text-xs px-1.5 py-0.5 rounded-md bg-slate-200 text-slate-600 font-medium">{g.relationship}</span>
                           {g.is_emergency_contact && (
                             <span className="text-xs px-1.5 py-0.5 rounded-md bg-red-100 text-red-700 font-semibold">🚨 Emergency</span>
-                          )}
-                          {g.is_authorized_pickup && (
-                            <span className="text-xs px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-700 font-medium">✓ Pickup</span>
                           )}
                         </div>
                         {!isTeacher && (

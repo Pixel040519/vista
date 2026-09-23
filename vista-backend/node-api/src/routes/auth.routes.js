@@ -48,7 +48,7 @@ const registerSchema = Joi.object({
   middle_name: Joi.string().optional().allow(''),
   // 'parent' is deliberately absent: a parent account is created only by the
   // invitation flow, from an email the school has authorized.
-  role:        Joi.string().valid('super_admin','admin_ece','admin_elem','teacher','security_guard').required(),
+  role:        Joi.string().valid('super_admin','admin_ece','admin_elem','teacher').required(),
   phone:       Joi.string().optional().allow(''),
 });
 

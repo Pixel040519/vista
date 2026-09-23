@@ -9,7 +9,7 @@
  * What did NOT change, and must not: an email is one login. An existing parent
  * account is reused rather than duplicated (the sibling case), and an email
  * belonging to a teacher or admin is refused — linking it would hand that staff
- * account a learner's parent-side access, pickup QR included.
+ * account a learner's parent-side access.
  */
 const { AppError } = require('../middleware/error.middleware')
 const { ROLES } = require('./roles')

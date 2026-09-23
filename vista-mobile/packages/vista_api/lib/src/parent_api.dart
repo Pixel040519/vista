@@ -5,9 +5,7 @@ import 'package:dio/dio.dart';
 import 'api_client.dart';
 import 'models/announcement.dart';
 import 'models/attendance.dart';
-import 'models/authorized_pickup_person.dart';
 import 'models/behavior.dart';
-import 'models/dismissal.dart';
 import 'models/ece.dart';
 import 'models/grade.dart';
 import 'models/notification.dart';
@@ -120,115 +118,6 @@ class ParentApi {
     }
   }
 
-  Future<List<DismissalLog>> dismissalLogs({String? studentId}) async {
-    try {
-      final r = await client.raw.get('/api/dismissal/logs', queryParameters: {
-        if (studentId != null) 'student_id': studentId,
-      });
-      final list = (r.data['logs'] as List? ?? r.data as List? ?? const [])
-          .cast<Map>()
-          .map((m) => DismissalLog.fromJson(m.cast<String, dynamic>()))
-          .toList();
-      return list;
-    } on DioException catch (e) {
-      ApiClient.rethrowAsVistaException(e);
-    }
-  }
-
-  /// Asks the backend for a short-lived pickup QR payload, optionally bound
-  /// to a specific fetcher. [fetcherType] is 'self' (parent themself) or
-  /// 'auth' (one of the parent's authorized_pickup_persons rows). When 'auth',
-  /// [fetcherId] must be the authorized person's UUID.
-  Future<PickupQr> generateQr(
-    String studentId, {
-    String fetcherType = 'self',
-    String? fetcherId,
-  }) async {
-    try {
-      final r = await client.raw.post(
-        '/api/students/$studentId/generate-qr',
-        data: {
-          'fetcher_type': fetcherType,
-          if (fetcherId != null) 'fetcher_id': fetcherId,
-        },
-      );
-      return PickupQr.fromJson((r.data as Map).cast<String, dynamic>());
-    } on DioException catch (e) {
-      ApiClient.rethrowAsVistaException(e);
-    }
-  }
-
-  Future<List<AuthorizedPickupPerson>> listAuthorizedPersons(String studentId) async {
-    try {
-      final r = await client.raw.get('/api/pickup-persons',
-          queryParameters: {'student_id': studentId});
-      final list = (r.data as List? ?? const [])
-          .cast<Map>()
-          .map((m) => AuthorizedPickupPerson.fromJson(m.cast<String, dynamic>()))
-          .toList();
-      return list;
-    } on DioException catch (e) {
-      ApiClient.rethrowAsVistaException(e);
-    }
-  }
-
-  Future<AuthorizedPickupPerson> addAuthorizedPerson({
-    required String studentId,
-    required String surname,
-    required String firstName,
-    String? middleName,
-    required String relationship,
-    required File photo,
-  }) async {
-    try {
-      final form = FormData.fromMap({
-        'student_id': studentId,
-        'surname': surname,
-        'first_name': firstName,
-        if (middleName != null && middleName.isNotEmpty) 'middle_name': middleName,
-        'relationship': relationship,
-        'photo': await MultipartFile.fromFile(photo.path),
-      });
-      final r = await client.raw.post('/api/pickup-persons', data: form);
-      return AuthorizedPickupPerson.fromJson(
-          (r.data as Map).cast<String, dynamic>());
-    } on DioException catch (e) {
-      ApiClient.rethrowAsVistaException(e);
-    }
-  }
-
-  Future<AuthorizedPickupPerson> updateAuthorizedPerson({
-    required String id,
-    required String surname,
-    required String firstName,
-    String? middleName,
-    required String relationship,
-    File? photo,
-  }) async {
-    try {
-      final form = FormData.fromMap({
-        'surname': surname,
-        'first_name': firstName,
-        if (middleName != null && middleName.isNotEmpty) 'middle_name': middleName,
-        'relationship': relationship,
-        if (photo != null) 'photo': await MultipartFile.fromFile(photo.path),
-      });
-      final r = await client.raw.put('/api/pickup-persons/$id', data: form);
-      return AuthorizedPickupPerson.fromJson(
-          (r.data as Map).cast<String, dynamic>());
-    } on DioException catch (e) {
-      ApiClient.rethrowAsVistaException(e);
-    }
-  }
-
-  Future<void> deleteAuthorizedPerson(String id) async {
-    try {
-      await client.raw.delete('/api/pickup-persons/$id');
-    } on DioException catch (e) {
-      ApiClient.rethrowAsVistaException(e);
-    }
-  }
-
   Future<VistaUser> uploadProfilePhoto(File photo) async {
     try {
       final form = FormData.fromMap({
@@ -326,23 +215,6 @@ class ParentApi {
     } on DioException catch (e) {
       ApiClient.rethrowAsVistaException(e);
     }
-  }
-}
-
-class PickupQr {
-  PickupQr({required this.payload, this.expiresAt});
-  final String payload;
-  // Null when the QR was generated for an authorized fetcher (no time-based
-  // expiry — single-use only). Non-null for parent-self / admin QRs.
-  final DateTime? expiresAt;
-
-  factory PickupQr.fromJson(Map<String, dynamic> json) {
-    final payload = (json['qr_payload'] ?? json['payload'] ?? '').toString();
-    final exp = json['expires_at'] ?? json['expiresAt'];
-    return PickupQr(
-      payload: payload,
-      expiresAt: exp is String ? DateTime.tryParse(exp) : null,
-    );
   }
 }
 

@@ -16,7 +16,6 @@ const studentRoutes = require('./routes/student.routes');
 const attendanceRoutes = require('./routes/attendance.routes');
 const gradeRoutes = require('./routes/grade.routes');
 const behaviorRoutes = require('./routes/behavior.routes');
-const dismissalRoutes = require('./routes/dismissal.routes');
 const notificationRoutes = require('./routes/notification.routes');
 const announcementRoutes = require('./routes/announcement.routes');
 const aiRoutes = require('./routes/ai.routes');
@@ -26,7 +25,6 @@ const scoreRoutes = require('./routes/score.routes');
 const eceRoutes = require('./routes/ece.routes');
 const profileRoutes = require('./routes/profile.routes');
 const deviceRoutes = require('./routes/device.routes');
-const pickupRoutes = require('./routes/pickup.routes');
 const enrollmentRoutes = require('./routes/enrollment.routes');
 const advisoryRoutes   = require('./routes/advisory.routes');
 const facilityRoutes   = require('./routes/facility.routes');
@@ -61,8 +59,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ─── Static uploads ────────────────────────────────────────────
-// Profile + authorized-pickup photos uploaded via multer land here. Served
-// publicly so the parent and guard mobile apps can render them with NetworkImage.
+// Profile, announcement and facility photos uploaded via multer land here.
+// Served publicly so the parent mobile app can render them with NetworkImage.
 // helmet's default Cross-Origin-Resource-Policy (same-origin) would stop the
 // landing page, which is a different origin, from displaying announcement and
 // facility photos, so it is relaxed for this static path only.
@@ -86,7 +84,6 @@ app.use('/api/students', studentRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/grades', gradeRoutes);
 app.use('/api/behavior', behaviorRoutes);
-app.use('/api/dismissal', dismissalRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/ai', aiRoutes);  // Proxy to FastAPI AI service
@@ -96,7 +93,6 @@ app.use('/api/scores', scoreRoutes);         // Score items & student scores
 app.use('/api/ece', eceRoutes);              // ECE competency catalog & records
 app.use('/api/profile', profileRoutes);      // Self-service profile (any role)
 app.use('/api/devices', deviceRoutes);       // FCM device-token registry
-app.use('/api/pickup-persons', pickupRoutes); // Parent: authorized non-account fetchers
 app.use('/api/enrollment', enrollmentRoutes); // Admin: per-school-year student enrollment
 app.use('/api/advisory', advisoryRoutes);     // Teacher: read-only view of the section they advise
 app.use('/api/facilities', facilityRoutes);   // Super admin: the website's facility gallery

@@ -1,1 +1,0 @@
-export { SecurePass as default } from './pages'

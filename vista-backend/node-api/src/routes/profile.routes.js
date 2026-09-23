@@ -48,7 +48,7 @@ router.put('/me', async (req, res, next) => {
     const user = result.rows[0]
 
     // A parent's name and number also sit on each of their guardian entries,
-    // which is what the school's pages and the guard's scan read. Without this a
+    // which is what the school's pages read. Without this a
     // parent correcting their own name in the app changed it nowhere anyone saw.
     if (user.role === 'parent') {
       await query(

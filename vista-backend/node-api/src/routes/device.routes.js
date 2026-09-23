@@ -12,7 +12,7 @@ const registerSchema = Joi.object({
   platform: Joi.string().valid('ios', 'android').required(),
 });
 
-// POST /api/devices/register — vista_parent / vista_guard call this after
+// POST /api/devices/register — vista_parent calls this after
 // login + permission grant. Upsert so re-registering the same token just
 // bumps last_seen_at. A token that was previously owned by another user
 // (shared device, account switch) is re-homed to the current caller.

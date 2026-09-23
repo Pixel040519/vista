@@ -9,7 +9,7 @@
 └───────────────────┬─────────────────────────────┘
                     │ HTTP / REST
           ┌─────────▼──────────┐
-          │  Node.js API :3000 │  ← Auth, CRUD, QR, Notifications
+          │  Node.js API :3000 │  ← Auth, CRUD, Notifications
           │  (Express.js)      │
           └─────────┬──────────┘
                     │ Internal HTTP
@@ -93,7 +93,6 @@ are invitations" in the root `CLAUDE.md` before changing any of them.
 | POST | /api/students | Create student | Admin/Teacher |
 | PUT | /api/students/:id | Update student | Admin/Teacher |
 | DELETE | /api/students/:id | Deactivate student | Admin |
-| POST | /api/students/:id/generate-qr | Generate SecurePass QR | Admin/Teacher |
 
 ### Attendance Endpoints
 | Method | Endpoint | Description | Role |
@@ -116,12 +115,6 @@ are invitations" in the root `CLAUDE.md` before changing any of them.
 | POST | /api/behavior | Log observation (auto-sentiment) | Teacher |
 | PUT | /api/behavior/:id | Edit own observation | Teacher |
 | DELETE | /api/behavior/:id | Delete own observation | Teacher |
-
-### Dismissal Endpoints (SecurePass)
-| Method | Endpoint | Description | Role |
-|--------|----------|-------------|------|
-| POST | /api/dismissal/verify | Verify QR and release student | Admin/Teacher |
-| GET | /api/dismissal/logs | View dismissal history | Admin |
 
 ### AI Endpoints (via Node.js proxy → FastAPI)
 | Method | Endpoint | Description |
@@ -151,7 +144,7 @@ vista-backend/
 │       └── routes/
 │           ├── auth.routes.js
 │           ├── student.routes.js
-│           ├── crud.routes.js  ← Attendance, Grades, Behavior, Dismissal
+│           ├── crud.routes.js  ← Attendance, Grades, Behavior
 │           └── ai.routes.js    ← Proxy to FastAPI
 └── fastapi-ai/
     ├── main.py                 ← Entry point

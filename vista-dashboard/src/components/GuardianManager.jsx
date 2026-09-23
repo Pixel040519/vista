@@ -28,7 +28,7 @@ const sameAddress = (a, b) => !!a && !!b && a.trim().toLowerCase() === b.trim().
 const emptyForm = (student) => ({
   surname: '', first_name: '', middle_name: '', relationship: 'Mother',
   phone: '', email: '', home_address: '', same_address: !!student?.home_address,
-  is_authorized_pickup: true, is_emergency_contact: false, invite: false,
+  is_emergency_contact: false, invite: false,
 })
 
 const formFrom = (g, student) => ({
@@ -36,7 +36,7 @@ const formFrom = (g, student) => ({
   relationship: g.relationship || 'Guardian', phone: g.phone || '', email: g.email || '',
   home_address: g.home_address || '',
   same_address: sameAddress(g.home_address, student?.home_address),
-  is_authorized_pickup: !!g.is_authorized_pickup, is_emergency_contact: !!g.is_emergency_contact,
+  is_emergency_contact: !!g.is_emergency_contact,
   invite: false,
 })
 
@@ -142,7 +142,6 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
 
   const counts = useMemo(() => ({
     total: guardians.length,
-    pickup: guardians.filter(g => g.is_authorized_pickup).length,
     app: guardians.filter(g => accessOf(g).id === 'active').length,
   }), [guardians])
 
@@ -181,7 +180,6 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
           surname: picked.surname, first_name: picked.first_name, middle_name: picked.middle_name || '',
           relationship: form.relationship,
           home_address,
-          is_authorized_pickup: form.is_authorized_pickup,
           is_emergency_contact: form.is_emergency_contact,
         }))
         setMode('view')
@@ -196,7 +194,6 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
       relationship: form.relationship,
       phone: form.phone,
       home_address: form.same_address ? (student.home_address || '') : form.home_address.trim(),
-      is_authorized_pickup: form.is_authorized_pickup,
       is_emergency_contact: form.is_emergency_contact,
     }
     // A locked address is left out entirely rather than resent, so an activated
@@ -250,7 +247,6 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
         </div>
         <div className="flex items-center gap-4 text-xs text-slate-600">
           <span>{counts.total} guardian{counts.total === 1 ? '' : 's'}</span>
-          <span>{counts.pickup} can pick up</span>
           <span>{counts.app} use{counts.app === 1 ? 's' : ''} the parent app</span>
         </div>
       </div>
@@ -273,7 +269,7 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
               {guardians.map(g => {
                 const state = accessOf(g).id
                 const isSel = g.id === selectedId && mode !== 'add'
-                const roles = [g.relationship, g.is_authorized_pickup && 'Pickup', g.is_emergency_contact && 'Emergency'].filter(Boolean).join(' · ')
+                const roles = [g.relationship, g.is_emergency_contact && 'Emergency'].filter(Boolean).join(' · ')
                 return (
                   <button key={g.id} type="button" disabled={editing && !isSel}
                     aria-current={isSel ? 'true' : undefined}
@@ -468,7 +464,7 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
                   <p className="font-semibold text-blue-900">This parent’s account also covers {otherLearnersText(selected)}.</p>
                   <p className="mt-1">
                     {canChangeEmail(selected) ? 'Name, mobile number, email and home address' : 'Name, mobile number and home address'} are the parent’s own, so saving updates them there too.
-                    Relationship, pickup and emergency contact apply to {learner} only.
+                    Relationship and emergency contact apply to {learner} only.
                   </p>
                 </div>
               )}
@@ -556,14 +552,8 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
               </>)}
 
               {(showNewFields || (linking && picked)) && (
-              <Section title="Pickup & emergency">
+              <Section title="Emergency contact">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label className={clsx('flex items-center gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer',
-                    form.is_authorized_pickup ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-slate-200 text-slate-700')}>
-                    <input type="checkbox" className="w-4 h-4 accent-emerald-600" checked={form.is_authorized_pickup}
-                      onChange={e => set({ is_authorized_pickup: e.target.checked })}/>
-                    <span className="text-sm font-medium">Can pick up {learner}</span>
-                  </label>
                   <label className={clsx('flex items-center gap-2.5 px-3 py-2.5 rounded-xl border cursor-pointer',
                     form.is_emergency_contact ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 text-slate-700')}>
                     <input type="checkbox" className="w-4 h-4 accent-amber-600" checked={form.is_emergency_contact}
@@ -671,9 +661,6 @@ export default function GuardianManager({ student, onRefresh, onClose }) {
 
               <Section title={`For ${learner}`}>
                 <div className="space-y-2.5">
-                  <Permission on={selected.is_authorized_pickup}>
-                    {selected.is_authorized_pickup ? `Can pick up ${learner}` : `Can’t pick up ${learner}`}
-                  </Permission>
                   <Permission on={selected.is_emergency_contact}>
                     {selected.is_emergency_contact ? 'Emergency contact' : 'Not an emergency contact'}
                   </Permission>

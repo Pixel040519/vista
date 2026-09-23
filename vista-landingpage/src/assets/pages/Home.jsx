@@ -76,13 +76,11 @@ const portalRoles = [
   },
   {
     who: 'Parents',
-    what: 'Follow your own child, and generate the SecurePass QR for dismissal.',
+    what: 'Follow your own child’s attendance, grades and behavior from the parent app.',
     icon: (
       <>
-        <rect x="4" y="4" width="7" height="7" rx="1" />
-        <rect x="13" y="4" width="7" height="7" rx="1" />
-        <rect x="4" y="13" width="7" height="7" rx="1" />
-        <path d="M13 13h3v3h-3zM17 17h3v3h-3z" />
+        <rect x="6" y="2" width="12" height="20" rx="2" />
+        <path d="M11 18h2" />
       </>
     ),
   },

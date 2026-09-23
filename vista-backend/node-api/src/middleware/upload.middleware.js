@@ -34,7 +34,6 @@ function buildUploader(bucket) {
   });
 }
 
-const uploadAuthorizedPickupPhoto = buildUploader('authorized-pickup').single('photo');
 const uploadProfilePhoto = buildUploader('profile').single('photo');
 
 // Public content. These land in a staging bucket and are always re-encoded by
@@ -68,7 +67,6 @@ function unlinkUploadedFile(relPath) {
 }
 
 module.exports = {
-  uploadAuthorizedPickupPhoto,
   uploadProfilePhoto,
   uploadAnnouncementImage,
   uploadFacilityPhotos,

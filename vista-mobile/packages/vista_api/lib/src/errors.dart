@@ -19,8 +19,8 @@ class AcademicAccessSuspended extends VistaApiException {
 }
 
 /// The mobile app tried to sign in with credentials that belong to the wrong
-/// role (e.g., a parent signing in on vista_guard). Thrown by AuthRepository
-/// so the login UI can show a specific "this app is for guards only" message.
+/// role. Thrown by AuthRepository when `requiredRole` is set, so the login UI
+/// can show a specific "this app is not for your account" message.
 class RoleMismatchException extends VistaApiException {
   RoleMismatchException(this.expectedRole, this.actualRole)
       : super(403,

@@ -10,7 +10,6 @@ const routeLabels = {
   '/attendance': 'Attendance',
   '/grades': 'Grades',
   '/behavior': 'Behavior Monitoring',
-  '/securepass': 'SecurePass QR',
   '/risk': 'Risk Overview',
   '/announcements': 'Announcements',
   '/accounts': 'Account Management',

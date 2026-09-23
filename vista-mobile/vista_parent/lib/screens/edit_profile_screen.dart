@@ -152,7 +152,7 @@ class _AvatarCardState extends ConsumerState<_AvatarCard> {
                   const SizedBox(height: 4),
                   Text(
                     _error ??
-                        'Shown to the school guard at pickup so they can verify it’s you.',
+                        'Shown on your profile in the VISTA Parent app.',
                     style: TextStyle(
                       fontSize: 12,
                       color: _error != null

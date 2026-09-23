@@ -284,7 +284,7 @@ export function Attendance() {
 // ============================================================
 import { behaviorApi, aiApi } from '../api/client'
 import { SentimentBadge, Modal, StatCard } from '../components/UI'
-import { Heart, Plus as PlusIcon, Pencil, Trash2, Smile, Meh, Frown, X as XIcon, Users, Activity, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight, ArrowUpRight, Info, Eye } from 'lucide-react'
+import { Heart, Plus as PlusIcon, Pencil, Trash2, Smile, Meh, Frown, X as XIcon, Users, Activity, Calendar, Clock, Check, ChevronDown, ChevronLeft, ChevronRight, ArrowUpRight, Info, Eye } from 'lucide-react'
 import { Link as RouterLink } from 'react-router-dom'
 // Both lived under the Grades page's imports before it moved to Grades.jsx.
 import { BookOpen } from 'lucide-react'
@@ -1556,91 +1556,6 @@ function AdminBehavior() {
 
 
 // ============================================================
-// SECUREPASS QR PAGE
-// ============================================================
-import { dismissalApi } from '../api/client'
-import { Clock } from 'lucide-react'
-import { format as fmt } from 'date-fns'
-
-export function SecurePass() {
-  const [logs, setLogs]         = useState([])
-  const [loading, setLoading]   = useState(true)
-
-  const loadLogs = () => {
-    setLoading(true)
-    dismissalApi.logs(format(new Date(), 'yyyy-MM-dd'))
-      .then(res => setLogs(res.data.logs || []))
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }
-
-  useEffect(() => { loadLogs() }, [])
-
-  // Daily counts
-  const successCount = logs.filter(l => l.status === 'Success').length
-  const failedCount = logs.filter(l => l.status === 'Failed' || l.status === 'Expired').length
-
-  return (
-    <div className="space-y-5 animate-fade-in">
-      <div>
-        <h1 className="page-title">SecurePass Oversight</h1>
-        <p className="page-subtitle">Monitor today's dismissal activity</p>
-      </div>
-
-      {/* Stat strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-        <div className="card p-4">
-          <p className="text-xs text-slate-400">Dismissed today</p>
-          <p className="text-2xl font-bold text-brand-600 mt-1">{successCount}</p>
-        </div>
-        <div className="card p-4">
-          <p className="text-xs text-slate-400">Failed / Expired</p>
-          <p className={`text-2xl font-bold mt-1 ${failedCount > 0 ? 'text-amber-600' : 'text-slate-700'}`}>{failedCount}</p>
-        </div>
-        <div className="card p-4 col-span-2 sm:col-span-1">
-          <p className="text-xs text-slate-400">Total scans</p>
-          <p className="text-2xl font-bold text-slate-700 mt-1">{logs.length}</p>
-        </div>
-      </div>
-
-      {/* Today's Dismissal Log */}
-      <div className="card overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center gap-2">
-          <Clock size={15} className="text-slate-400" />
-          <h3 className="text-sm font-semibold text-slate-800">Today's Dismissal Log</h3>
-        </div>
-        {logs.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-400">No dismissals recorded today.</div>
-        ) : (
-          <div className="overflow-x-auto">
-          <table className="table-base">
-            <thead><tr><th>Student</th><th>Guardian</th><th>Status</th><th>Time</th></tr></thead>
-            <tbody>
-              {logs.map(l => (
-                <tr key={l.id}>
-                  <td className="font-medium text-sm">{l.student_name}</td>
-                  <td className="text-sm text-slate-500">{l.guardian_name}</td>
-                  <td>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
-                      l.status === 'Success' ? 'bg-emerald-50 text-emerald-700' :
-                      l.status === 'Expired' ? 'bg-amber-50 text-amber-700' :
-                      'bg-red-50 text-red-700'
-                    }`}>{l.status}</span>
-                  </td>
-                  <td className="text-xs text-slate-400 font-mono">{fmt(new Date(l.scanned_at), 'h:mm a')}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-
-// ============================================================
 // RISK OVERVIEW PAGE
 // ============================================================
 import { AlertTriangle, RefreshCw } from 'lucide-react'
@@ -2013,7 +1928,7 @@ export function RiskOverview() {
                     <td className="text-xs text-slate-500">
                       {s.top_factor ? FACTOR_LABELS[s.top_factor] : <span className="text-slate-300">—</span>}
                     </td>
-                    <td className="text-xs text-slate-400">{s.assessed_at ? fmt(new Date(s.assessed_at), 'MMM d, h:mm a') : '—'}</td>
+                    <td className="text-xs text-slate-400">{s.assessed_at ? format(new Date(s.assessed_at), 'MMM d, h:mm a') : '—'}</td>
                   </tr>
                 )
               })}

@@ -1,7 +1,5 @@
 const express = require('express')
 const router  = express.Router()
-const QRCode  = require('qrcode')
-const { v4: uuidv4 } = require('uuid')
 const Joi     = require('joi')
 const { query, withTransaction } = require('../config/database')
 const { authenticate, authorizeAnyAdmin, authorizeSuperAdmin, enforceGradeScope } = require('../middleware/auth.middleware')
@@ -102,7 +100,6 @@ const studentSchema = Joi.object({
     relationship:         Joi.string().required(),
     email:                portalEmail,
     phone:                Joi.string().optional().allow(''),
-    is_authorized_pickup:  Joi.boolean().default(true),
     is_emergency_contact:  Joi.boolean().default(false),
     ...portalAccountShape(Joi.boolean().default(false)),
     home_address:          Joi.string().trim().optional().allow(''),
@@ -129,7 +126,6 @@ const guardianSchema = Joi.object({
   relationship:         Joi.string().required(),
   email:                portalEmail,
   phone:                Joi.string().optional().allow(''),
-  is_authorized_pickup:  Joi.boolean().default(true),
   is_emergency_contact:  Joi.boolean().default(false),
   ...portalAccountShape(Joi.boolean().default(false)),
   home_address:          Joi.string().trim().min(1).required(),
@@ -145,7 +141,6 @@ const updateGuardianSchema = Joi.object({
   relationship:          Joi.string().optional(),
   email:                 Joi.string().email().optional().allow(''),
   phone:                 Joi.string().optional().allow(''),
-  is_authorized_pickup:  Joi.boolean().optional(),
   is_emergency_contact:  Joi.boolean().optional(),
   home_address:          Joi.string().optional().allow(''),
   // Giving an existing guardian a parent portal login. Without these keys
@@ -173,7 +168,6 @@ const getStudentWithGuardians = async (id, { includeArchived = false } = {}) => 
          'email',                ps.email,
          'phone',                ps.phone,
          'relationship',         ps.relationship,
-         'is_authorized_pickup', ps.is_authorized_pickup,
          'is_emergency_contact', ps.is_emergency_contact,
          'has_account',          (ps.parent_id IS NOT NULL),
          'home_address',         ps.home_address,
@@ -391,12 +385,12 @@ const insertGuardian = async (client, studentId, g, actorId = null) => {
     const u = existing.rows[0]
     await client.query(
       `INSERT INTO parent_student
-         (parent_id, student_id, surname, first_name, middle_name, email, phone, relationship, is_authorized_pickup, is_emergency_contact, home_address)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         (parent_id, student_id, surname, first_name, middle_name, email, phone, relationship, is_emergency_contact, home_address)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON CONFLICT DO NOTHING`,
       [parentId, studentId, u.surname, u.first_name, u.middle_name,
        u.email, u.phone, g.relationship,
-       g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, g.home_address || null]
+       g.is_emergency_contact ?? false, g.home_address || null]
     )
     return { parentId, account: null }
   }
@@ -418,11 +412,11 @@ const insertGuardian = async (client, studentId, g, actorId = null) => {
 
   await client.query(
     `INSERT INTO parent_student
-       (parent_id, student_id, surname, first_name, middle_name, email, phone, relationship, is_authorized_pickup, is_emergency_contact, home_address)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+       (parent_id, student_id, surname, first_name, middle_name, email, phone, relationship, is_emergency_contact, home_address)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [parentId, studentId, surname, first_name, middle_name || null,
      g.email || null, g.phone || null, g.relationship,
-     g.is_authorized_pickup ?? true, g.is_emergency_contact ?? false, g.home_address || null]
+     g.is_emergency_contact ?? false, g.home_address || null]
   )
   return { parentId, account }
 }
@@ -509,7 +503,6 @@ router.get('/parents', authorizeAnyAdmin, async (req, res, next) => {
                 'section',              s.section,
                 'is_active',            s.is_active,
                 'relationship',         ps.relationship,
-                'is_authorized_pickup', ps.is_authorized_pickup,
                 'is_emergency_contact', ps.is_emergency_contact
               ) ORDER BY s.grade_level, s.surname, s.first_name), '[]') AS children
          FROM users u
@@ -595,7 +588,6 @@ router.get('/parents', authorizeAnyAdmin, async (req, res, next) => {
 const parentChildSchema = Joi.object({
   student_id:           Joi.string().uuid().required(),
   relationship:         Joi.string().max(50).required(),
-  is_authorized_pickup: Joi.boolean().default(false),
   is_emergency_contact: Joi.boolean().default(false),
 })
 const createParentSchema = Joi.object({
@@ -639,7 +631,6 @@ router.post('/parents', authorizeAnyAdmin, async (req, res, next) => {
         const learner = byId.get(c.student_id)
         const shared = {
           relationship:         c.relationship,
-          is_authorized_pickup: c.is_authorized_pickup,
           is_emergency_contact: c.is_emergency_contact,
           home_address:         learner.home_address,
         }
@@ -851,7 +842,7 @@ router.get('/:id', async (req, res, next) => {
 
 // PATCH /api/students/:id/academic-access — admin toggle for the Conditional
 // Access Controller. When suspended, parent grade + ECE reads return 423 Locked.
-// Safety surfaces (attendance, behavior, dismissal, risk) stay visible.
+// Safety surfaces (attendance, behavior, risk) stay visible.
 router.patch('/:id/academic-access', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const schema = Joi.object({
@@ -1117,7 +1108,7 @@ const canonicalGrade = (v) => {
 // A guardian row naming a parent account takes its identity from the account.
 // A name typed beside the email must agree with it: a mistyped email that
 // happens to match another family would otherwise give a stranger this learner
-// in their parent app, pickup QR included.
+// in their parent app.
 const guardianAccountMismatch = (g, account) =>
   (g.surname && !sameName(g.surname, account.surname)) || (g.first_name && !sameName(g.first_name, account.first_name))
 
@@ -1156,7 +1147,6 @@ const bulkGuardianSchema = Joi.object({
   phone:                Joi.string().pattern(/^\+63 9\d{2} \d{7}$/).optional().allow('')
     .messages({ 'string.pattern.base': 'phone must be a PH mobile number (+63 9XX XXXXXXX)' }),
   home_address:         Joi.string().trim().optional().allow(''),
-  is_authorized_pickup: Joi.boolean().required(),
   is_emergency_contact: Joi.boolean().required(),
   // A spreadsheet could never create logins before, and the reason was the
   // password: it would have meant plain-text family passwords in a file that
@@ -1378,7 +1368,7 @@ router.post('/bulk', authorizeAnyAdmin, async (req, res, next) => {
           // the account rather than from the sheet.
           const { parentId, account: granted } = await insertGuardian(client, res.rows[0].id, account
             ? { link_parent_id: account.id, relationship: g.relationship, home_address,
-                is_authorized_pickup: g.is_authorized_pickup, is_emergency_contact: g.is_emergency_contact }
+                is_emergency_contact: g.is_emergency_contact }
             : { ...g, home_address, invite: inviteFor(g) }, req.user.id)
           guardians++
           if (parentId) linked++
@@ -1626,9 +1616,9 @@ router.put('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, nex
       // entries (and to the account itself), while what they are to THIS learner
       // stays on this entry. Before this split each learner held its own copy, an
       // edit changed one copy, and a sibling's record kept showing the old name
-      // and number — including to the guard reading it at the gate.
+      // and number.
       const SHARED = ['surname', 'first_name', 'middle_name', 'phone', 'home_address']
-      const PER_LEARNER = ['relationship', 'is_authorized_pickup', 'is_emergency_contact']
+      const PER_LEARNER = ['relationship', 'is_emergency_contact']
       const linked = !!row.parent_id
 
       const sets = []; const params = []
@@ -1838,8 +1828,8 @@ router.post('/:id/guardians/:guardianId/invitation', authorizeAnyAdmin, async (r
 
 // DELETE /api/students/:id/guardians/:guardianId/invitation
 //
-// Revoke portal access. The guardian row, the account and every grade,
-// attendance and dismissal record stay — this switches off sign-in, it does not
+// Revoke portal access. The guardian row, the account and every grade and
+// attendance record stay — this switches off sign-in, it does not
 // delete anything.
 //
 // One thing the caller has to be told: an account is one login for every child
@@ -1904,103 +1894,6 @@ router.delete('/:id/guardians/:guardianId', authorizeAnyAdmin, async (req, res, 
     }
 
     res.json({ message: 'Guardian removed.' })
-  } catch (err) { next(err) }
-})
-
-// POST /api/students/:id/generate-qr
-// Admins (school web console) and linked authorized-pickup parents (vista_parent
-// mobile app, "Pickup QR" tab) may both generate a SecurePass QR.
-//
-// Expiry policy depends on the chosen fetcher:
-//   • fetcher_type='self' (default — parent themself, or admin path)
-//       → time-based expiry (20 min parents, 30 min admins) PLUS one-time use.
-//         The account holder is at the gate and can refresh on their phone.
-//   • fetcher_type='auth' (an authorized_pickup_persons row, e.g. yaya/driver)
-//       → ONE-TIME USE ONLY, no time expiry. The fetcher does not have access
-//         to the parent's account, so they cannot regenerate if a timer ran out
-//         while they were on the way. The QR is invalidated only by a
-//         successful /verify (which clears `qr_code`).
-router.post('/:id/generate-qr', async (req, res, next) => {
-  try {
-    const role = req.user?.role
-    const isAdmin = role === ROLES.SUPER_ADMIN || role === ROLES.ADMIN_ECE || role === ROLES.ADMIN_ELEM
-
-    if (isAdmin) {
-      await assertStudentInScope(req, req.params.id)
-    } else if (role === ROLES.PARENT) {
-      const link = await query(
-        `SELECT 1 FROM parent_student
-          WHERE parent_id=$1 AND student_id=$2 AND is_authorized_pickup=TRUE
-          LIMIT 1`,
-        [req.user.id, req.params.id]
-      )
-      if (!link.rowCount) {
-        throw new AppError('You are not an authorized pickup guardian for this student.', 403)
-      }
-    } else {
-      throw new AppError('Not authorized to generate a pickup QR.', 403)
-    }
-
-    // Optional fetcher binding: parent picks WHO is fetching today before
-    // generating the QR. 'self' (default) → parent themself; 'auth' → an
-    // authorized_pickup_persons row owned by this parent for this student.
-    // Admins still default to 'self' with their own user id (used by the
-    // admin-side generated QR fallback in /api/dismissal/scan).
-    const rawFetcherType = (req.body?.fetcher_type || 'self').toString().trim()
-    if (!['self', 'auth'].includes(rawFetcherType)) {
-      throw new AppError("fetcher_type must be 'self' or 'auth'.", 400)
-    }
-    let fetcherType = rawFetcherType
-    let fetcherId = req.user.id
-
-    if (rawFetcherType === 'auth') {
-      if (role !== ROLES.PARENT) {
-        throw new AppError('Only parents may bind a QR to an authorized pickup person.', 403)
-      }
-      const candidate = (req.body?.fetcher_id || '').toString().trim()
-      if (!candidate) throw new AppError('fetcher_id is required when fetcher_type is "auth".', 400)
-      const owned = await query(
-        `SELECT 1 FROM authorized_pickup_persons
-          WHERE id=$1 AND parent_id=$2 AND student_id=$3
-          LIMIT 1`,
-        [candidate, req.user.id, req.params.id]
-      )
-      if (!owned.rowCount) {
-        throw new AppError('Authorized person not found for this student.', 404)
-      }
-      fetcherId = candidate
-    }
-
-    const token = uuidv4()
-
-    // 'auth' QRs never carry a timer; 'self' / admin QRs use the time-based
-    // expiry the dashboard and parent app have always relied on.
-    let expiresAt = null
-    let qrPayloadObj = { studentId: req.params.id, token, type: 'VISTA_SECUREPASS' }
-    if (fetcherType !== 'auth') {
-      const defaultExpiry = role === ROLES.PARENT ? 20 : 30
-      const expiresInMinutes = Number.parseInt(req.body?.expiresInMinutes, 10) || defaultExpiry
-      expiresAt = new Date(Date.now() + expiresInMinutes * 60000)
-      qrPayloadObj.expiresAt = expiresAt
-    }
-    const qrPayload = JSON.stringify(qrPayloadObj)
-    const qrImage   = await QRCode.toDataURL(qrPayload, { errorCorrectionLevel: 'H', width: 300, margin: 2 })
-    await query(
-      `UPDATE students
-         SET qr_code=$1, qr_expires_at=$2, qr_generated_by=$3,
-             qr_fetcher_type=$4, qr_fetcher_id=$5
-       WHERE id=$6`,
-      [token, expiresAt, req.user.id, fetcherType, fetcherId, req.params.id]
-    )
-    res.json({
-      message: 'QR code generated.',
-      qrImage,
-      qr_payload: qrPayload,
-      token,
-      expiresAt,
-      fetcher_type: fetcherType,
-      fetcher_id: fetcherId,
-    })
   } catch (err) { next(err) }
 })
 

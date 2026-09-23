@@ -89,7 +89,6 @@ export const studentApi = {
   // record, its grades and its history survive either way — there is no delete.
   setArchived:    (id, archived, reason) =>
     api.patch(`/students/${id}/archive`, { archived, ...(reason ? { reason } : {}) }),
-  generateQR:     (id, m)  => api.post(`/students/${id}/generate-qr`, { expiresInMinutes: m }),
   // `studentId` (optional) marks parents who already look after that learner.
   searchParents:  (q, studentId) =>
     api.get('/students/parents/search', { params: { q, ...(studentId ? { student_id: studentId } : {}) } }),
@@ -142,11 +141,6 @@ export const behaviorApi = {
   log:     (data)      => api.post('/behavior', data),
   update:  (id, data)  => api.put(`/behavior/${id}`, data),
   delete:  (id)        => api.delete(`/behavior/${id}`),
-}
-
-// ── Dismissal ─────────────────────────────────────────────────
-export const dismissalApi = {
-  logs: (date) => api.get('/dismissal/logs', { params: { date } }),
 }
 
 // ── Announcements ─────────────────────────────────────────────
@@ -230,12 +224,6 @@ export const accountApi = {
   createAdmin:   (data)    => api.post('/accounts/admins', data),
   updateAdmin:   (id, d)   => api.put(`/accounts/admins/${id}`, d),
   deleteAdmin:   (id)      => api.delete(`/accounts/admins/${id}`),
-
-  // Security-guard accounts (super_admin only)
-  listGuards:    (params)  => api.get('/accounts/guards', { params }),
-  createGuard:   (data)    => api.post('/accounts/guards', data),
-  updateGuard:   (id, d)   => api.put(`/accounts/guards/${id}`, d),
-  deleteGuard:   (id)      => api.delete(`/accounts/guards/${id}`),
 }
 
 // ── Scores (Score Items & Student Scores) ────────────────────
