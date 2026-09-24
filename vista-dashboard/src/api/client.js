@@ -168,6 +168,14 @@ export const facilityApi = {
   removePhoto:  (photoId)      => api.delete(`/facilities/photos/${photoId}`),
 }
 
+// ── Key dates (website admissions calendar) ───────────────────
+export const keyDateApi = {
+  list:   ()         => api.get('/key-dates'),
+  create: (data)     => api.post('/key-dates', data),
+  update: (id, data) => api.put(`/key-dates/${id}`, data),
+  remove: (id)       => api.delete(`/key-dates/${id}`),
+}
+
 // ── Notifications ─────────────────────────────────────────────
 export const notificationApi = {
   list:   ()   => api.get('/notifications'),

@@ -47,3 +47,12 @@ a[href],
 [role='button'] {
   cursor: pointer;
 }
+
+/* Horizontal tracks that scroll by swipe and by their own Previous / Next
+   buttons (the Home news carousel) — the bar itself is just noise there. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

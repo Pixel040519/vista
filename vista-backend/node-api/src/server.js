@@ -28,12 +28,18 @@ const deviceRoutes = require('./routes/device.routes');
 const enrollmentRoutes = require('./routes/enrollment.routes');
 const advisoryRoutes   = require('./routes/advisory.routes');
 const facilityRoutes   = require('./routes/facility.routes');
+const keyDateRoutes    = require('./routes/keyDate.routes');
 const publicRoutes     = require('./routes/public.routes');
 
 const { errorHandler } = require('./middleware/error.middleware');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+// 5000, not 3000: PORT is set in vista-backend/.env (and .env.example), but the
+// fallback has to match it because nothing downstream can follow a different one.
+// The dashboard's Vite proxy, the landing page's VITE_API_URL and the parent app's
+// env.dart all hardcode 5000, so an API that quietly came up on 3000 because PORT
+// was missing failed every client at once with a bare connection error.
+const PORT = process.env.PORT || 5000;
 
 // ─── Security Middleware ───────────────────────────────────────
 app.use(helmet());
@@ -96,6 +102,7 @@ app.use('/api/devices', deviceRoutes);       // FCM device-token registry
 app.use('/api/enrollment', enrollmentRoutes); // Admin: per-school-year student enrollment
 app.use('/api/advisory', advisoryRoutes);     // Teacher: read-only view of the section they advise
 app.use('/api/facilities', facilityRoutes);   // Super admin: the website's facility gallery
+app.use('/api/key-dates', keyDateRoutes);     // Super admin: the website's admissions calendar
 app.use('/api/public', publicRoutes);         // NO AUTH: read-only content for the landing page
 
 // ─── 404 Handler ──────────────────────────────────────────────

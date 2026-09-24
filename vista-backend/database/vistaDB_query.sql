@@ -601,6 +601,29 @@ CREATE INDEX IF NOT EXISTS idx_sections_sy ON sections(school_year_id);
 
 
 -- ============================================================
+-- KEY DATES (landing page admissions calendar) — 2026_09_24_key_dates.sql
+-- Must come after school_years: every key date belongs to one.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS key_dates (
+    id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    school_year_id UUID NOT NULL REFERENCES school_years(id) ON DELETE CASCADE,
+    label          VARCHAR(120) NOT NULL,
+    starts_on      DATE NOT NULL,
+    ends_on        DATE,
+    kind           VARCHAR(20) NOT NULL DEFAULT 'Admissions',
+    is_public      BOOLEAN NOT NULL DEFAULT FALSE,
+    created_by     UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ,
+    CONSTRAINT key_dates_kind_check  CHECK (kind IN ('Admissions', 'Event', 'Academic', 'Holiday')),
+    CONSTRAINT key_dates_range_check CHECK (ends_on IS NULL OR ends_on >= starts_on)
+);
+
+CREATE INDEX IF NOT EXISTS idx_key_dates_public ON key_dates (starts_on) WHERE is_public = TRUE;
+CREATE INDEX IF NOT EXISTS idx_key_dates_sy     ON key_dates (school_year_id, starts_on);
+
+
+-- ============================================================
 -- VISTA Migration: Grading structure per subject
 -- Allows configuring grading categories (e.g. Written Tasks 30%)
 -- and components (e.g. Quizzes 15%) per subject.

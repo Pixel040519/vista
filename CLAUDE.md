@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `vista-backend/node-api/CLAUDE.md` — Node API conventions (AI proxy, class-health, behavior, ECE, grading, score entry, profile, student stripping).
 - `vista-backend/fastapi-ai/CLAUDE.md` — FastAPI routers, `/teacher-dashboard` internals, SQLAlchemy caveats.
 - `vista-dashboard/CLAUDE.md` — Frontend layout, sidebar, responsive patterns, per-page notes, TeacherDashboard data flow.
-- `vista-landingpage/CLAUDE.md` — Public marketing site: design system, the cross-origin link into the dashboard, scroll handling, handbook-sourced content.
+- `vista-landingpage/CLAUDE.md` — Public marketing site: design system, the cross-origin link into the dashboard, what it reads back from VISTA (announcements, gallery, key dates and the school year), scroll handling, handbook-sourced content.
 - `vista-mobile/CLAUDE.md` — Flutter parent app plus the shared `vista_api` package.
 
 ## Project Overview
@@ -22,9 +22,12 @@ services plus the Flutter mobile apps:
 The landing page is **not** part of the application. It is the school's brochure site and must
 keep rendering with the backend down. It reaches VISTA in two ways: a link to the dashboard's
 `/login` at `VITE_VISTA_URL`, and — optionally, when `VITE_API_URL` is set — reads of the
-announcements and facility gallery that admins publish (see "Public content" below). Both
-reads fail soft to bundled content. The two Vite apps pin different ports on purpose — they both
-defaulted to 5173 and silently fought over it.
+announcements, facility gallery and key dates that admins publish, the last of which also
+decides **which school year the site names** (see "Public content" below). Every read fails
+soft, but only the gallery falls back to bundled content: announcements and key dates have no
+bundled list on purpose, and their sections say there is nothing rather than invent something.
+The two Vite apps pin different ports on purpose — they both defaulted to 5173 and silently
+fought over it.
 
 ## Development Commands
 
@@ -127,6 +130,7 @@ Key tables:
 - `password_reset_codes` — the same code discipline for an active account's self-service reset. Deliberately **not** folded into `parent_invitations`: an invitation is a thing an admin creates, sees and revokes, while a reset code is ephemeral and belongs to the account holder.
 - `announcements` — one notice system with several reaches: `target_audience` (`'all'` | `'admins'` | `'teachers'` | `'parents'`) within VISTA, plus **`is_public`**, which also puts it on the landing page. A CHECK allows `is_public` only with `'all'`/`'parents'`, so a staff-only post can never reach the internet. `published_at` NULL = draft, future = scheduled; `expires_at` takes it down; the visible *state* is derived from those, never stored. `notified_at` records that parents were notified, so an edit can never push twice. `image_path` is always a server re-encoded file. See "Public content".
 - `facilities` / `facility_photos` — the landing page's facility gallery. First photo by `sort_order` is the cover; `is_active = FALSE` hides a facility from the site without deleting it.
+- `key_dates` — the landing page's admissions calendar, one row per (school year, date): `label`, `starts_on`, optional `ends_on` for a period, `kind`, and `is_public`. Publishing a row both puts it on the site and decides **which school year the site names** — see "Public content". A row whose last day has passed leaves the site on its own.
 - `grade_level_assessment` — per `(school_year_id, grade_level)`: `assessment_mode` (`'numeric'` | `'descriptive'`) + `rating_scale` (required for descriptive, NULL for numeric). Zero rows = built-in defaults, so it is additive. See "Assessment mode" below.
 
 Supported grade levels: **Kinder, Grades 1–6**. Pre-Nursery, Nursery and Pre-Kinder
@@ -1021,18 +1025,24 @@ slot and a sign-in-method column, and the invitation must remain the gate if it
 is added (a Google identity is only ever matched against an already-authorized
 address, never allowed to create an account).
 
-## Public content (announcements + facility gallery)
+## Public content (announcements, facility gallery, key dates)
 
 Admins manage what the landing page shows from VISTA instead of a developer editing the site.
-Migration `2026_09_22_public_content.sql`; seed the existing gallery once with
-`node vista-backend/node-api/scripts/seedFacilities.js` (idempotent).
+Migrations `2026_09_22_public_content.sql` and `2026_09_24_key_dates.sql`; seed the existing
+gallery once with `node vista-backend/node-api/scripts/seedFacilities.js` (idempotent). Key
+dates are **not** seeded — see below.
 
 - **The public website is the super admin's.** Only `super_admin` may set `is_public` or reach
-  `/api/facilities`. Scoped admins keep posting inside VISTA (to staff or parents) and editing
+  `/api/facilities` and `/api/key-dates`. Scoped admins keep posting inside VISTA (to staff or parents) and editing
   their own posts — but not a public one. `super_admin` may edit or delete any post.
 - **One post, several reaches.** A post to parents shows in the `vista_parent` app; the
   opt-in **Notify parents** writes a `notifications` row per active parent account and sends an
   FCM push, once (`notified_at`), and only for a post that is live now.
+- **Where a public post lands on the website:** the newest nine (pinned first) in Home's news
+  carousel, where a card opens the full post in a modal, and every post on the site's
+  Announcements page, six at a time behind **Load more** (`GET /api/public/announcements`
+  pages with `offset` and returns `total`). A post's photo is its card image; without one the
+  site draws a tile for its category, so a photo is optional rather than a gap.
 - **Every uploaded image is re-encoded** by `utils/imageProcess.js` (sharp): decoding it is the
   real type check, `.rotate()` applies EXIF orientation, and re-encoding drops all EXIF,
   GPS included. Uploads require a consent checkbox (no identifiable learners, or parental
@@ -1040,6 +1050,22 @@ Migration `2026_09_22_public_content.sql`; seed the existing gallery once with
 - **The landing page must render with the API down.** It reads with a 4 s timeout and
   falls back: the gallery to the bundled photos, announcements to an empty state pointing to
   Facebook. There is deliberately no bundled announcement list — the old one was invented.
+- **The school year on the site is the one whose key dates are published**, never the active
+  or upcoming one. While SY 2025-2026 runs, the site advertises enrolment *into* SY 2026-2027,
+  so the active year is the wrong answer for the half of the year that matters most; and
+  `is_upcoming` gets set months early merely to plan curriculum, which would flip the whole
+  site to a year nobody is enrolling in yet. `GET /api/public/key-dates` resolves it from the
+  data: among published rows whose last day has not passed, the earliest owns the site, and
+  only that year's rows come back — so two years cannot mix during the handover. With nothing
+  published it answers `school_year: null`, and the site then names **no** year at all:
+  "Ready to enroll?" rather than a year that may be wrong.
+- **A key date leaves the site on its own** once its last day has passed (`COALESCE(ends_on,
+  starts_on) >= CURRENT_DATE`), so a running period stays up while it runs. Nothing on the
+  site ages content out by hand.
+- **The calendar had no bundled fallback and was never seeded.** The five dates that used to
+  be hardcoded were placeholders nobody had confirmed, and they carried no year ("15 May"),
+  so they could not be compared against today and never *looked* stale. When there is nothing
+  to show, Home and Admissions render the registrar panel instead — which is permanently true.
 - Out of scope on purpose: handbook text (vision, mission, principles, hymn), tuition, and
   anything about a learner. Those stay in code.
 

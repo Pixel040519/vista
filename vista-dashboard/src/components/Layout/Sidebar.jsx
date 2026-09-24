@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext'
 import {
   LayoutDashboard, Users, ClipboardCheck, BookOpen,
   Heart, AlertTriangle, Megaphone, UserCog,
-  LogOut, GraduationCap, ChevronRight, X, PenLine, Baby, ClipboardList, Building2
+  LogOut, GraduationCap, ChevronRight, X, PenLine, Baby, ClipboardList, Building2, CalendarDays
 } from 'lucide-react'
 import clsx from 'clsx'
 import { formatName, nameInitial } from '../../utils/nameHelper'
@@ -38,6 +38,8 @@ const adminNavGroups = [
       { to: '/announcements', icon: Megaphone,      label: 'Announcements'  },
       // The website's facility photos — the public site is the super admin's alone.
       { to: '/facilities',    icon: Building2,      label: 'Facility Gallery', roles: [ROLES.SUPER_ADMIN] },
+      // The website's admissions calendar, and the school year it names.
+      { to: '/key-dates',     icon: CalendarDays,   label: 'Key Dates', roles: [ROLES.SUPER_ADMIN] },
     ]
   },
   {

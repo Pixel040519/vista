@@ -5,6 +5,7 @@ import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import PageHeader from '../components/PageHeader';
 import { Label, Icon, IconTile, SECTION, HEADING } from '../components/ui';
+import EnrollCta from '../components/EnrollCta';
 
 const academicLevels = [
   {
@@ -152,25 +153,8 @@ const Programs = () => {
           </div>
         </section>
 
-        {/* CTA */}
-        <section className="bg-yellow-400 dark:bg-yellow-500">
-          <div className="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-12 sm:px-12 lg:flex-row lg:items-center lg:justify-between lg:px-24">
-            <div>
-              <h2 className="mb-2 text-2xl font-bold leading-tight tracking-tight text-[#002855] sm:text-3xl">
-                Ready to enroll for SY 2026&ndash;2027?
-              </h2>
-              <p className="leading-snug text-[#3F3413]">
-                Regular enrollment opens 8 June 2026. Early-bird rates end 15 May.
-              </p>
-            </div>
-            <button
-              onClick={() => navigate('/admissions')}
-              className="w-max shrink-0 rounded-full bg-[#002855] px-8 py-3.5 font-semibold text-white transition-colors hover:bg-[#003a7a]"
-            >
-              See admission requirements
-            </button>
-          </div>
-        </section>
+        {/* CTA — shared with Home, which carried a drifting copy of it. */}
+        <EnrollCta primaryLabel="See admission requirements" showTour={false} />
       </main>
 
       <Footer />

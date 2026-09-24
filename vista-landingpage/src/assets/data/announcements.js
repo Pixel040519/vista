@@ -10,16 +10,20 @@ export const FACEBOOK_PAGE = 'https://www.facebook.com/NRYS1939';
 
 const DATE = new Intl.DateTimeFormat('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
 
-// A row from the API → what the Announcements page and NewsWidget render.
+// A row from the API → what the Announcements page and NewsCarousel render.
+// Text is trimmed: it is rendered with whitespace-pre-line, so a trailing Enter
+// typed in the dashboard would otherwise show as blank lines at the end of a post.
 export function announcementFromApi(row) {
+  const content = (row.content || '').trim();
+  const summary = row.summary ? row.summary.trim() : row.summary;
   return {
     id: row.id,
     date: row.published_at ? DATE.format(new Date(row.published_at)) : '',
     category: row.category,
     title: row.title,
-    excerpt: row.summary || row.content,
-    content: row.content,
-    summary: row.summary,
+    excerpt: summary || content,
+    content,
+    summary,
     image: row.image_url,
     isPinned: row.is_pinned,
   };

@@ -3,30 +3,17 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
-import { Label, CheckIcon } from '../components/ui';
+import { Label } from '../components/ui';
 import { VISTA_LOGIN_URL } from '../../config';
-import { useFacilities } from '../lib/publicContent';
+import { useFacilities, useKeyDates } from '../lib/publicContent';
+import NewsCarousel from '../components/NewsCarousel';
+import EnrollCta from '../components/EnrollCta';
 
 const quickFacts = [
   { label: 'Founded', value: '1939' },
   { label: 'Levels offered', value: 'Pre-Nursery to Grade 12' },
   { label: 'Languages', value: 'English · Filipino · 中文' },
   { label: 'Campus', value: 'Grace Park West, Caloocan' },
-];
-
-const requirements = [
-  'Report card from the previous school year (Form 138)',
-  'PSA birth certificate, original and photocopy',
-  'Two 2×2 photographs',
-  'Certificate of good moral character, for transferees',
-];
-
-const keyDates = [
-  { when: '15 May', what: 'Early-bird enrollment ends', kind: 'Admissions' },
-  { when: '8 June', what: 'Regular enrollment opens', kind: 'Admissions' },
-  { when: '20 July', what: "Parents' orientation", kind: 'Event' },
-  { when: '3 August', what: 'First day of classes', kind: 'Academic' },
-  { when: '28 August', what: 'Buwan ng Wika celebration', kind: 'Event' },
 ];
 
 const academicLevels = [
@@ -96,6 +83,10 @@ const Home = () => {
   // VISTA's gallery when it answers, the bundled one until then (or instead).
   const facilities = useFacilities();
 
+  // The school year the site names, for the hero pill. Comes from VISTA's
+  // published key dates, and is simply absent when nothing is published.
+  const keyDates = useKeyDates();
+
   // { room, photo } while the facility viewer is open, null when closed.
   const [viewer, setViewer] = useState(null);
   const activeRoom = viewer ? facilities[viewer.room] : null;
@@ -152,10 +143,15 @@ const Home = () => {
             {/* No second column any more — the copy just runs to a comfortable measure
                 and the rest of the frame stays open onto the photo. */}
             <div className="max-w-4xl">
-              <div className="mb-6 inline-flex items-center gap-2.5 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 backdrop-blur-sm">
-                <span className="block h-2 w-2 rounded-full bg-emerald-400" />
-                <Label className="text-white">Enrollment open · SY 2026–2027</Label>
-              </div>
+              {/* The one element on the site that asserts a STATUS, so it is shown
+                  only while VISTA actually has a published calendar behind it.
+                  Hardcoded, it went on reading "Enrollment open" all year. */}
+              {keyDates.schoolYear && (
+                <div className="mb-6 inline-flex items-center gap-2.5 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 backdrop-blur-sm">
+                  <span className="block h-2 w-2 rounded-full bg-emerald-400" />
+                  <Label className="text-white">Enrolling for SY {keyDates.schoolYear.label}</Label>
+                </div>
+              )}
 
               {/* The motto is the school's own, from the seal. */}
               <h1 className="mb-5 text-4xl font-bold leading-[1.08] tracking-tight text-white sm:text-5xl lg:text-[55px]">
@@ -208,49 +204,9 @@ const Home = () => {
           </div>
         </section>
 
-        {/* ADMISSIONS */}
-        <section className="bg-[#001f3f] text-white dark:bg-[#001024]">
-          <div className="mx-auto grid max-w-7xl gap-12 px-6 py-16 sm:px-12 lg:grid-cols-[1fr_1.25fr] lg:gap-20 lg:px-24">
-            <div>
-              <Label className="mb-4 block text-yellow-400">Admissions</Label>
-              <h2 className="mb-4 text-3xl font-bold leading-tight tracking-tight">
-                What to bring, and when
-              </h2>
-              <p className="mb-7 leading-relaxed text-slate-300">
-                The registrar&apos;s office is open on weekdays. Walk-ins are welcome; an
-                appointment is not required.
-              </p>
-              <ul className="selectable flex list-none flex-col gap-3 p-0">
-                {requirements.map((req) => (
-                  <li key={req} className="flex items-start gap-3">
-                    <CheckIcon className="mt-0.5 shrink-0 text-yellow-400" />
-                    <span className="leading-snug text-slate-200">{req}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div>
-              <Label className="mb-4 block text-slate-400">
-                Key dates — School Year 2026–2027
-              </Label>
-              <div className="flex flex-col">
-                {keyDates.map((d) => (
-                  <div
-                    key={d.what}
-                    className="grid grid-cols-[80px_1fr] items-center gap-x-5 gap-y-1 border-b border-white/10 py-4 sm:grid-cols-[92px_1fr_auto]"
-                  >
-                    <Label className="text-yellow-400">{d.when}</Label>
-                    <span className="font-medium text-white">{d.what}</span>
-                    <Label className="col-start-2 text-slate-400 sm:col-start-3 sm:text-right">
-                      {d.kind}
-                    </Label>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
+        {/* NEWS & ANNOUNCEMENTS — requirements and the key-dates timeline live on
+            /admissions; Home still names the next key date in the EnrollCta band. */}
+        <NewsCarousel />
 
         {/* PROGRAMS */}
         <section className="bg-white dark:bg-[#00152e]">
@@ -423,33 +379,8 @@ const Home = () => {
           </div>
         </section>
 
-        {/* CTA */}
-        <section className="bg-yellow-400 dark:bg-yellow-500">
-          <div className="mx-auto flex max-w-7xl flex-col gap-8 px-6 py-12 sm:px-12 lg:flex-row lg:items-center lg:justify-between lg:px-24">
-            <div>
-              <h2 className="mb-2 text-2xl font-bold leading-tight tracking-tight text-[#002855] sm:text-3xl">
-                Ready to enroll for SY 2026–2027?
-              </h2>
-              <p className="leading-snug text-[#3F3413]">
-                Regular enrollment opens 8 June 2026. Early-bird rates end 15 May.
-              </p>
-            </div>
-            <div className="flex shrink-0 flex-col gap-3.5 sm:flex-row sm:items-center">
-              <button
-                onClick={() => navigate('/admissions')}
-                className="rounded-full bg-[#002855] px-8 py-3.5 font-semibold text-white transition-colors hover:bg-[#003a7a]"
-              >
-                Start an application
-              </button>
-              <button
-                onClick={() => navigate('/contact')}
-                className="rounded-full border border-[#002855] px-8 py-3.5 font-semibold text-[#002855] transition-colors hover:bg-[#002855] hover:text-white"
-              >
-                Book a campus tour
-              </button>
-            </div>
-          </div>
-        </section>
+        {/* CTA — shared with Programs, which carried a drifting copy of it. */}
+        <EnrollCta />
       </main>
 
       <Footer />
