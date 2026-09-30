@@ -28,7 +28,6 @@ const deviceRoutes = require('./routes/device.routes');
 const enrollmentRoutes = require('./routes/enrollment.routes');
 const advisoryRoutes   = require('./routes/advisory.routes');
 const facilityRoutes   = require('./routes/facility.routes');
-const keyDateRoutes    = require('./routes/keyDate.routes');
 const publicRoutes     = require('./routes/public.routes');
 
 const { errorHandler } = require('./middleware/error.middleware');
@@ -102,7 +101,6 @@ app.use('/api/devices', deviceRoutes);       // FCM device-token registry
 app.use('/api/enrollment', enrollmentRoutes); // Admin: per-school-year student enrollment
 app.use('/api/advisory', advisoryRoutes);     // Teacher: read-only view of the section they advise
 app.use('/api/facilities', facilityRoutes);   // Super admin: the website's facility gallery
-app.use('/api/key-dates', keyDateRoutes);     // Super admin: the website's admissions calendar
 app.use('/api/public', publicRoutes);         // NO AUTH: read-only content for the landing page
 
 // ─── 404 Handler ──────────────────────────────────────────────

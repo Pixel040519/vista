@@ -5,9 +5,9 @@ Caloocan City, est. 1939.
 
 React 19 + Vite 8 + Tailwind v4. It is a brochure site: no login and no database of its own.
 It reaches VISTA in two ways — a link to the dashboard's login page, and, when `VITE_API_URL`
-is set, **read-only** requests to `GET /api/public/*` for the three things admins publish from
-VISTA: announcements, the facility gallery and the admissions calendar. Every one of those
-reads fails soft, so the site still renders with the backend down.
+is set, **read-only** requests to `GET /api/public/*` for the two things admins publish from
+VISTA: announcements and the facility gallery. Both reads fail soft, so the site still
+renders with the backend down.
 
 ## Running it
 
@@ -37,7 +37,7 @@ Vite inlines `import.meta.env` at build time, so set both **before** `npm run bu
 production — they cannot be changed in the built output.
 
 Two things that bite locally: without `.env.local` the dev server is silently static, so
-edits made on the dashboard's Facility Gallery, Announcements or Key Dates pages never appear
+edits made on the dashboard's Facility Gallery or Announcements pages never appear
 here and nothing errors. And the API's `ALLOWED_ORIGINS` must include this site's origin.
 
 ## Pages
@@ -47,7 +47,7 @@ here and nothing errors. And the API's `ALLOWED_ORIGINS` must include this site'
 | `/` | Full-screen campus hero, quick facts, **news & announcements carousel** (newest 9; a card opens the post in a modal), programme table, **facilities mosaic** (four rooms at a time, arrows to the rest; a card opens the photo viewer), VISTA portal, enrolment CTA |
 | `/about` | Preface, brief history, vision and mission, the Guiding Principles, school hymn |
 | `/programs` | The four academic levels and the curriculum highlights |
-| `/admissions` | Requirements by student type (accordion), key dates |
+| `/admissions` | Requirements by student type (accordion), when to enroll |
 | `/announcements` | Every public post, six at a time with **Load more announcements**; cards start collapsed and expand in place with Read more / Show less. Links to the Facebook page |
 | `/contact` | Location, phones, emails, Facebook |
 
@@ -59,7 +59,7 @@ Copy comes from the school's own material, chiefly the **Students' Handbook**. T
 Principles (智 Knowledge, 仁 Benevolence, 勇 Courage) and the four-stanza Vision are quoted from
 it verbatim.
 
-**Announcements, the facility gallery and the key dates come from VISTA**, not from this
+**Announcements and the facility gallery come from VISTA**, not from this
 repo. Admins manage them in the dashboard and the site reads them through `/api/public/*`
 (`src/assets/lib/publicContent.js`). What is in `src/assets/data/` is only the mappers and,
 for facilities, a bundled fallback set:
@@ -68,12 +68,10 @@ for facilities, a bundled fallback set:
 |---|---|
 | `announcements.js` | `FACEBOOK_PAGE` + `announcementFromApi()`. **No bundled list** — the placeholder one had invented dates, and a fake notice is worse than none. |
 | `facilities.js` | `bundledFacilities` (the photos the site ships with, used until VISTA answers) + `facilitiesFromApi()`. |
-| `keyDates.js` | `keyDateFromApi()` + `formatKeyDate()`. **No bundled list**, same reasoning as announcements. |
 
-**The school year the site names comes from VISTA too.** It is the year whose key dates are
-published — not the active one and not the upcoming one, because during enrolment season the
-site advertises the year *after* the one currently running. With nothing published the site
-names no year at all and shows the registrar's details in place of the calendar.
+The site names **no school year** and publishes no enrollment dates. The "Ready to enroll?"
+band and Admissions' "When to enroll" section point to the registrar instead, which is true
+all year.
 
 There is deliberately no tuition or fee information on the site, and no claim about grading
 policy. The admissions requirements are the standard Philippine set and should be confirmed
@@ -105,17 +103,14 @@ src/
                  NewsCarousel (Home's news band + its modal),
                  FacilityMosaic (Home's facilities section: four rooms per page),
                  AnnouncementMedia + announcementIcons (a post's picture, or its category tile),
-                 AdmissionsTimeline (the key-dates block, on Admissions), EnrollCta (the yellow band)
-    data/        announcements.js, facilities.js, keyDates.js  — API mappers
+                 EnrollCta (the yellow "Ready to enroll" band)
+    data/        announcements.js, facilities.js  — API mappers
     lib/         publicContent.js  — the fail-soft reads and their hooks
     pages/       Home, About, Programs, Admissions, Announcements, Contact
 ```
 
-`AdmissionsTimeline` and `EnrollCta` are each the **only** renderer of their block. Home and
-Admissions used to hold separate copies of the key-dates list and had already drifted (five
-rows against four), and the yellow CTA band was duplicated between Home and Programs with the
-school year hardcoded in two different spellings. Home no longer shows the timeline at all —
-its band became the news carousel — but still names the next key date in the yellow band.
+`EnrollCta` is the **only** renderer of the yellow CTA band. It was duplicated between Home
+and Programs with the school year hardcoded in two different spellings; it now names no year.
 
 `AnnouncementMedia` is shared the same way: the Home carousel, its modal and the
 Announcements page all draw a post's picture — or, without one, a navy tile with its

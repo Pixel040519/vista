@@ -1110,57 +1110,18 @@ re-encoded before any row is written, so one bad file refuses the batch),
 `DELETE /photos/:photoId`. `scripts/seedFacilities.js` imports the landing page's bundled
 gallery once (idempotent, skips existing slugs).
 
-## Key dates (`keyDate.routes.js` — `/api/key-dates`)
-
-`authenticate` + `authorizeSuperAdmin` on every route, like the facility gallery. The
-admissions calendar the website shows: `GET /` (every year's rows, joined to
-`school_years` for the label — a school keeps a handful per year, so the page groups them
-client-side rather than paying a request per year), `POST /`, `PUT /:id`, `DELETE /:id`.
-Every mutation answers with the reloaded list plus a past-tense `message`.
-
-Four things worth knowing:
-
-- **`starts_on`/`ends_on` are cast to text in SQL** (`to_char(..., 'YYYY-MM-DD')`). node-pg
-  hands a `DATE` back as a JS `Date` at **local** midnight, which `JSON.stringify` then
-  writes in UTC — on a UTC+8 machine `2026-06-08` goes out as `2026-06-07T16:00:00.000Z`
-  and the website prints the 7th. Both clients format the string, never a `Date`.
-- **The PUT schema is written out, not forked from the POST one.** Joi's `fork()` keeps the
-  `.default()`s, so a PUT carrying nothing but a label would reset `kind` and silently
-  **unpublish** the row; and `Joi.ref('starts_on')` cannot resolve when `starts_on` was not
-  resubmitted, which turns an edit of the end date alone into an error about a ref. The
-  range is therefore checked by hand after merging the submitted fields over the stored ones
-  — without that, moving `starts_on` past a stored `ends_on` reaches the CHECK as a 500.
-- **A date need not fall inside its school year.** Enrolment opens months before the year
-  starts, so there is no range check against `school_years.start_date`.
-- **Publishing a past date is allowed**, deliberately. The dashboard marks such a row
-  **Past** and says it will not appear, which is more use than a refusal that would also
-  block correcting a typo.
-
 ## Public content (`public.routes.js` — `/api/public`, NO AUTH)
 
 **The only unauthenticated reads in the API.** `GET /announcements?limit=&offset=` (≤50; public,
 live, active only; answers `{ announcements, total }` — `total` counts every live public post, so
 the landing page's Announcements page can page with "Load more" and say "Showing 6 of 23", and
-`a.id` ends the sort so pages are deterministic when two posts share a `published_at`),
-`GET /facilities` (active facilities with at least one photo) and
-`GET /key-dates`. Kept narrow
+`a.id` ends the sort so pages are deterministic when two posts share a `published_at`)
+and `GET /facilities` (active facilities with at least one photo). Kept narrow
 on purpose: every column is listed by name — never `SELECT *`, which would publish whatever
 the next migration adds — `posted_by` and anything about a user or learner never appear,
 `publicReadPerIp` (300 / 15 min) runs in every environment, and responses carry
 `Cache-Control: public, max-age=60`. The landing page's origin must be in `ALLOWED_ORIGINS`
 (unset = any origin, which is only acceptable in development).
-
-**`GET /key-dates` also answers "which school year does the website name", and that is the
-subtle part.** It is not the active year and not the upcoming one: while SY 2025-2026 runs,
-the site advertises enrolment *into* SY 2026-2027, and `is_upcoming` gets set months early
-merely to plan curriculum. So the published data decides. A CTE takes the earliest row with
-`is_public AND COALESCE(ends_on, starts_on) >= CURRENT_DATE`, and **only that row's school
-year** contributes — which is what stops two years' dates mixing into one list during the
-handover, and why the response carries `school_year` beside `dates`. `COALESCE` rather than
-`starts_on` keeps a period that has already begun on the site while it runs, and means such
-a period outranks a later single date, taking the site with it. With nothing published it
-answers `{ school_year: null, dates: [] }`, and the landing page then names no year at all.
-The dashboard's Key Dates banner mirrors this rule client-side; keep the two in step.
 
 ## Students (`crud.routes.js`, `student.routes.js`)
 

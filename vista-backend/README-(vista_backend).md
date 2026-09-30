@@ -118,14 +118,13 @@ are invitations" in the root `CLAUDE.md` before changing any of them.
 
 ### Public content Endpoints
 
-What the school's landing page shows, managed from the dashboard. All three writer routers
-are **`super_admin` only** — the website speaks for the whole school, so one office owns it.
+What the school's landing page shows, managed from the dashboard. Publishing to the website
+is **`super_admin` only** — the website speaks for the whole school, so one office owns it.
 
 | Method | Endpoint | Description | Role |
 |--------|----------|-------------|------|
 | GET/POST/PUT/DELETE | /api/announcements | Notices for staff, parents and — with `is_public` — the website | Read: all; write: admin (`is_public`: super admin) |
 | GET/POST/PUT/DELETE | /api/facilities | The facility gallery and its photos | Super admin |
-| GET/POST/PUT/DELETE | /api/key-dates | The website's admissions calendar, per school year | Super admin |
 
 ### Public Endpoints (NO AUTH)
 
@@ -138,13 +137,6 @@ page's origin must appear in `ALLOWED_ORIGINS`.
 |--------|----------|-------------|
 | GET | /api/public/announcements?limit=&offset= | Public, live, non-expired posts (≤50 per page), pinned first, as `{ announcements, total }` — `total` drives the website's "Load more". Never returns `posted_by`. |
 | GET | /api/public/facilities | Active facilities with at least one photo, photos in order |
-| GET | /api/public/key-dates | Upcoming published key dates, **plus the school year the website should name** |
-
-The last one carries a rule worth knowing: the advertised school year is *not* the active or
-upcoming one — during enrolment season the site advertises the year *after* the one running.
-It is resolved from the data instead: the earliest published date that has not passed wins,
-and only its school year's rows come back. With nothing published it answers
-`{ school_year: null, dates: [] }` and the site names no year at all.
 
 ### AI Endpoints (via Node.js proxy → FastAPI)
 | Method | Endpoint | Description |

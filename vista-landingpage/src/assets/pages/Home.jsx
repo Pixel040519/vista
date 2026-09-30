@@ -5,7 +5,7 @@ import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import { Label } from '../components/ui';
 import { VISTA_LOGIN_URL } from '../../config';
-import { useFacilities, useKeyDates } from '../lib/publicContent';
+import { useFacilities } from '../lib/publicContent';
 import NewsCarousel from '../components/NewsCarousel';
 import FacilityMosaic from '../components/FacilityMosaic';
 import EnrollCta from '../components/EnrollCta';
@@ -80,10 +80,6 @@ const Home = () => {
   // VISTA's gallery when it answers, the bundled one until then (or instead).
   const facilities = useFacilities();
 
-  // The school year the site names, for the hero pill. Comes from VISTA's
-  // published key dates, and is simply absent when nothing is published.
-  const keyDates = useKeyDates();
-
   // { room, photo } while the facility viewer is open, null when closed.
   const [viewer, setViewer] = useState(null);
   const activeRoom = viewer ? facilities[viewer.room] : null;
@@ -140,16 +136,6 @@ const Home = () => {
             {/* No second column any more — the copy just runs to a comfortable measure
                 and the rest of the frame stays open onto the photo. */}
             <div className="max-w-4xl">
-              {/* The one element on the site that asserts a STATUS, so it is shown
-                  only while VISTA actually has a published calendar behind it.
-                  Hardcoded, it went on reading "Enrollment open" all year. */}
-              {keyDates.schoolYear && (
-                <div className="mb-6 inline-flex items-center gap-2.5 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 backdrop-blur-sm">
-                  <span className="block h-2 w-2 rounded-full bg-emerald-400" />
-                  <Label className="text-white">Enrolling for SY {keyDates.schoolYear.label}</Label>
-                </div>
-              )}
-
               {/* The motto is the school's own, from the seal. */}
               <h1 className="mb-5 text-4xl font-bold leading-[1.08] tracking-tight text-white sm:text-5xl lg:text-[55px]">
                 Knowledge, benevolence, courage.
@@ -201,8 +187,7 @@ const Home = () => {
           </div>
         </section>
 
-        {/* NEWS & ANNOUNCEMENTS — requirements and the key-dates timeline live on
-            /admissions; Home still names the next key date in the EnrollCta band. */}
+        {/* NEWS & ANNOUNCEMENTS — the admission requirements live on /admissions. */}
         <NewsCarousel />
 
         {/* PROGRAMS */}

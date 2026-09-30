@@ -35,7 +35,6 @@ npm run dev
 | `/risk` | AI risk overview | Admin, Teacher |
 | `/announcements` | Announcements — staff, parents and the public website | All (post: admin) |
 | `/facilities` | Facility Gallery — the photos the website shows | Super admin |
-| `/key-dates` | Key Dates — the website's admissions calendar, and the school year it names | Super admin |
 | `/accounts` | Teacher, admin and parent accounts | Admin |
 | `/curriculum` | School years, subjects, sections, advisers, assessment mode | Admin |
 | `/enrollment` | One school year's roster | Admin |
@@ -70,7 +69,6 @@ src/
     ├── RiskOverview.jsx    ← Risk distribution
     ├── Announcements.jsx
     ├── FacilityGallery.jsx ← the website's facility photos (super admin)
-    ├── KeyDates.jsx        ← the website's admissions calendar (super admin)
     ├── Enrollment.jsx      ← one school year's roster
     ├── PromotionWizard.jsx ← Year-End Promotion
     ├── CurriculumManagement.jsx
@@ -81,10 +79,9 @@ src/
     └── Profile.jsx
 ```
 
-Three pages write what the **public website** shows, and all three are super-admin only:
+Two pages write what the **public website** shows, and both are super-admin only:
 Announcements (the "Also show on the public website" toggle — a public post appears in the
-site's Home news carousel and on its Announcements page), Facility Gallery, and Key
-Dates — whose published dates also decide which school year the site names.
+site's Home news carousel and on its Announcements page) and Facility Gallery.
 
 ---
 

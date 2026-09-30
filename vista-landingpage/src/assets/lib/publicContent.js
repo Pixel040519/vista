@@ -8,7 +8,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { API_URL } from '../../config';
 import { announcementFromApi } from '../data/announcements';
 import { bundledFacilities, facilitiesFromApi } from '../data/facilities';
-import { keyDateFromApi } from '../data/keyDates';
 
 const TIMEOUT_MS = 4000;
 
@@ -174,48 +173,4 @@ export function useFacilities() {
     };
   }, []);
   return rooms;
-}
-
-/**
- * The admissions calendar, and the school year the site should name.
- *
- * { status, schoolYear, dates }
- *   status:     'loading' | 'ready' | 'unavailable' — as useAnnouncements.
- *   schoolYear: { label, start_date, end_date } or null.
- *   dates:      upcoming published dates of that year, soonest first.
- *
- * `schoolYear` is null whenever the school has nothing published (or the API is
- * unreachable), and that is the signal to drop the year from the hero pill and
- * both CTAs rather than name one that may be wrong. The API decides which year
- * it is — see routes/public.routes.js — precisely so this page does not have to
- * guess between the active year and an upcoming one.
- *
- * A date that has passed never arrives, so nothing here has to age it out.
- */
-export function useKeyDates() {
-  const [state, setState] = useState({
-    status: API_URL ? 'loading' : 'unavailable',
-    schoolYear: null,
-    dates: [],
-  });
-  useEffect(() => {
-    if (!API_URL) return undefined;
-    let live = true;
-    getPublic('/key-dates').then((data) => {
-      if (!live) return;
-      setState(
-        data
-          ? {
-              status: 'ready',
-              schoolYear: data.school_year || null,
-              dates: (data.dates || []).map(keyDateFromApi),
-            }
-          : { status: 'unavailable', schoolYear: null, dates: [] }
-      );
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
-  return state;
 }

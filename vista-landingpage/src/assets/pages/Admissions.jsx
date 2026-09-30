@@ -1,12 +1,10 @@
 // src/pages/Admissions.jsx
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import PageHeader from '../components/PageHeader';
 import { Label, CheckIcon, Icon, SECTION, HEADING } from '../components/ui';
-import AdmissionsTimeline from '../components/AdmissionsTimeline';
-import { useKeyDates } from '../lib/publicContent';
 
 const PIC_ID = '6 copies of 2" x 2" recent colored ID picture';
 const PSA = 'Photocopy of PSA Birth Certificate (Filipino students)';
@@ -86,8 +84,6 @@ const sections = [
 
 const Admissions = () => {
   const navigate = useNavigate();
-  // The calendar and the school year both come from VISTA; see AdmissionsTimeline.
-  const keyDates = useKeyDates();
   // Single-open accordion, starting with everything closed: opening a section
   // closes whichever one was open, and clicking an open section closes it.
   const [openId, setOpenId] = useState('');
@@ -236,27 +232,22 @@ const Admissions = () => {
           </div>
         </section>
 
-        {/* KEY DATES — rendered by AdmissionsTimeline, which Home uses too. The
-            two pages each held their own copy of this list and had drifted. */}
+        {/* WHEN TO ENROLL — the site publishes no schedule, so this says what is
+            true all year and points at the people who know the current dates. */}
         <section className="border-y border-slate-200 bg-[#F0F4F8] dark:border-white/10 dark:bg-[#001f44]">
           <div className={SECTION}>
-            <Label className="mb-3 block text-slate-500 dark:text-slate-400">
-              {keyDates.schoolYear
-                ? `Key dates — School Year ${keyDates.schoolYear.label}`
-                : 'Key dates'}
-            </Label>
+            <Label className="mb-3 block text-slate-500 dark:text-slate-400">Enrollment</Label>
             <h2 className={`${HEADING} mb-8`}>When to enroll</h2>
-            <AdmissionsTimeline
-              variant="light"
-              showEyebrow={false}
-              schoolYear={keyDates.schoolYear}
-              dates={keyDates.dates}
-            />
-            {/* True whether or not there is a calendar above it, so it always shows. */}
-            <p className="mt-6 text-slate-600 dark:text-slate-300">
+            <p className="mb-5 leading-relaxed text-slate-600 dark:text-slate-300">
               The registrar&apos;s office is open on weekdays. Walk-ins are welcome; an
               appointment is not required.
             </p>
+            <Link
+              to="/contact"
+              className="font-semibold text-[#002855] underline-offset-4 hover:text-[#003a7a] hover:underline dark:text-yellow-400 dark:hover:text-yellow-300"
+            >
+              Contact the registrar &rarr;
+            </Link>
           </div>
         </section>
       </main>

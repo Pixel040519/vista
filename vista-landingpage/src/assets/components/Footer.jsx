@@ -14,7 +14,6 @@ const schoolLinks = [
 
 const admissionLinks = [
   { name: 'Requirements', path: '/admissions' },
-  { name: 'Key dates', path: '/admissions' },
   { name: 'Campus tour', path: '/contact' },
 ];
 

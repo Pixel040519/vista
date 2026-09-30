@@ -48,7 +48,7 @@ School logo `src/assets/NRYS_logo.png` imported as `nrysLogo`. Used in the Sideb
 
 Two parallel `navGroups` arrays — `adminNavGroups` and `teacherNavGroups` — selected via `user?.role === ROLES.TEACHER ? teacherNavGroups : adminNavGroups`. Per-item `roles` filter still runs on top so cross-role items keep working. Groups with no visible items auto-hide via `visibleItems.length === 0`.
 
-- **Admin** (all three admin roles, 4 groups): Overview · Student Management (Students, Grades, ECE Competency, Behavior) · Tools (Risk Overview, Announcements, Facility Gallery and Key Dates — both super_admin only) · Administration (Accounts, Curriculum). ECE Competency is hidden from `admin_elem` via per-item `roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE]`; **Grades** is hidden from `admin_ece` via `roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM]` (the mirror — ECE tracks learning via ECE Competency, not the grades table). `/grades` route in `App.jsx` is also wrapped in a `PrivateRoute` excluding `admin_ece`. Lists within each page (Students, Risk Overview, etc.) are server-filtered by the caller's `gradeScopeForRole`, so scoped admins never see out-of-scope rows.
+- **Admin** (all three admin roles, 4 groups): Overview · Student Management (Students, Grades, ECE Competency, Behavior) · Tools (Risk Overview, Announcements, Facility Gallery — super_admin only) · Administration (Accounts, Curriculum). ECE Competency is hidden from `admin_elem` via per-item `roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE]`; **Grades** is hidden from `admin_ece` via `roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM]` (the mirror — ECE tracks learning via ECE Competency, not the grades table). `/grades` route in `App.jsx` is also wrapped in a `PrivateRoute` excluding `admin_ece`. Lists within each page (Students, Risk Overview, etc.) are server-filtered by the caller's `gradeScopeForRole`, so scoped admins never see out-of-scope rows.
 - **Teacher** (4 groups): Overview (Dashboard) · Today's Work (Attendance, Score Entry, ECE Competency — promoted to the top group so daily surfaces are one click away) · My Students (Students, Behavior, Risk Overview) · Communication (Announcements). Grades is admin-only (teachers view/enter grades via Score Entry). ECE Competency is safe for all teachers — the page renders an empty state if no Kinder assignments.
 
 **Super-admin-only gates** (not enforced at sidebar level, gated inside the page): the Curriculum page hides "Create New School Year" inside `SYSelector` and the SY edit pencil for non-super-admins, and the Subjects + Sections tabs only render grade-level cards for grades in the caller's `gradeScope` (super_admin sees all seven; `admin_ece` sees Kinder; `admin_elem` sees Grade 1–6). The Accounts page shows a `Teachers`/`Admins` tab bar only to super_admin (scoped admins see the teacher table directly with no tabs); the Admins tab mirrors the Teachers tab — search-by-name/email + All/Active/Inactive pill filter + `accountApi.listAdmins({ search, is_active })` with a 300 ms debounce. Each inactive (non-super_admin) admin row shows a Reactivate (`ShieldCheck`) button that PUTs `is_active: true`; the Deactivate (`Trash2`) button hides while the row is inactive so the two actions don't overlap.
@@ -1394,36 +1394,6 @@ grid (upload up to 10 with a required consent checkbox, caption inline, move ear
 **make cover** — the first photo is the cover, delete). Every mutation returns the updated
 facility, which replaces the cached one. Until any facility exists the website keeps
 showing the photos it was built with.
-
-### Key Dates (`pages/KeyDates.jsx`)
-`/key-dates`, `PrivateRoute roles={[ROLES.SUPER_ADMIN]}`, sidebar item under Tools beside
-Facility Gallery. The admissions calendar the public website shows: a `SchoolYearPicker`
-(`canManage={false}`) over a table of that year's dates — **Date · What happens · Kind ·
-Website · actions** — with an add/edit `Modal` (label, date, optional end date, kind,
-"Show on the school website"). `keyDateApi` is plain JSON; every mutation returns the whole
-refreshed list, which replaces state.
-
-**The banner above the table is the point of the page, not decoration.** "Show on the school
-website" does two jobs — it puts the row on the site, *and* the year owning the soonest
-upcoming published date is the year the site **names**, in its hero, both "Ready to enroll"
-banners and the key-dates heading. That rule is invisible otherwise, so the banner states it
-("The website is advertising SY 2026-2027") or says plainly that nothing is published and
-the site therefore names no year. `advertisedYearId()` mirrors the API's rule exactly; if one
-changes, change both or the banner starts lying.
-
-**It opens on the advertised year**, not on the first upcoming one. `GET /school-years`
-returns label DESC, so taking the first `is_upcoming` row lands on the *furthest-away* year
-— the page then showed an empty SY 2027-2028 while the banner talked about SY 2026-2027,
-which reads as a contradiction. The fallback sorts upcoming years nearest-first, and the
-banner carries a "Show SY …" jump whenever the advertised year is not the one on screen.
-
-Two row chips, and a row can carry both: **On website** (brand) and **Past** (grey, the last
-day has gone, tooltip saying the website no longer shows it). A row that is neither reads
-"Not shown". Past dates are kept and listed — only the *public* read filters them — so a
-typo in an old date is still correctable.
-
-Dates arrive as plain `YYYY-MM-DD` strings and are formatted from their parts, never via
-`new Date(iso)`, which parses as UTC midnight and renders a day early west of Greenwich.
 
 ### Profile (`pages/Profile.jsx`)
 Any authenticated role at `/profile`. Account summary card (avatar, full_name, role pill, email, phone, "Member since"). Editable **Personal Information** form (surname/first_name/middle_name/phone; email is disabled with helper text). **Change Password** form (current + new + confirm with individual show/hide toggles); 401 surfaces inline as "Current password is incorrect" rather than a toast. Teacher-only **My Teaching Assignments** read-only card rendered from `activeAssignments`. Calls `updateUser(patch)` from AuthContext after save so the sidebar updates immediately.
