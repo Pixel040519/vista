@@ -17,7 +17,7 @@ import { useNavigate } from 'react-router-dom';
  * rather than a reason to keep two components.
  */
 export default function EnrollCta({
-  primaryLabel = 'Start an application',
+  primaryLabel = 'How to enroll',
   showTour = true,
 }) {
   const navigate = useNavigate();

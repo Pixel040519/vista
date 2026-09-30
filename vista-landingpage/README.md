@@ -111,6 +111,8 @@ src/
 
 `EnrollCta` is the **only** renderer of the yellow CTA band. It was duplicated between Home
 and Programs with the school year hardcoded in two different spellings; it now names no year.
+Its button, like the one in Home's hero, reads "How to enroll" ("See admission requirements"
+on Programs) — the site has no online application, so no label promises one.
 
 `AnnouncementMedia` is shared the same way: the Home carousel, its modal and the
 Announcements page all draw a post's picture — or, without one, a navy tile with its

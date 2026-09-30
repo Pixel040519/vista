@@ -154,7 +154,7 @@ const Home = () => {
                   onClick={() => navigate('/admissions')}
                   className="rounded-full bg-yellow-400 px-8 py-3.5 font-semibold text-[#002855] transition-colors hover:bg-yellow-300"
                 >
-                  Start an application
+                  How to enroll
                 </button>
                 <button
                   onClick={() => navigate('/programs')}

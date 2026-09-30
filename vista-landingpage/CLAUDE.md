@@ -78,6 +78,13 @@ band is that same sentence with a link to `/contact`. Do not hardcode a year or 
 in — hardcoded, the pill read "Enrollment open" all year, and a date with no year beside it
 never *looked* stale, it just quietly became wrong.
 
+**The buttons that lead to Admissions promise information, not a form.** Home's hero and the
+band on Home read "How to enroll"; the band on Programs reads "See admission requirements"
+(`primaryLabel`). They used to read "Start an application", which sent a visitor expecting an
+online form to a page whose first block says it is for information only and that requirements
+are submitted at the school office. There is no online application, so no label may imply one —
+"Apply now" and "Enroll now" included.
+
 ## News carousel on Home (`components/NewsCarousel.jsx`)
 
 The band under Quick Facts: the newest public announcements (`useAnnouncements(9)`), side by
