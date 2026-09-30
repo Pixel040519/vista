@@ -7,6 +7,7 @@ import { Label } from '../components/ui';
 import { VISTA_LOGIN_URL } from '../../config';
 import { useFacilities, useKeyDates } from '../lib/publicContent';
 import NewsCarousel from '../components/NewsCarousel';
+import FacilityMosaic from '../components/FacilityMosaic';
 import EnrollCta from '../components/EnrollCta';
 
 const quickFacts = [
@@ -72,10 +73,6 @@ const portalRoles = [
     ),
   },
 ];
-
-const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight',
-  'Nine', 'Ten', 'Eleven', 'Twelve'];
-const countWord = (n) => NUMBER_WORDS[n] || String(n);
 
 const Home = () => {
   const navigate = useNavigate();
@@ -267,59 +264,10 @@ const Home = () => {
         </section>
 
         {/* FACILITIES */}
-        <section className="border-y border-slate-200 bg-[#F0F4F8] dark:border-white/10 dark:bg-[#001f44]">
-          <div className="mx-auto max-w-7xl px-6 py-16 sm:px-12 lg:px-24 lg:py-20">
-            <Label className="mb-3 block text-slate-500 dark:text-slate-400">Facilities</Label>
-            <h2 className="mb-3 text-3xl font-bold tracking-tight text-[#001f3f] sm:text-4xl dark:text-white">
-              {countWord(facilities.length)} rooms that do one job each
-            </h2>
-            <p className="mb-9 max-w-2xl text-lg leading-relaxed text-slate-600 dark:text-slate-300">
-              Every learning area on the curriculum has a room built for it — not a classroom with
-              equipment wheeled in. Open any room to walk around it.
-            </p>
-
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-              {facilities.map((room, i) => (
-                <button
-                  key={room.slug}
-                  type="button"
-                  onClick={() => setViewer({ room: i, photo: 0 })}
-                  aria-label={`${room.name} — view ${room.photos.length} photos`}
-                  className="group relative h-40 cursor-pointer overflow-hidden rounded-xl bg-slate-300 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[#002855] focus-visible:ring-offset-2 sm:h-48 dark:focus-visible:ring-yellow-400 dark:focus-visible:ring-offset-[#001f44]"
-                >
-                  <img draggable="false"
-                    src={room.cover}
-                    alt={room.name}
-                    loading="lazy"
-                    decoding="async"
-                    className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                  />
-                  <span className="absolute right-2 top-2 flex items-center gap-1 rounded-full bg-[#001f3f]/70 px-2 py-1 font-mono text-[11px] font-medium text-white backdrop-blur-sm">
-                    <svg
-                      width="13"
-                      height="13"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden="true"
-                    >
-                      <rect x="3" y="3" width="18" height="18" rx="2" />
-                      <circle cx="8.5" cy="8.5" r="1.5" />
-                      <path d="m21 15-5-5L5 21" />
-                    </svg>
-                    {room.photos.length}
-                  </span>
-                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#001f3f]/90 to-transparent px-4 pb-3 pt-7">
-                    <Label className="text-white">{room.name}</Label>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </section>
+        <FacilityMosaic
+          facilities={facilities}
+          onOpen={(room) => setViewer({ room, photo: 0 })}
+        />
 
         {/* VISTA PORTAL */}
         <section className="bg-white dark:bg-[#00152e]">

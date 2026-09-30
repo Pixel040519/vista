@@ -247,15 +247,27 @@ Announcements page and `NewsCarousel` use — they once held separate copies tha
 that used to be inline in `Home.jsx`. It is both the offline fallback and the source the
 backend's one-time `scripts/seedFacilities.js` imports into VISTA, after which admins manage
 the gallery from the dashboard. `bundledFacilities` / `facilitiesFromApi()` produce the one
-shape the page renders: `{ name, slug, cover, photos: [{ src, thumb, caption }] }`. The home
-heading counts the rooms (`countWord`) rather than hardcoding "Eight".
+shape the page renders: `{ name, slug, cover, photos: [{ src, thumb, caption }] }`.
+
+`components/FacilityMosaic.jsx` renders the section on Home: **four rooms at a time** in a
+mosaic (one feature card, one wide, two small), with Previous / More arrows and an
+"01–04 / 08" counter to reach the rest. The gallery is admin-managed, so nothing in it may
+assume a count — the heading names no number, the pager appears only past four rooms, and
+`LAYOUTS` holds one arrangement per page size (1, 2, 3 or 4) so a short last page still
+fills both rows. A card carries its photo count and name, and the feature card its first
+caption; cards are deliberately **not** numbered, and there are no per-room tabs under the
+grid. Turning the page slides the incoming cards in from the side the arrow points to,
+staggered (`.mosaic-next` / `.mosaic-prev` in `style.css`, off under
+`prefers-reduced-motion`); the first page does not animate on load. Covers are the 640px
+thumbnails, which a single-room page stretches past — a known softness.
+Opening a card hands the room's index back to Home, which still owns the photo viewer.
 
 Where a real figure is unknown it is either omitted or bracketed. There is deliberately **no
 tuition or fee schedule** and **no grading-policy claim** anywhere on the site.
 
 ## Known gaps
 
-- The **bundled facility photos** live in `public/facilities/`: `thumbs/` for the grid, `gallery/`
+- The **bundled facility photos** live in `public/facilities/`: `thumbs/` for the mosaic covers, `gallery/`
   for the lightbox (`<slug>-1.jpg … -N.jpg`, with `-1` doubling as the cover), plus
   `quadrangle-wide.jpg` for the hero. Source images are the client's NRYS Facilities set and
   carry **EXIF orientation 6** — they render sideways unless the rotation is applied.

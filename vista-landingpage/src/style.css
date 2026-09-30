@@ -56,3 +56,30 @@ a[href],
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+/* Home's facility mosaic: the incoming page of rooms slides in from the side
+   its arrow points to, each card a beat after the last. */
+@keyframes mosaic-from-right {
+  from {
+    opacity: 0;
+    transform: translateX(2.5rem);
+  }
+}
+@keyframes mosaic-from-left {
+  from {
+    opacity: 0;
+    transform: translateX(-2.5rem);
+  }
+}
+.mosaic-next > * {
+  animation: mosaic-from-right 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.mosaic-prev > * {
+  animation: mosaic-from-left 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mosaic-next > *,
+  .mosaic-prev > * {
+    animation: none;
+  }
+}

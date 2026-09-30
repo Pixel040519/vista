@@ -44,7 +44,7 @@ here and nothing errors. And the API's `ALLOWED_ORIGINS` must include this site'
 
 | Route | Contents |
 |---|---|
-| `/` | Full-screen campus hero, quick facts, **news & announcements carousel** (newest 9; a card opens the post in a modal), programme table, facilities gallery, VISTA portal, enrolment CTA |
+| `/` | Full-screen campus hero, quick facts, **news & announcements carousel** (newest 9; a card opens the post in a modal), programme table, **facilities mosaic** (four rooms at a time, arrows to the rest; a card opens the photo viewer), VISTA portal, enrolment CTA |
 | `/about` | Preface, brief history, vision and mission, the Guiding Principles, school hymn |
 | `/programs` | The four academic levels and the curriculum highlights |
 | `/admissions` | Requirements by student type (accordion), key dates |
@@ -87,7 +87,7 @@ which admins manage the gallery from the dashboard. Taken from the client's NRYS
 set:
 
 - `quadrangle-wide.jpg` — the home hero
-- `thumbs/<slug>.jpg` — facility grid covers
+- `thumbs/<slug>.jpg` — facility mosaic covers
 - `gallery/<slug>-N.jpg` — the lightbox, 3–4 angles per room
 
 Source photographs carry **EXIF orientation 6** and render sideways unless the rotation is
@@ -99,10 +99,11 @@ applied when re-exporting them.
 src/
   App.jsx                    routes + ScrollManager
   config.js                  VITE_VISTA_URL → VISTA_LOGIN_URL, VITE_API_URL → API_URL
-  style.css                  Tailwind, fonts, cursor/selection/drag rules
+  style.css                  Tailwind, fonts, cursor/selection/drag rules, the mosaic's page-turn animation
   assets/
     components/  Navbar, Footer, PageHeader, ui.jsx (shared primitives),
                  NewsCarousel (Home's news band + its modal),
+                 FacilityMosaic (Home's facilities section: four rooms per page),
                  AnnouncementMedia + announcementIcons (a post's picture, or its category tile),
                  AdmissionsTimeline (the key-dates block, on Admissions), EnrollCta (the yellow band)
     data/        announcements.js, facilities.js, keyDates.js  — API mappers
