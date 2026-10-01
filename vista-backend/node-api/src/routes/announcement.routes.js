@@ -42,7 +42,7 @@ const LIVE_SQL = `(a.published_at IS NOT NULL AND a.published_at <= NOW()
 
 const SELECT_SQL = `
   SELECT a.id, a.title, a.content, a.category, a.target_audience,
-         a.is_public, a.is_pinned, a.published_at, a.expires_at, a.notified_at,
+         a.in_vista, a.is_public, a.is_pinned, a.published_at, a.expires_at, a.notified_at,
          a.image_path, a.posted_by, a.created_at, a.updated_at,
          u.full_name AS posted_by_name, ${STATE_SQL} AS state
     FROM announcements a
@@ -68,6 +68,10 @@ const schema = Joi.object({
   content:         Joi.string().trim().min(1).max(20000).required(),
   category:        Joi.string().valid(...CATEGORIES).default('General'),
   target_audience: Joi.string().valid(...AUDIENCES).default('all'),
+  // The two places a post can appear. Independent, but at least one is required
+  // (announcements_reach_check). in_vista defaults on so an older client keeps
+  // posting exactly what it posted before.
+  in_vista:        Joi.boolean().default(true),
   is_public:       Joi.boolean().default(false),
   is_pinned:       Joi.boolean().default(false),
   // draft: not visible anywhere. publish: live now. schedule: live at publish_at.
@@ -83,11 +87,23 @@ function validate(req) {
   const { error, value } = schema.validate(blanksToNull(req.body), { stripUnknown: true });
   if (error) throw new AppError(error.details[0].message, 422);
 
+  if (!value.in_vista && !value.is_public) {
+    throw new AppError('Choose where this announcement should appear: in VISTA, on the public website, or both.', 422);
+  }
+  // This also covers a website-only post, which is necessarily public.
   if (value.is_public && !isSuperAdmin(req.user.role)) {
     throw new AppError('Only the super admin can publish to the public website.', 403);
   }
-  if (value.is_public && !PARENT_AUDIENCES.includes(value.target_audience)) {
-    throw new AppError('A post for staff only cannot be shown on the public website. Choose "Everyone" or "Parents".', 422);
+  if (value.in_vista) {
+    if (value.is_public && !PARENT_AUDIENCES.includes(value.target_audience)) {
+      throw new AppError('A post for staff only cannot be shown on the public website. Choose "Everyone" or "Parents".', 422);
+    }
+  } else {
+    // Not in VISTA: the audience is ignored and nobody inside VISTA is told.
+    // Keep a parent-reaching audience so the public CHECK holds and switching
+    // VISTA back on later restores what it was.
+    if (!PARENT_AUDIENCES.includes(value.target_audience)) value.target_audience = 'all';
+    value.notify_parents = false;
   }
   if (value.status === 'schedule') {
     if (!value.publish_at) throw new AppError('Choose when the announcement should go live.', 422);
@@ -150,6 +166,8 @@ async function loadRow(id, db = { query }) {
  */
 async function notifyParents(client, row) {
   if (row.notified_at) return [];
+  // A website-only post is not in the parent app, so a notification would open nothing.
+  if (!row.in_vista) return [];
   if (!PARENT_AUDIENCES.includes(row.target_audience) || row.state !== 'published') return [];
 
   const body = previewOf(row.content);
@@ -178,6 +196,14 @@ function pushAfterCommit(recipients, row) {
 //   Admins manage from this list, so they see every live post plus drafts and
 //   scheduled ones — their own, or everyone's for the super admin. Teachers and
 //   parents see only what is live for their audience.
+//
+//   Website-only posts (in_vista = FALSE): the super admin gets all of them —
+//   the website is theirs. Scoped admins get the *live* ones, read-only, for
+//   their Public Website tab: anyone on the internet can already read those, and
+//   an admin who cannot see what the website says gets asked about it blind and
+//   re-posts it in VISTA. The super admin's drafts and scheduled website posts
+//   stay theirs. For teachers and parents, the parent app included, a post that
+//   is not in VISTA does not exist.
 router.get('/', async (req, res, next) => {
   try {
     const params = [audiencesForRole(req.user.role)];
@@ -186,9 +212,10 @@ router.get('/', async (req, res, next) => {
       visibility = 'TRUE';
     } else if (isAnyAdmin(req.user.role)) {
       params.push(req.user.id);
-      visibility = `(${LIVE_SQL} OR a.posted_by = $2)`;
+      visibility = `((a.in_vista = TRUE AND (${LIVE_SQL} OR a.posted_by = $2))
+                     OR (a.is_public = TRUE AND ${LIVE_SQL}))`;
     } else {
-      visibility = LIVE_SQL;
+      visibility = `a.in_vista = TRUE AND ${LIVE_SQL}`;
     }
 
     const result = await query(
@@ -211,12 +238,12 @@ router.post('/', authorizeAnyAdmin, uploadAnnouncementImage, async (req, res, ne
     const { row, recipients } = await withTransaction(async (client) => {
       const ins = await client.query(
         `INSERT INTO announcements
-           (title, content, category, target_audience, is_public, is_pinned,
+           (title, content, category, target_audience, in_vista, is_public, is_pinned,
             published_at, expires_at, image_path, posted_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
         [value.title, value.content, value.category, value.target_audience,
-         value.is_public, value.is_pinned, resolvePublishedAt(value, null), value.expires_at,
-         image?.image_path || null, req.user.id]
+         value.in_vista, value.is_public, value.is_pinned, resolvePublishedAt(value, null),
+         value.expires_at, image?.image_path || null, req.user.id]
       );
       let row = await loadRow(ins.rows[0].id, client);
       const recipients = value.notify_parents ? await notifyParents(client, row) : [];
@@ -252,11 +279,11 @@ router.put('/:id', authorizeAnyAdmin, uploadAnnouncementImage, async (req, res, 
     const { row, recipients } = await withTransaction(async (client) => {
       await client.query(
         `UPDATE announcements
-            SET title=$1, content=$2, category=$3, target_audience=$4,
-                is_public=$5, is_pinned=$6, published_at=$7, expires_at=$8,
-                image_path=$9, updated_at=NOW(), updated_by=$10
-          WHERE id=$11`,
-        [value.title, value.content, value.category, value.target_audience,
+            SET title=$1, content=$2, category=$3, target_audience=$4, in_vista=$5,
+                is_public=$6, is_pinned=$7, published_at=$8, expires_at=$9,
+                image_path=$10, updated_at=NOW(), updated_by=$11
+          WHERE id=$12`,
+        [value.title, value.content, value.category, value.target_audience, value.in_vista,
          value.is_public, value.is_pinned, resolvePublishedAt(value, existing), value.expires_at,
          imagePath, req.user.id, existing.id]
       );
@@ -294,10 +321,15 @@ router.delete('/:id', authorizeAnyAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Names where the post went, since the form can send it to VISTA, the website or
+// both. A draft is nowhere yet, so it says only that it was saved.
 function messageFor(row, notified, verb) {
+  const where = row.in_vista && row.is_public ? 'VISTA and the website'
+    : row.is_public ? 'the website'
+    : 'VISTA';
   const base = row.state === 'draft' ? 'Draft saved.'
-    : row.state === 'scheduled' ? 'Announcement scheduled.'
-    : `Announcement ${verb}.`;
+    : row.state === 'scheduled' ? `Announcement scheduled for ${where}.`
+    : `Announcement ${verb === 'posted' ? 'posted to' : 'updated on'} ${where}.`;
   return notified ? `${base} ${notified} parent${notified === 1 ? '' : 's'} notified.` : base;
 }
 

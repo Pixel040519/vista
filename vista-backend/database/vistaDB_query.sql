@@ -180,7 +180,9 @@ CREATE TABLE announcements (
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT NOW(),
     -- 2026_09_22_public_content.sql
-    is_public BOOLEAN NOT NULL DEFAULT FALSE,     -- also shown on the landing page
+    is_public BOOLEAN NOT NULL DEFAULT FALSE,     -- shown on the landing page
+    -- 2026_10_02_announcement_vista_reach.sql
+    in_vista BOOLEAN NOT NULL DEFAULT TRUE,       -- shown inside VISTA (dashboard + parent app)
     category VARCHAR(20) NOT NULL DEFAULT 'General'
         CONSTRAINT announcements_category_check
         CHECK (category IN ('General', 'Enrollment', 'Event', 'Academic', 'Holiday', 'Suspension')),
@@ -192,6 +194,7 @@ CREATE TABLE announcements (
     updated_at TIMESTAMPTZ,
     updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
     CONSTRAINT announcements_public_audience_check CHECK (NOT is_public OR target_audience IN ('all', 'parents')),
+    CONSTRAINT announcements_reach_check CHECK (in_vista OR is_public),
     CONSTRAINT announcements_expiry_check CHECK (expires_at IS NULL OR published_at IS NULL OR expires_at > published_at)
 );
 

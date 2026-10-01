@@ -247,7 +247,10 @@ Copy is the school's own, not invented. The **Students' Handbook** is authoritat
   steward. An earlier version of this page dropped the steward stanza; keep all four.
 - Contact details, programme levels and the school hymn come from the existing site.
 
-**Announcements come from VISTA**, not from this repo. `src/assets/data/announcements.js`
+**Announcements come from VISTA**, not from this repo. The super admin posts them from the
+dashboard's **Public Website** tab — to the website alone, or to the website and VISTA together
+— and this site reads only the `is_public` side, so it neither knows nor cares whether a post
+is also in VISTA. `src/assets/data/announcements.js`
 now holds only `FACEBOOK_PAGE` and `announcementFromApi()`, the one mapper both the
 Announcements page and `NewsCarousel` use — they once held separate copies that drifted.
 

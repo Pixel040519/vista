@@ -123,7 +123,7 @@ is **`super_admin` only** — the website speaks for the whole school, so one of
 
 | Method | Endpoint | Description | Role |
 |--------|----------|-------------|------|
-| GET/POST/PUT/DELETE | /api/announcements | Notices for staff, parents and — with `is_public` — the website | Read: all; write: admin (`is_public`: super admin) |
+| GET/POST/PUT/DELETE | /api/announcements | Notices in VISTA (`in_vista`, to staff and/or parents) and/or on the website (`is_public`) — at least one | Read: all (website-only posts: super admin, plus live ones for scoped admins); write: admin (`is_public`: super admin) |
 | GET/POST/PUT/DELETE | /api/facilities | The facility gallery and its photos | Super admin |
 
 ### Public Endpoints (NO AUTH)

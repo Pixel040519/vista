@@ -1362,14 +1362,34 @@ Each subject card expands to student rows; each student row shows a rated count 
 
 ECE Catalog tab was removed from `CurriculumManagement.jsx` — subjects are managed in the existing Subjects tab.
 
-### Announcements (`pages/Announcements.jsx`)
+### Announcements (`pages/Announcements.jsx` + `components/AnnouncementForm.jsx`)
 Moved out of `pages.jsx` into its own file. Admin-only write, everyone reads (filtered
-server-side — see `announcement.routes.js`). One post can reach staff, parents in the
-`vista_parent` app, and — **super admin only** — the public website.
+server-side — see `announcement.routes.js`). A post has two places it can appear — **inside
+VISTA** (staff, and parents in the `vista_parent` app) and, **super admin only**, the **public
+website** — set by the `in_vista` / `is_public` flags, either or both.
 
+- **Every admin gets two tabs**, **VISTA Portal** and **Public Website** (Account
+  Management's underline style, each with a count, held in the URL as `?tab=website`). Each has
+  its own subtitle, a one-line note on who can read it, its own filter chips (counted over that
+  tab), and its own post button — **Post to VISTA** / **Post to Website**. A post in both places
+  is listed on both, with a badge naming the other ("Also on website" / "Also in VISTA ·
+  Everyone"). The old "On website" filter chip is gone; the tab replaced it.
+- **For a scoped admin the Public Website tab is read-only** (`readOnlyTab`): no post button,
+  no filter chips (the API sends them only *live* website posts, so every chip would equal All),
+  its own subtitle, note ("Only the super admin posts or edits here") and empty state, and no
+  edit/delete on the cards because `canManage()` refuses every public post. They see it so they
+  know what the public has been told. Teachers get no tabs and the page they had — the API never
+  sends them a website-only post. The form's `channel` is forced to `'vista'` for anyone but the
+  super admin.
+- **`AnnouncementForm` takes a `channel`** (`'vista'` | `'website'`), the tab it was opened
+  from, and that place is fixed on; the other is an optional "Also…". The VISTA form has the
+  full audience select, Notify parents and (super admin) **Also post on the public website**,
+  disabled for the Teachers/Admins audiences. The Website form has no audience until **Also
+  show in VISTA** is ticked, which reveals Everyone / Parents only — the staff audiences are
+  never offered there — and Notify parents. Both end with an **Appears on** line of chips
+  (Public website · VISTA · audience · Parents notified) so the reach is confirmed before saving.
 - The form posts `FormData` (`announcementApi.create/update` send multipart) with title,
-  content, category, audience, **Also show on the public website** (rendered only
-  for super_admin, disabled for the Teachers/Admins audiences), pinned, **When** (Publish
+  content, category, audience, `in_vista`, `is_public`, pinned, **When** (Publish
   now / Schedule for later / Save as draft), an optional take-down time, **Notify parents**,
   and an optional photo. Choosing a photo reveals a required consent checkbox.
 - **Notify parents** is enabled only when the audience reaches parents, the post is being
@@ -1378,9 +1398,11 @@ server-side — see `announcement.routes.js`). One post can reach staff, parents
 - `canManage()` mirrors the API's `assertCanEdit()`: super_admin manages every post; a
   scoped admin only their own non-public ones.
 - Cards show a derived state chip (Draft / Scheduled / Published / Expired), category,
-  audience, a **Website** badge and a **Parents notified** badge. Filter chips (All, My
-  posts, On website [super_admin], Published, Scheduled, Drafts) are client-side over the
-  one list. `datetime-local` inputs are local wall-clock time and converted to ISO on send.
+  audience (VISTA tab), the cross-place badge and a **Parents notified** badge. Filter chips
+  (All, My posts [not on the Website tab, where every post is the super admin's], Published,
+  Scheduled, Drafts) are client-side over the current tab's posts and reset on a tab switch.
+  The delete confirmation names every place the post disappears from (`reachText()`).
+  `datetime-local` inputs are local wall-clock time and converted to ISO on send.
 - **On the website** a public post appears in Home's news carousel (the newest nine, pinned
   first) and on the site's Announcements page. A card shows the **opening lines of the
   content** under the title — as do the parent app and the push notification, which is why

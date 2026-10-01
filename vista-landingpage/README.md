@@ -63,7 +63,8 @@ Principles (智 Knowledge, 仁 Benevolence, 勇 Courage) and the four-stanza Vis
 it verbatim.
 
 **Announcements and the facility gallery come from VISTA**, not from this
-repo. Admins manage them in the dashboard and the site reads them through `/api/public/*`
+repo. The super admin manages them in the dashboard (announcements on its **Public Website**
+tab, which can post to the website alone) and the site reads them through `/api/public/*`
 (`src/assets/lib/publicContent.js`). What is in `src/assets/data/` is only the mappers and,
 for facilities, a bundled fallback set:
 

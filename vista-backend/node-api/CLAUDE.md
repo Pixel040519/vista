@@ -1091,6 +1091,21 @@ left by an admin who has gone. Scoped admins edit only their own, and never a pu
 Only `super_admin` may set **`is_public`** (403), and never on an `admins`/`teachers` post
 (422, and a table CHECK) — a staff-only notice must not reach the internet.
 
+**Two places, one post.** `in_vista` (default `true`, so a client that never sends it behaves as
+before) and `is_public` are independent reaches; `validate()` 422s a post with neither, matching
+`announcements_reach_check`. A website-only post is public by definition, so the `is_public` 403
+already keeps it the super admin's. When `in_vista` is false, `validate()` coerces a staff
+audience to `'all'` (the public CHECK must still hold, and turning VISTA back on restores a
+parent audience) and forces `notify_parents` off; `notifyParents()` also refuses a row with
+`in_vista` false, so no other caller can notify about a post parents cannot open. `GET /`
+filters by reach per role: `super_admin` gets everything; **scoped admins** get VISTA posts as
+before **plus public posts that are live** (`is_public AND LIVE_SQL`) — read-only, since
+`assertCanEdit()` already refuses them any public post, and never the super admin's website
+drafts or scheduled posts; **teachers and parents** get `a.in_vista = TRUE` only, which is what
+keeps a website-only post out of the parent app.
+`messageFor()` names where the post went ("posted to the website", "updated on VISTA and the
+website").
+
 **`notify_parents`** (`notifyParents()`) inserts one `notifications` row
 (`type 'announcement'`, `reference_id` = the post) per `role='parent'` user with
 `account_status='active'`, and stamps `notified_at` in the same transaction; the FCM push

@@ -33,7 +33,7 @@ npm run dev
 | `/my-class` | An adviser's read-only view of the section they advise | Teacher (adviser) |
 | `/ece-competency` | Competency tracker for descriptively-assessed levels | Admin (read-only), Teacher |
 | `/risk` | AI risk overview | Admin, Teacher |
-| `/announcements` | Announcements — staff, parents and the public website | All (post: admin) |
+| `/announcements` | Announcements — a **VISTA Portal** tab (staff, parents in the app) and a **Public Website** tab | All (post: admin; website: super admin, read-only for scoped admins) |
 | `/facilities` | Facility Gallery — the photos the website shows | Super admin |
 | `/accounts` | Teacher, admin and parent accounts | Admin |
 | `/curriculum` | School years, subjects, sections, advisers, assessment mode | Admin |
@@ -80,8 +80,10 @@ src/
 ```
 
 Two pages write what the **public website** shows, and both are super-admin only:
-Announcements (the "Also show on the public website" toggle — a public post appears in the
-site's Home news carousel and on its Announcements page) and Facility Gallery.
+Announcements — its **Public Website** tab posts to the website alone, or to the website and
+VISTA together; a public post appears in the site's Home news carousel and on its
+Announcements page — and Facility Gallery. ECE and Elementary admins can read the website's
+live posts on that tab but not post or edit there; teachers never see website-only posts.
 
 ---
 
