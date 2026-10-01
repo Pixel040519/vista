@@ -129,6 +129,7 @@ Key tables:
 - `parent_invitations` — one row per portal invitation: `user_id`, the authorized `email`, `invited_by`/`invited_at`, `expires_at` (30 days), `consumed_at`, `revoked_at`/`revoked_by`, plus the **live one-time code on the same row** (`code_hash`, `code_issued_at`, `code_expires_at`, `code_attempts`). Keeping the code here rather than in a table of its own is what makes "issuing a new code invalidates the previous unused one" automatic instead of a rule to enforce. `code_hash` is NULL at invite time, because no message is sent then. A partial unique index allows exactly **one live invitation per account** (`WHERE consumed_at IS NULL AND revoked_at IS NULL`), and `ON DELETE CASCADE` on `user_id` is load-bearing — removing a parent's last guardian row hard-deletes their `users` row.
 - `password_reset_codes` — the same code discipline for an active account's self-service reset. Deliberately **not** folded into `parent_invitations`: an invitation is a thing an admin creates, sees and revokes, while a reset code is ephemeral and belongs to the account holder.
 - `announcements` — one notice system with two independent places a post can appear: **`in_vista`** (inside VISTA, to `target_audience` — `'all'` | `'admins'` | `'teachers'` | `'parents'`) and **`is_public`** (the landing page). A post may be in either or both; `announcements_reach_check` (`in_vista OR is_public`) refuses one that is nowhere. A CHECK allows `is_public` only with `'all'`/`'parents'`, so a staff-only post can never reach the internet; on a website-only post the audience is ignored and kept at one of those two. `published_at` NULL = draft, future = scheduled; `expires_at` takes it down; the visible *state* is derived from those, never stored. `notified_at` records that parents were notified, so an edit can never push twice. `image_path` is always a server re-encoded file. See "Public content".
+- `announcement_edits` — one row per save of a post by someone **other than its author** (the super admin may edit any post), holding the post `before` and `after` as JSONB. Read only through `GET /api/announcements/:id/edits`, which serves a row to the post's author and to the admin who made that edit, nobody else.
 - `facilities` / `facility_photos` — the landing page's facility gallery. First photo by `sort_order` is the cover; `is_active = FALSE` hides a facility from the site without deleting it.
 - `grade_level_assessment` — per `(school_year_id, grade_level)`: `assessment_mode` (`'numeric'` | `'descriptive'`) + `rating_scale` (required for descriptive, NULL for numeric). Zero rows = built-in defaults, so it is additive. See "Assessment mode" below.
 
@@ -1032,7 +1033,13 @@ Migration `2026_09_22_public_content.sql`; seed the existing gallery once with
 
 - **The public website is the super admin's.** Only `super_admin` may set `is_public` or reach
   `/api/facilities`. Scoped admins keep posting inside VISTA (to staff or parents) and editing
-  their own posts — but not a public one. `super_admin` may edit or delete any post.
+  their own posts — but not a public one. `super_admin` may edit or delete any post, but may put
+  only **their own** on the website: making an ECE or Elementary admin's post public would
+  publish someone else's writing to an audience its author never chose (`assertCanPublish`).
+- **Editing someone else's post is never silent.** The post keeps naming its author, so every
+  reader sees "Edited by {name}"; the author and that editor — nobody else — can open **View
+  changes** for a word-level before/after (`announcement_edits`); and the author gets a bell
+  notification when another admin edits or deletes their post.
 - **VISTA and the website are separate places to post.** `in_vista` and `is_public` are two
   reach flags on one post (`2026_10_02_announcement_vista_reach.sql`), so the super admin can
   post to the website alone, to VISTA alone, or deliberately to both. Inside VISTA a website-only
@@ -1043,7 +1050,10 @@ Migration `2026_09_22_public_content.sql`; seed the existing gallery once with
   the super admin can post or edit on the second.
 - **One post, several reaches.** A post to parents shows in the `vista_parent` app; the
   opt-in **Notify parents** writes a `notifications` row per active parent account and sends an
-  FCM push, once (`notified_at`), and only for a post that is live now.
+  FCM push, once (`notified_at`), and only for a post that is live now. **Staff in the audience
+  are notified automatically**, with no switch — teachers and/or admins get a dashboard bell
+  notification once when the post goes live in VISTA (a scheduled post's rows wait, hidden,
+  until its go-live time). Parents are never part of that automatic notice.
 - **A post is one text.** There is no separate summary: every card (website, parent app) and
   the push body show the opening of `content`. The optional `summary` column was dropped in
   `2026_10_01_remove_announcement_summary.sql` — readers already fell back to the content, and

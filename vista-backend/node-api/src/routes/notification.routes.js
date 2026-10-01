@@ -6,10 +6,15 @@ const { authenticate } = require('../middleware/auth.middleware');
 router.use(authenticate);
 
 // GET /api/notifications — Get user's notifications
+//   A row whose sent_at is still ahead is not delivered yet: a scheduled
+//   announcement writes its staff notifications at save time, stamped with the
+//   go-live moment (see syncStaffNotifications in announcement.routes.js).
+//   sent_at has no time zone, hence LOCALTIMESTAMP rather than NOW().
 router.get('/', async (req, res, next) => {
   try {
     const result = await query(
-      `SELECT * FROM notifications WHERE recipient_id = $1 ORDER BY sent_at DESC LIMIT 50`,
+      `SELECT * FROM notifications WHERE recipient_id = $1 AND sent_at <= LOCALTIMESTAMP
+        ORDER BY sent_at DESC LIMIT 50`,
       [req.user.id]
     );
     res.json({ notifications: result.rows });

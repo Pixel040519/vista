@@ -1363,52 +1363,123 @@ Each subject card expands to student rows; each student row shows a rated count 
 ECE Catalog tab was removed from `CurriculumManagement.jsx` — subjects are managed in the existing Subjects tab.
 
 ### Announcements (`pages/Announcements.jsx` + `components/AnnouncementForm.jsx`)
-Moved out of `pages.jsx` into its own file. Admin-only write, everyone reads (filtered
-server-side — see `announcement.routes.js`). A post has two places it can appear — **inside
-VISTA** (staff, and parents in the `vista_parent` app) and, **super admin only**, the **public
-website** — set by the `in_vista` / `is_public` flags, either or both.
+Admin-only write, everyone reads (filtered server-side — see `announcement.routes.js`). A post
+has two places it can appear — **inside VISTA** (staff, and parents in the `vista_parent` app)
+and, **super admin only**, the **public website** — set by the `in_vista` / `is_public` flags,
+either or both.
 
-- **Every admin gets two tabs**, **VISTA Portal** and **Public Website** (Account
-  Management's underline style, each with a count, held in the URL as `?tab=website`). Each has
-  its own subtitle, a one-line note on who can read it, its own filter chips (counted over that
-  tab), and its own post button — **Post to VISTA** / **Post to Website**. A post in both places
-  is listed on both, with a badge naming the other ("Also on website" / "Also in VISTA ·
-  Everyone"). The old "On website" filter chip is gone; the tab replaced it.
-- **For a scoped admin the Public Website tab is read-only** (`readOnlyTab`): no post button,
-  no filter chips (the API sends them only *live* website posts, so every chip would equal All),
-  its own subtitle, note ("Only the super admin posts or edits here") and empty state, and no
-  edit/delete on the cards because `canManage()` refuses every public post. They see it so they
-  know what the public has been told. Teachers get no tabs and the page they had — the API never
-  sends them a website-only post. The form's `channel` is forced to `'vista'` for anyone but the
-  super admin.
-- **`AnnouncementForm` takes a `channel`** (`'vista'` | `'website'`), the tab it was opened
-  from, and that place is fixed on; the other is an optional "Also…". The VISTA form has the
-  full audience select, Notify parents and (super admin) **Also post on the public website**,
-  disabled for the Teachers/Admins audiences. The Website form has no audience until **Also
-  show in VISTA** is ticked, which reveals Everyone / Parents only — the staff audiences are
-  never offered there — and Notify parents. Both end with an **Appears on** line of chips
-  (Public website · VISTA · audience · Parents notified) so the reach is confirmed before saving.
-- The form posts `FormData` (`announcementApi.create/update` send multipart) with title,
-  content, category, audience, `in_vista`, `is_public`, pinned, **When** (Publish
-  now / Schedule for later / Save as draft), an optional take-down time, **Notify parents**,
-  and an optional photo. Choosing a photo reveals a required consent checkbox.
-- **Notify parents** is enabled only when the audience reaches parents, the post is being
-  published now, and it has not notified before (`notified_at`) — the same three conditions
-  the API applies, so the checkbox never promises what the save will not do.
-- `canManage()` mirrors the API's `assertCanEdit()`: super_admin manages every post; a
-  scoped admin only their own non-public ones.
-- Cards show a derived state chip (Draft / Scheduled / Published / Expired), category,
-  audience (VISTA tab), the cross-place badge and a **Parents notified** badge. Filter chips
-  (All, My posts [not on the Website tab, where every post is the super admin's], Published,
-  Scheduled, Drafts) are client-side over the current tab's posts and reset on a tab switch.
-  The delete confirmation names every place the post disappears from (`reachText()`).
+**The admin page is a board grouped by state**, chosen over a list-and-reading-pane layout
+because "what is out there and what is coming" is the question the page is opened with:
+
+| Section | Shows |
+|---|---|
+| **Scheduled** | one row per post, soonest first, with a date block and "Goes live 7:00 AM · in 27 days" |
+| **Live now** | a 1/2/3-column grid of cards, in the API's order (pinned first, then newest) |
+| **Drafts** | dashed rows with **Continue editing** and "Not visible to anyone yet" |
+| **Expired** | folded behind one toggle, since nobody can see them any more |
+
+A section with nothing in it is not rendered. **There are no count tiles above the board** —
+the school removed them after a first design had them; the section headings already carry
+the counts. Do not add them back.
+
+- **Cards show the opening of a post, never all of it** (title and message both clamp to two
+  lines). The whole post opens in `PostView`, a reading modal that also lists **Where it
+  appears** (VISTA audience, website, parents notified, go-live and take-down times) and holds
+  Edit and Delete. A card carries one badge per fact at most: **Pinned**, and the badge naming
+  the *other* place ("Also on website" / "Also in VISTA"). Without a photo a card draws the
+  category's tile (`CATEGORY_STYLE`, exported from the form), the same idea the website uses.
+- **Staff in the audience hear about a new post in the bell** (`announcement_posted`, written
+  by the API when a post goes live in VISTA — see the node-api notes; parents are the separate
+  Notify parents switch). The form's **Appears on** line shows it as an amber chip — "Teachers
+  & admins notified", "Teachers notified" or "Admins notified", plus "when live" for a scheduled
+  post — on any post that has not been live yet; a live post is never announced twice.
+- **The author hears about it in the bell.** When another admin edits or deletes their post
+  the API writes an `announcement_edited` / `announcement_deleted` notification. The Topbar
+  bell now re-reads on open and on window focus (it used to load once per page load, so these
+  never appeared while the dashboard sat open), shows a megaphone, pencil or bin icon for the
+  three announcement types, and a new or edited one navigates to `/announcements?view=<id>`. The page consumes `view` once the
+  list loads — opening that post (switching to the Website tab for a website-only one) or
+  toasting that it is no longer available — and strips it so Back or a refresh does not
+  reopen it.
+- **The viewer's own posts are tinted** (`MINE_CARD`, a light brand border and background on
+  cards, scheduled rows and drafts) so they can be found on a board shared with other admins.
+  The tint is never the only signal: the author reads **You** on cards, drafts say "by you",
+  and scheduled rows add "· by you".
+- **Edit and Delete sit behind one menu button** (`PostMenu`) on cards and rows. The card is
+  deliberately not `overflow-hidden` — that would clip the menu — so the cover rounds itself.
+- **Every admin gets two tabs**, **VISTA Portal** and **Public Website** (underline style, each
+  with a count, held in the URL as `?tab=website`). Who can read each tab is an `Info` icon's
+  tooltip (`InfoTip`) rather than a sentence under the tabs. It is a real tooltip, shown at
+  once on hover **and** keyboard focus — the browser's `title` was slow and came with a "?"
+  cursor — and it sits **outside** the tab strip, whose `overflow-x-auto` would clip it. Its
+  button carries `cursor-default`: the base layer gives every `button` a pointer, and the
+  school wanted the plain arrow on a hint. Beside them are a search box (title and
+  message, client-side) and a **My posts** toggle (VISTA tab only — every website post is the
+  super admin's). Both reset on a tab switch along with the Expired toggle.
+- **For a scoped admin the Public Website tab is read-only** (`readOnlyTab`): the post button
+  becomes a "View only · managed by the Super Admin" pill, and `canManage()` refuses every
+  public post, so no menu renders. The API sends them only *live* website posts.
+- **Teachers get `TeacherFeed`**, a reading page: category chips (only categories present),
+  search, pinned posts as large cards, then a **Latest** list with a date column. No tabs, no
+  states — the API sends them only live VISTA posts for their audience. It spans the full
+  content width like the admin board; an earlier `max-w-4xl` left an empty strip on the right
+  of wide screens.
+- **Reach text names who reads a post, never "the dashboard"** (`REACH_TEXT` in the page, the
+  VISTA card's hint in the form, the VISTA tab's tooltip). The Dashboard page shows no
+  announcements — staff read them on this page — so "staff dashboard" pointed at the wrong
+  place. A parents-only post reads "the parent app" alone: admins see it here because they
+  manage every post, which is not the post reaching staff.
+- `canManage()` mirrors the API's `assertCanEdit()`: super_admin manages every post; a scoped
+  admin only their own non-public ones. The delete confirmation names every place the post
+  disappears from (`reachText()`).
+- **Who edited is shown to every reader; what changed is not.** The byline stays the author's;
+  the edit is a quiet strip **under the message** in `PostView` — "Edited by {name}" over its
+  date — from `otherEdit()` (`last_edit_*` from the API, falling back to `updated_by` for edits
+  older than `announcement_edits`). The form opens with a note — "You're editing {author}'s
+  post…" — when the super admin edits a post that is not theirs.
+- **View changes** sits on the right of that strip, rendered only when the API says
+  `can_view_edits` — the post's author or an admin who edited it. It swaps the modal body for
+  `components/AnnouncementChanges.jsx` (no second modal): one entry per edit, newest first,
+  title and message as a word diff (removed struck through in red, added in green, the whole
+  message shown so a changed date is seen in context), every other field as a before → after
+  row. It opens straight onto the edits — only a back arrow and the removed/added key above
+  them; the post's title and a "who can see this" line were taken off the top at the school's
+  request. The API is the actual guard; the button is only the affordance.
+
+**`AnnouncementForm` is one column with a pinned footer** (`Modal selfScroll`; the body
+scrolls and the footer is `shrink-0`). It takes a `channel` (`'vista'` | `'website'`), the tab
+it was opened from, and that place is fixed on.
+
+- Title, Message, then **Category** and **Audience in VISTA** side by side. The website form
+  only offers Everyone / Parents only, and only once VISTA is ticked.
+- **Post to** (super admin only): two cards, the channel's own locked on with a lock icon, the
+  other optional. The website card is disabled for a staff-only audience — its hint then reads
+  "Only for posts to Everyone or Parents", naming what unlocks it; the old "Not for staff-only
+  posts" read backwards under a disabled box — and on **another
+  admin's post** that is not already public ("Only its author can put it on the website") —
+  mirroring the API's `assertCanPublish()`. Scoped admins post to VISTA only and see no choice.
+- **Notify parents** is a switch, enabled only when the audience reaches parents, the post is
+  being published now, and it has not notified before (`notified_at`) — the API's three
+  conditions. The hint under it says which one is missing.
+- **When** is Publish now ("Keep published" on a live post) or Schedule for later. **A draft is
+  its own footer button**, not a When option: Save draft, or **Move to drafts** on a live post.
+  Saving a draft checks only title and message, never the go-live time. A draft being edited
+  opens on Publish now, and its primary button reads **Publish**.
+- **More options** folds away photo (with the required Data Privacy consent), Pin to the top
+  and Take down on. Collapsed, it summarises what is set ("Photo added · Pinned · Takes down
+  Nov 28"); it opens itself when editing a post that uses any of them, and when a photo is
+  missing its consent on save.
+- The footer's **Appears on** chips (Public website · VISTA · audience · Parents notified) are
+  the one confirmation of reach before saving. There is no live preview of the post — it was
+  designed and then removed at the school's request.
+- The form posts `FormData` (`announcementApi.create/update` send multipart).
   `datetime-local` inputs are local wall-clock time and converted to ISO on send.
-- **On the website** a public post appears in Home's news carousel (the newest nine, pinned
-  first) and on the site's Announcements page. A card shows the **opening lines of the
-  content** under the title — as do the parent app and the push notification, which is why
-  the form's hint says to lead with the main point (there is no separate summary field any
-  more); its **category** picks the icon the site draws when
-  the post has no photo; and **pinned** puts it first in both places.
+
+**On the website** a public post appears in Home's news carousel (the newest nine, pinned
+first) and on the site's Announcements page. A card shows the **opening lines of the content**
+under the title — as do the parent app and the push notification, which is why the form's
+hint says to lead with the main point; its **category** picks the icon the site draws when
+the post has no photo; and **pinned** puts it first in both places.
 
 ### Facility Gallery (`pages/FacilityGallery.jsx`)
 `/facilities`, `PrivateRoute roles={[ROLES.SUPER_ADMIN]}`, sidebar item under Tools with the

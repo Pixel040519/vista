@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { useLocation } from 'react-router-dom'
-import { Bell, Menu } from 'lucide-react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { Bell, Menu, Pencil, Trash2, Megaphone } from 'lucide-react'
 import { notificationApi } from '../../api/client'
 import { format } from 'date-fns'
 
@@ -16,8 +16,25 @@ const routeLabels = {
   '/curriculum': 'Curriculum Management',
 }
 
+// Announcement notifications get an icon saying which kind they are: a new
+// post for your audience, or another admin editing or deleting yours.
+const NOTIF_ICON = {
+  announcement_posted:  { icon: Megaphone, cls: 'bg-amber-50 text-amber-700' },
+  announcement_edited:  { icon: Pencil, cls: 'bg-brand-50 text-brand-600' },
+  announcement_deleted: { icon: Trash2, cls: 'bg-red-50 text-red-600' },
+}
+
+function NotifIcon({ icon: Icon, cls }) {
+  return (
+    <span className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${cls}`}>
+      <Icon size={13} />
+    </span>
+  )
+}
+
 export default function Topbar({ onMenuToggle }) {
   const location = useLocation()
+  const navigate = useNavigate()
   const [notifications, setNotifications] = useState([])
   const [showNotifs, setShowNotifs] = useState(false)
   const unread = notifications.filter(n => !n.is_read).length
@@ -25,11 +42,34 @@ export default function Topbar({ onMenuToggle }) {
   const label = routeLabels[location.pathname] ||
     (location.pathname.startsWith('/students/') ? 'Student Detail' : 'VISTA')
 
-  useEffect(() => {
+  const loadNotifications = () => {
     notificationApi.list()
       .then(res => setNotifications(res.data.notifications || []))
       .catch(() => {})
+  }
+
+  // Loading once per page load used to be all: a notification written while the
+  // dashboard sat open (another admin editing your post) never appeared. Re-read
+  // on opening the bell and on coming back to the tab.
+  useEffect(() => {
+    loadNotifications()
+    window.addEventListener('focus', loadNotifications)
+    return () => window.removeEventListener('focus', loadNotifications)
   }, [])
+
+  // A new post, or an edit to yours, opens that post (for an edit, View changes
+  // there shows what moved). A deleted post has nothing left to open, so that
+  // one only marks itself read.
+  const openNotification = (n) => {
+    if (!n.is_read) {
+      notificationApi.read(n.id).catch(() => {})
+      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, is_read: true } : x))
+    }
+    if (['announcement_posted', 'announcement_edited'].includes(n.type) && n.reference_id) {
+      setShowNotifs(false)
+      navigate(`/announcements?view=${n.reference_id}`)
+    }
+  }
 
   return (
     <header className="h-16 bg-white border-b border-slate-100 flex items-center justify-between px-4 sm:px-6 sticky top-0 z-20">
@@ -52,7 +92,8 @@ export default function Topbar({ onMenuToggle }) {
         {/* Notifications */}
         <div className="relative">
           <button
-            onClick={() => setShowNotifs(!showNotifs)}
+            onClick={() => { if (!showNotifs) loadNotifications(); setShowNotifs(!showNotifs) }}
+            aria-label={unread ? `Notifications, ${unread} unread` : 'Notifications'}
             className="relative p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors"
           >
             <Bell size={18} />
@@ -75,20 +116,23 @@ export default function Topbar({ onMenuToggle }) {
                 {notifications.length === 0 ? (
                   <div className="px-4 py-8 text-center text-sm text-slate-400">No notifications</div>
                 ) : notifications.slice(0, 10).map(n => (
-                  <div
+                  <button
+                    type="button"
                     key={n.id}
-                    className={`px-4 py-3 cursor-pointer hover:bg-slate-50 transition-colors ${!n.is_read ? 'bg-brand-50/50' : ''}`}
-                    onClick={() => {
-                      notificationApi.read(n.id).catch(() => {})
-                      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, is_read: true } : x))
-                    }}
+                    className={`w-full text-left flex gap-3 px-4 py-3 hover:bg-slate-50 transition-colors ${!n.is_read ? 'bg-brand-50/50' : ''}`}
+                    onClick={() => openNotification(n)}
                   >
-                    <p className="text-sm font-medium text-slate-800">{n.title}</p>
-                    <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{n.body}</p>
-                    <p className="text-xs text-slate-400 mt-1">
-                      {format(new Date(n.sent_at), 'MMM d, h:mm a')}
-                    </p>
-                  </div>
+                    {NOTIF_ICON[n.type] && (
+                      <NotifIcon {...NOTIF_ICON[n.type]} />
+                    )}
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium text-slate-800">{n.title}</span>
+                      <span className="block text-xs text-slate-500 mt-0.5 line-clamp-2">{n.body}</span>
+                      <span className="block text-xs text-slate-400 mt-1">
+                        {format(new Date(n.sent_at), 'MMM d, h:mm a')}
+                      </span>
+                    </span>
+                  </button>
                 ))}
               </div>
             </div>

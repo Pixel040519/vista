@@ -201,6 +201,19 @@ CREATE TABLE announcements (
 CREATE INDEX idx_announcements_public
   ON announcements (published_at DESC) WHERE is_active = TRUE AND is_public = TRUE;
 
+-- 2026_10_03_announcement_edits.sql — a post as it was before and after a save
+-- by someone other than its author; shown only to the author and that editor.
+CREATE TABLE announcement_edits (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    announcement_id UUID NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+    edited_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    edited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    before JSONB NOT NULL,
+    after JSONB NOT NULL
+);
+
+CREATE INDEX idx_announcement_edits_post ON announcement_edits (announcement_id, edited_at DESC);
+
 -- ============================================================
 -- FACILITY GALLERY (landing page) — 2026_09_22_public_content.sql
 -- ============================================================

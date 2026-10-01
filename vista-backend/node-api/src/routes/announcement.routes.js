@@ -43,14 +43,162 @@ const LIVE_SQL = `(a.published_at IS NOT NULL AND a.published_at <= NOW()
 const SELECT_SQL = `
   SELECT a.id, a.title, a.content, a.category, a.target_audience,
          a.in_vista, a.is_public, a.is_pinned, a.published_at, a.expires_at, a.notified_at,
-         a.image_path, a.posted_by, a.created_at, a.updated_at,
-         u.full_name AS posted_by_name, ${STATE_SQL} AS state
+         a.image_path, a.posted_by, a.created_at, a.updated_at, a.updated_by,
+         u.full_name AS posted_by_name, ed.full_name AS updated_by_name, ${STATE_SQL} AS state,
+         le.edited_by_name AS last_edit_by_name, le.edited_at AS last_edit_at,
+         le.editors AS edit_editors
     FROM announcements a
-    LEFT JOIN users u ON u.id = a.posted_by`;
+    LEFT JOIN users u ON u.id = a.posted_by
+    -- Who saved it last; covers edits made before announcement_edits existed.
+    LEFT JOIN users ed ON ed.id = a.updated_by
+    -- The latest edit by someone other than the author (announcement_edits only
+    -- holds those), so "Edited by …" outlives the author re-saving afterwards,
+    -- plus who has made one — present() turns that into can_view_edits and
+    -- drops it. What changed is behind "View changes" for author and editor only.
+    LEFT JOIN LATERAL (
+      SELECT ue.full_name AS edited_by_name, e.edited_at,
+             (SELECT array_agg(DISTINCT x.edited_by) FROM announcement_edits x
+               WHERE x.announcement_id = a.id) AS editors
+        FROM announcement_edits e
+        LEFT JOIN users ue ON ue.id = e.edited_by
+       WHERE e.announcement_id = a.id
+       ORDER BY e.edited_at DESC
+       LIMIT 1
+    ) le ON TRUE`;
 
 function present(req, row) {
-  const { image_path, ...rest } = row;
-  return { ...rest, image_url: photoUrlFromPath(req, image_path) };
+  const { image_path, edit_editors, ...rest } = row;
+  const editors = edit_editors || [];
+  const can_view_edits = editors.length > 0
+    && (rest.posted_by === req.user.id || editors.includes(req.user.id));
+  return { ...rest, can_view_edits, image_url: photoUrlFromPath(req, image_path) };
+}
+
+// The post as an edit compares it. Dates go through JSON as ISO strings, so a
+// before/after pair compares by value.
+const EDIT_FIELDS = ['title', 'content', 'category', 'target_audience', 'in_vista', 'is_public',
+  'is_pinned', 'state', 'published_at', 'expires_at', 'image_path'];
+function snapshotOf(row) {
+  return JSON.parse(JSON.stringify(Object.fromEntries(EDIT_FIELDS.map(k => [k, row[k] ?? null]))));
+}
+
+// Record a save by someone other than the author, if it changed anything.
+// Returns the snapshot fields that changed ([] when nothing did, or when the
+// author edited their own post), so the caller can tell the author what moved.
+async function recordEdit(client, user, before, after) {
+  if (before.posted_by === user.id) return [];
+  const b = snapshotOf(before);
+  const a = snapshotOf(after);
+  const changed = EDIT_FIELDS.filter(k => JSON.stringify(b[k]) !== JSON.stringify(a[k]));
+  if (!changed.length) return [];
+  await client.query(
+    `INSERT INTO announcement_edits (announcement_id, edited_by, before, after) VALUES ($1, $2, $3, $4)`,
+    [before.id, user.id, b, a]
+  );
+  return changed;
+}
+
+// What an edit touched, in the words the form uses. Several snapshot fields
+// are one thing to a reader (status and its go-live time; audience and VISTA).
+const CHANGE_LABELS = {
+  title: 'the title', content: 'the message', category: 'the category',
+  target_audience: 'the audience', in_vista: 'the audience', is_public: 'the website',
+  is_pinned: 'the pin', state: 'the status', published_at: 'the status',
+  expires_at: 'the take-down date', image_path: 'the photo',
+};
+function changeSummary(fields) {
+  const labels = [...new Set(fields.map(f => CHANGE_LABELS[f]).filter(Boolean))];
+  return labels.length ? `Changed: ${labels.join(', ')}.` : '';
+}
+
+// The author of a post is told when someone else edits or deletes it — their
+// name stays on the post, so they must not find out from a reader. Written in
+// the caller's transaction; the dashboard bell reads these rows. The types are
+// distinct from 'announcement', which is what parents receive for a new post.
+async function notifyAuthor(client, user, post, type, body) {
+  if (!post.posted_by || post.posted_by === user.id) return;
+  const me = await client.query(`SELECT full_name FROM users WHERE id = $1`, [user.id]);
+  const who = me.rows[0]?.full_name || 'An administrator';
+  const title = type === 'announcement_deleted'
+    ? `${who} deleted your announcement`
+    : `${who} edited your announcement`;
+  await client.query(
+    `INSERT INTO notifications (recipient_id, title, body, type, reference_id) VALUES ($1, $2, $3, $4, $5)`,
+    [post.posted_by, title, body, type, post.id]
+  );
+}
+
+// Staff a post reaches, by audience. Parents are deliberately absent: they are
+// notified only by the opt-in "Notify parents" switch (notifyParents), which
+// also pushes to their phones.
+const ADMIN_ROLES = [ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE, ROLES.ADMIN_ELEM];
+const STAFF_FOR_AUDIENCE = {
+  all:      [ROLES.TEACHER, ...ADMIN_ROLES],
+  teachers: [ROLES.TEACHER],
+  admins:   ADMIN_ROLES,
+  parents:  [],
+};
+
+/**
+ * Tell the staff in a post's audience that it is out — once per post.
+ *
+ * Runs after every save in that save's transaction. A scheduled post has no
+ * moment at which code could run, so its rows are written now with sent_at set
+ * to the go-live time, and GET /api/notifications hides rows whose time has not
+ * come. Rows still pending are therefore always rewritten from scratch: a
+ * rescheduled post moves them, and one moved back to draft, taken out of VISTA
+ * or narrowed to parents loses them. Once any have been delivered the post has
+ * been announced, and later edits do not announce it again.
+ *
+ * sent_at is a TIMESTAMP without zone, so both sides of every comparison stay
+ * in SQL (LOCALTIMESTAMP, ::timestamp) — a JS Date would be stored as UTC
+ * wall-clock and compare hours off against the session's local time.
+ */
+async function syncStaffNotifications(client, row, actorId) {
+  await client.query(
+    `DELETE FROM notifications
+      WHERE type = 'announcement_posted' AND reference_id = $1 AND sent_at > LOCALTIMESTAMP`,
+    [row.id]
+  );
+  const sent = await client.query(
+    `SELECT 1 FROM notifications WHERE type = 'announcement_posted' AND reference_id = $1 LIMIT 1`,
+    [row.id]
+  );
+  if (sent.rowCount) return;
+
+  const roles = STAFF_FOR_AUDIENCE[row.target_audience] || [];
+  if (!row.in_vista || !roles.length || !['published', 'scheduled'].includes(row.state)) return;
+
+  await client.query(
+    `INSERT INTO notifications (recipient_id, title, body, type, reference_id, sent_at)
+     SELECT u.id, $2, $3, 'announcement_posted', a.id,
+            (CASE WHEN a.published_at > NOW() THEN a.published_at ELSE NOW() END)::timestamp
+       FROM announcements a
+       JOIN users u ON u.role = ANY($4::text[]) AND u.is_active = TRUE
+      WHERE a.id = $1
+        AND u.id <> $5
+        AND u.id IS DISTINCT FROM a.posted_by`,
+    [row.id, `New announcement: ${row.title}`.slice(0, 255), previewOf(row.content), roles, actorId]
+  );
+}
+
+// "VISTA and the public website" — where a deleted post was removed from.
+function placesOf(row) {
+  const places = [];
+  if (row.in_vista) places.push(PARENT_AUDIENCES.includes(row.target_audience) ? 'VISTA and the parent app' : 'VISTA');
+  if (row.is_public) places.push('the public website');
+  return places.join(' and ') || 'VISTA';
+}
+
+// An edit as the client sees it: the photo is reduced to whether there was
+// one and whether it was swapped, since an old file is deleted when replaced.
+function presentEdit(e) {
+  const strip = ({ image_path, ...s }) => ({ ...s, has_photo: !!image_path });
+  return {
+    id: e.id, edited_by: e.edited_by, edited_by_name: e.edited_by_name, edited_at: e.edited_at,
+    before: strip(e.before), after: strip(e.after),
+    photo_replaced: !!e.before.image_path && !!e.after.image_path && e.before.image_path !== e.after.image_path,
+  };
 }
 
 // Multipart bodies arrive as strings; Joi's default convert turns "true" and
@@ -128,6 +276,22 @@ function assertCanEdit(user, row) {
   }
   if (row.is_public) {
     throw new AppError('This announcement is on the public website, so only the super admin can change it.', 403);
+  }
+}
+
+// The website speaks for the school in the super admin's own words, so a post
+// goes public only by its author. The super admin may still correct an ECE or
+// Elementary admin's post inside VISTA, but putting it on the internet would
+// publish someone else's writing to the public under the school's name — the
+// author never chose that audience. Only the false -> true move is refused: a
+// post already public stays editable, and taking one off the website is fine.
+function assertCanPublish(user, existing, value) {
+  if (!value.is_public || existing.is_public) return;
+  if (existing.posted_by !== user.id) {
+    throw new AppError(
+      'Only the author of this announcement can post it to the public website. Post your own announcement to the website instead.',
+      403
+    );
   }
 }
 
@@ -246,6 +410,7 @@ router.post('/', authorizeAnyAdmin, uploadAnnouncementImage, async (req, res, ne
          value.expires_at, image?.image_path || null, req.user.id]
       );
       let row = await loadRow(ins.rows[0].id, client);
+      await syncStaffNotifications(client, row, req.user.id);
       const recipients = value.notify_parents ? await notifyParents(client, row) : [];
       if (recipients.length) row = await loadRow(row.id, client);
       return { row, recipients };
@@ -270,6 +435,7 @@ router.put('/:id', authorizeAnyAdmin, uploadAnnouncementImage, async (req, res, 
     const existing = await loadRow(req.params.id);
     assertCanEdit(req.user, existing);
     const value = validate(req);
+    assertCanPublish(req.user, existing, value);
     if (req.file) image = await processImage(req.file, 'announcements', { maxWidth: 1600 });
 
     const imagePath = image ? image.image_path
@@ -288,6 +454,12 @@ router.put('/:id', authorizeAnyAdmin, uploadAnnouncementImage, async (req, res, 
          imagePath, req.user.id, existing.id]
       );
       let row = await loadRow(existing.id, client);
+      await syncStaffNotifications(client, row, req.user.id);
+      const changed = await recordEdit(client, req.user, existing, row);
+      if (changed.length) {
+        await notifyAuthor(client, req.user, existing, 'announcement_edited',
+          `"${row.title}" — ${changeSummary(changed)}`);
+      }
       const recipients = value.notify_parents ? await notifyParents(client, row) : [];
       if (recipients.length) row = await loadRow(row.id, client);
       return { row, recipients };
@@ -309,14 +481,44 @@ router.put('/:id', authorizeAnyAdmin, uploadAnnouncementImage, async (req, res, 
   }
 });
 
+// GET /api/announcements/:id/edits
+//   What other admins changed in this post, newest first. The post's author
+//   sees every edit to it; an editor sees only the edits they made. Anyone
+//   else gets an empty list rather than a 403, so the endpoint cannot be used
+//   to learn whether a post was edited at all.
+router.get('/:id/edits', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const post = await loadRow(req.params.id);
+    const r = await query(
+      `SELECT e.id, e.edited_by, u.full_name AS edited_by_name, e.edited_at, e.before, e.after
+         FROM announcement_edits e
+         LEFT JOIN users u ON u.id = e.edited_by
+        WHERE e.announcement_id = $1 AND ($2::uuid = $3::uuid OR e.edited_by = $2)
+        ORDER BY e.edited_at DESC`,
+      [post.id, req.user.id, post.posted_by]
+    );
+    res.json({ edits: r.rows.map(presentEdit) });
+  } catch (err) { next(err); }
+});
+
 router.delete('/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const existing = await loadRow(req.params.id);
     assertCanEdit(req.user, existing);
     // Soft delete: notification rows reference the post, and a parent tapping
     // an old one should find nothing rather than an error.
-    await query(`UPDATE announcements SET is_active = FALSE, updated_at = NOW(), updated_by = $2 WHERE id = $1`,
-      [existing.id, req.user.id]);
+    await withTransaction(async (client) => {
+      await client.query(`UPDATE announcements SET is_active = FALSE, updated_at = NOW(), updated_by = $2 WHERE id = $1`,
+        [existing.id, req.user.id]);
+      // A scheduled post deleted before going live must not announce itself later.
+      await client.query(
+        `DELETE FROM notifications
+          WHERE type = 'announcement_posted' AND reference_id = $1 AND sent_at > LOCALTIMESTAMP`,
+        [existing.id]
+      );
+      await notifyAuthor(client, req.user, existing, 'announcement_deleted',
+        `"${existing.title}" was removed from ${placesOf(existing)}.`);
+    });
     res.json({ message: 'Announcement deleted.' });
   } catch (err) { next(err); }
 });

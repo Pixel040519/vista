@@ -153,6 +153,8 @@ export const announcementApi = {
   create: (data)     => api.post('/announcements', data, MULTIPART),
   update: (id, data) => api.put(`/announcements/${id}`, data, MULTIPART),
   remove: (id)       => api.delete(`/announcements/${id}`),
+  // What another admin changed — served only to the author and that editor.
+  edits:  (id)       => api.get(`/announcements/${id}/edits`),
 }
 
 // ── Facility gallery (super admin; shown on the public website) ─

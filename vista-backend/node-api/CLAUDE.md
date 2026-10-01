@@ -1087,9 +1087,53 @@ All endpoints require auth. Writes are admin-only; create and update are **multi
 - `DELETE /:id` — soft (`is_active = FALSE`); notification rows still reference it.
 
 **Who may do what** (`assertCanEdit`): `super_admin` edits or deletes any post, including one
-left by an admin who has gone. Scoped admins edit only their own, and never a public one.
+left by an admin who has gone. Because the post goes on naming its author, every save stamps
+`updated_by` (and `updated_at`), and **a save by anyone other than the author is recorded in
+`announcement_edits`** (`2026_10_03_announcement_edits.sql`) by `recordEdit()`: the post's
+editable fields before and after (`snapshotOf()` — title, content, category, audience, both
+reaches, pin, derived state, published/expiry times, photo path), skipped when nothing
+changed. The author's own saves are not recorded; they are not what the table answers.
+
+`SELECT_SQL` carries the latest such edit (`last_edit_by_name`, `last_edit_at`) through a
+lateral, so "Edited by …" survives the author re-saving afterwards, plus `updated_by` /
+`updated_by_name` for edits made before the table existed. **Who** edited is shown to everyone
+who can read the post; **what** changed is not. `present()` turns the lateral's editor ids into
+**`can_view_edits`** (the caller is the author or one of the editors) and drops the list.
+
+**Staff in the audience are notified automatically** (`syncStaffNotifications()`, run after
+every create and update in the same transaction): `all` → teachers and every admin tier,
+`teachers` → teachers, `admins` → admins, `parents` → nobody — parents are reached only by the
+opt-in `notify_parents`, which also pushes. Type `announcement_posted`, once per post, never to
+the actor or the author, and only for a post live or scheduled **in VISTA** (a website-only
+post or a draft notifies nobody). A scheduled post has no moment at which code could run, so
+its rows are written at save time with `sent_at` = the go-live time and **`GET
+/api/notifications` hides rows whose `sent_at` is still ahead**. Pending rows are rewritten on
+every save (a reschedule moves them; back to draft, out of VISTA or narrowed to parents removes
+them) and deleted with the post; once any row has been delivered the post is never announced
+again. `sent_at` is a `TIMESTAMP` without zone, so the comparisons are `LOCALTIMESTAMP` and
+`::timestamp` in SQL — a JS `Date` bound into it is stored as UTC wall-clock and lands hours
+off against the session's local time.
+
+**The author is notified** (`notifyAuthor()`, a `notifications` row in the same transaction)
+when someone else edits or deletes their post — type `announcement_edited` (only when
+`recordEdit()` found a change; the body names what moved, via `changeSummary()`) or
+`announcement_deleted` (the body says where it was removed from). `reference_id` is the post.
+These types are deliberately distinct from `'announcement'`, which is what parents receive for
+a new post, and the author's own edits and deletes notify nobody. There is no push: the
+recipients are admins, who read the dashboard bell.
+
+`GET /:id/edits` returns the diffs, newest first, **only to the post's author (every edit)
+and to an editor (their own edits)** — anyone else gets an empty list, not a 403, so the
+route cannot be used to learn whether a post was edited. `presentEdit()` reduces the photo
+to `has_photo` + `photo_replaced`, since a replaced file is deleted and the path means
+nothing to a client. Scoped admins edit only their own, and never a public one.
 Only `super_admin` may set **`is_public`** (403), and never on an `admins`/`teachers` post
-(422, and a table CHECK) — a staff-only notice must not reach the internet.
+(422, and a table CHECK) — a staff-only notice must not reach the internet. **And only on their
+own post** (`assertCanPublish`, 403): the super admin may correct an ECE or Elementary admin's
+post inside VISTA but may not put it on the website, because that publishes someone else's
+writing to the public under the school's name, to an audience its author never chose. Only the
+false → true move is refused — a post already public stays editable, and taking one off the
+website is allowed.
 
 **Two places, one post.** `in_vista` (default `true`, so a client that never sends it behaves as
 before) and `is_public` are independent reaches; `validate()` 422s a post with neither, matching
