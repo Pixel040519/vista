@@ -120,9 +120,9 @@ function NewsCard({ post, index, total, onOpen, articleRef }) {
           </button>
         </h3>
 
-        {post.excerpt && (
+        {post.content && (
           <p className="line-clamp-3 text-[15px] leading-relaxed text-slate-600 dark:text-slate-300">
-            {post.excerpt}
+            {post.content}
           </p>
         )}
 
@@ -242,11 +242,6 @@ function NewsDialog({ post, open, origin, onClose, dialogRef, closeRef, scrollRe
                 >
                   {post.title}
                 </h3>
-                {post.summary && (
-                  <p className="selectable mb-4 font-medium leading-relaxed text-slate-700 dark:text-slate-200">
-                    {post.summary}
-                  </p>
-                )}
                 <p className="selectable whitespace-pre-line leading-relaxed text-slate-600 dark:text-slate-300">
                   {post.content}
                 </p>

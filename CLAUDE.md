@@ -1036,6 +1036,10 @@ Migration `2026_09_22_public_content.sql`; seed the existing gallery once with
 - **One post, several reaches.** A post to parents shows in the `vista_parent` app; the
   opt-in **Notify parents** writes a `notifications` row per active parent account and sends an
   FCM push, once (`notified_at`), and only for a post that is live now.
+- **A post is one text.** There is no separate summary: every card (website, parent app) and
+  the push body show the opening of `content`. The optional `summary` column was dropped in
+  `2026_10_01_remove_announcement_summary.sql` — readers already fell back to the content, and
+  a filled-in summary was shown again above it, so it only made admins write things twice.
 - **Where a public post lands on the website:** the newest nine (pinned first) in Home's news
   carousel, where a card opens the full post in a modal, and every post on the site's
   Announcements page, six at a time behind **Load more** (`GET /api/public/announcements`

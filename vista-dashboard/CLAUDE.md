@@ -1368,7 +1368,7 @@ server-side — see `announcement.routes.js`). One post can reach staff, parents
 `vista_parent` app, and — **super admin only** — the public website.
 
 - The form posts `FormData` (`announcementApi.create/update` send multipart) with title,
-  summary, content, category, audience, **Also show on the public website** (rendered only
+  content, category, audience, **Also show on the public website** (rendered only
   for super_admin, disabled for the Teachers/Admins audiences), pinned, **When** (Publish
   now / Schedule for later / Save as draft), an optional take-down time, **Notify parents**,
   and an optional photo. Choosing a photo reveals a required consent checkbox.
@@ -1382,8 +1382,10 @@ server-side — see `announcement.routes.js`). One post can reach staff, parents
   posts, On website [super_admin], Published, Scheduled, Drafts) are client-side over the
   one list. `datetime-local` inputs are local wall-clock time and converted to ISO on send.
 - **On the website** a public post appears in Home's news carousel (the newest nine, pinned
-  first) and on the site's Announcements page. Its **summary** is what a card shows under
-  the title, so it is worth filling in; its **category** picks the icon the site draws when
+  first) and on the site's Announcements page. A card shows the **opening lines of the
+  content** under the title — as do the parent app and the push notification, which is why
+  the form's hint says to lead with the main point (there is no separate summary field any
+  more); its **category** picks the icon the site draws when
   the post has no photo; and **pinned** puts it first in both places.
 
 ### Facility Gallery (`pages/FacilityGallery.jsx`)

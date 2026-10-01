@@ -71,8 +71,8 @@ class AnnouncementsScreen extends ConsumerWidget {
   }
 }
 
-/// One announcement. Collapsed it shows the summary; tapping expands it to the
-/// full text. Also used, collapsed, on the home screen.
+/// One announcement. Collapsed it shows the opening lines; tapping expands it to
+/// the full text. Also used, collapsed, on the home screen.
 class AnnouncementCard extends StatefulWidget {
   const AnnouncementCard({
     super.key,
@@ -140,17 +140,12 @@ class _AnnouncementCardState extends State<AnnouncementCard> {
                         fontSize: 16, fontWeight: FontWeight.w700, color: VistaColors.navy950),
                   ),
                   const SizedBox(height: 4),
-                  if (_expanded) ...[
-                    if (a.summary != null && a.summary!.isNotEmpty) ...[
-                      Text(a.summary!,
-                          style: const TextStyle(fontWeight: FontWeight.w600, height: 1.4)),
-                      const SizedBox(height: 6),
-                    ],
+                  if (_expanded)
                     SelectableText(a.content,
-                        style: const TextStyle(color: Colors.black87, height: 1.45)),
-                  ] else
+                        style: const TextStyle(color: Colors.black87, height: 1.45))
+                  else
                     Text(
-                      a.preview,
+                      a.content,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.black54, height: 1.4),

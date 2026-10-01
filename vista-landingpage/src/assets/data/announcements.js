@@ -15,15 +15,12 @@ const DATE = new Intl.DateTimeFormat('en-PH', { year: 'numeric', month: 'long', 
 // typed in the dashboard would otherwise show as blank lines at the end of a post.
 export function announcementFromApi(row) {
   const content = (row.content || '').trim();
-  const summary = row.summary ? row.summary.trim() : row.summary;
   return {
     id: row.id,
     date: row.published_at ? DATE.format(new Date(row.published_at)) : '',
     category: row.category,
     title: row.title,
-    excerpt: summary || content,
     content,
-    summary,
     image: row.image_url,
     isPinned: row.is_pinned,
   };

@@ -37,7 +37,7 @@ const STATES = {
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 
 const EMPTY_FORM = {
-  title: '', summary: '', content: '', category: 'General', target_audience: 'all',
+  title: '', content: '', category: 'General', target_audience: 'all',
   is_public: false, is_pinned: false, mode: 'publish', publish_at: '', expires_at: '',
   notify_parents: false, image_consent: false, remove_image: false,
 }
@@ -50,7 +50,6 @@ function formFrom(a) {
   return {
     ...EMPTY_FORM,
     title: a.title,
-    summary: a.summary || '',
     content: a.content,
     category: a.category || 'General',
     target_audience: a.target_audience || 'all',
@@ -139,7 +138,6 @@ export default function Announcements() {
     const fd = new FormData()
     fd.append('title', form.title)
     fd.append('content', form.content)
-    fd.append('summary', form.summary)
     fd.append('category', form.category)
     fd.append('target_audience', form.target_audience)
     fd.append('is_public', String(isSuperAdmin && reachesParents && form.is_public))
@@ -265,7 +263,6 @@ export default function Announcements() {
                         {a.is_pinned && <Pin size={14} className="text-brand-600" aria-label="Pinned" />}
                         <h3 className="font-semibold text-slate-900 break-words">{a.title}</h3>
                       </div>
-                      {a.summary && <p className="text-sm text-slate-700 mt-1 font-medium">{a.summary}</p>}
                       <p className="text-sm text-slate-600 mt-1.5 leading-relaxed whitespace-pre-wrap break-words">{a.content}</p>
                       <div className="flex items-center gap-2 mt-3 flex-wrap text-xs">
                         {isAnyAdmin && <span className={`px-2 py-0.5 rounded-full font-medium ${st.cls}`}>{st.label}</span>}
@@ -319,14 +316,10 @@ export default function Announcements() {
               onChange={e => set({ title: e.target.value })} required />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Summary</label>
-            <input className="input" maxLength={300} placeholder="One line shown on cards and in notifications"
-              value={form.summary} onChange={e => set({ summary: e.target.value })} />
-          </div>
-          <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">Content *</label>
             <textarea className="input min-h-32 resize-y" placeholder="Write the announcement..."
               value={form.content} onChange={e => set({ content: e.target.value })} required />
+            <p className="text-xs text-slate-500 mt-1">The opening lines are what cards and notifications show, so lead with the main point.</p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

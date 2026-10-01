@@ -81,7 +81,7 @@ const MULTICAST_LIMIT = 500;
 // the notification rows has committed — the in-app list is the source of truth,
 // the push is a best-effort nudge towards it. Its own Android channel keeps
 // announcements separately mutable from any other alert the app shows.
-async function sendAnnouncement(userIds, { id, title, summary }) {
+async function sendAnnouncement(userIds, { id, title, body }) {
   try {
     if (!ensureInit()) return { sent: 0, skipped: 'firebase-not-initialized' };
 
@@ -92,7 +92,7 @@ async function sendAnnouncement(userIds, { id, title, summary }) {
     for (let i = 0; i < rows.length; i += MULTICAST_LIMIT) {
       const batch = rows.slice(i, i + MULTICAST_LIMIT);
       const r = await multicast({
-        notification: { title, body: summary },
+        notification: { title, body },
         data: { type: 'announcement', announcement_id: String(id) },
         android: { notification: { channelId: 'vista_announcements' } },
         tokens: batch.map(t => t.token),

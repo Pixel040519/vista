@@ -184,7 +184,6 @@ CREATE TABLE announcements (
     category VARCHAR(20) NOT NULL DEFAULT 'General'
         CONSTRAINT announcements_category_check
         CHECK (category IN ('General', 'Enrollment', 'Event', 'Academic', 'Holiday', 'Suspension')),
-    summary VARCHAR(300),
     image_path TEXT,
     is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
     published_at TIMESTAMPTZ,                     -- NULL = draft, future = scheduled

@@ -126,11 +126,6 @@ function AnnouncementCard({ post }) {
           }`}
         >
           <div ref={textRef} className="selectable">
-            {post.summary && (
-              <p className="mb-3 font-medium leading-relaxed text-slate-700 dark:text-slate-200">
-                {post.summary}
-              </p>
-            )}
             <p className="whitespace-pre-line leading-relaxed text-slate-600 dark:text-slate-300">
               {post.content}
             </p>

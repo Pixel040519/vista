@@ -128,7 +128,7 @@ which no page rendered.
   already fits. ←/→ work while focus is inside the track. `.no-scrollbar` in `style.css` hides the bar.
 - **Every card has a 16:9 media slot**, picture or not. A post without an image gets a navy tile
   with its category's stroke icon in that slot, so a mixed row lines up instead of alternating
-  between two card heights. Titles reserve two lines and excerpts clamp to three for the same reason.
+  between two card heights. Titles reserve two lines and the post's opening text clamps to three for the same reason.
 - **No autoplay.** A notice that moves while it is being read is the carousel failure, and an
   accessibility one.
 - **A card opens the post in a modal on Home, not on `/announcements`** (`NewsDialog`). It has a
@@ -175,7 +175,7 @@ Built to stay short however much the school posts:
 - The hook de-duplicates by id (a post published between clicks shifts every offset), treats
   an empty page as the end even if `total` disagrees (a post unpublished between clicks), and
   falls back to "the last page came back full" against an API without `total`.
-- `announcementFromApi()` trims `content` and `summary`: they render with
+- `announcementFromApi()` trims `content`: it renders with
   `whitespace-pre-line`, so a trailing Enter showed as blank lines at the end of a post.
 - The Facebook button beside the heading reads **"Follow us on Facebook"**. It said "See all
   updates on Facebook", which implied this page was the partial list — untrue once it paged

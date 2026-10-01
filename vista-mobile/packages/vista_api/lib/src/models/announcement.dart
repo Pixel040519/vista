@@ -7,7 +7,6 @@ class Announcement {
     required this.content,
     required this.category,
     required this.publishedAt,
-    this.summary,
     this.imageUrl,
     this.isPinned = false,
   });
@@ -17,12 +16,8 @@ class Announcement {
   final String content;
   final String category;
   final DateTime publishedAt;
-  final String? summary;
   final String? imageUrl;
   final bool isPinned;
-
-  /// The one-line version for cards: the summary if the school wrote one.
-  String get preview => (summary != null && summary!.isNotEmpty) ? summary! : content;
 
   factory Announcement.fromJson(Map<String, dynamic> json) => Announcement(
         id: json['id'].toString(),
@@ -32,7 +27,6 @@ class Announcement {
         publishedAt: DateTime.parse(
                 (json['published_at'] ?? json['created_at']) as String)
             .toLocal(),
-        summary: json['summary'] as String?,
         imageUrl: json['image_url'] as String?,
         isPinned: json['is_pinned'] == true,
       );

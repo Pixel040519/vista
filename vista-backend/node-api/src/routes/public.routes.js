@@ -40,7 +40,7 @@ router.get('/announcements', async (req, res, next) => {
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     const [r, c] = await Promise.all([
       query(
-        `SELECT a.id, a.title, a.summary, a.content, a.category, a.is_pinned,
+        `SELECT a.id, a.title, a.content, a.category, a.is_pinned,
                 a.published_at, a.image_path
            FROM announcements a
           WHERE ${LIVE_PUBLIC}

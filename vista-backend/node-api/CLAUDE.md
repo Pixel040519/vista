@@ -1099,6 +1099,11 @@ commit. It is a no-op unless the post reaches parents, is live now, and has neve
 a scheduled post has no moment at which it could run, and notifying before a post is visible
 would send parents to something they cannot open. So re-saving never pushes twice.
 
+The notification and push body is `previewOf(content)` — the post's first 180 characters,
+whitespace collapsed and cut at a word. There is no separate summary field:
+`2026_10_01_remove_announcement_summary.sql` dropped it, because every reader already fell
+back to the content and, where one was written, showed it again above the content.
+
 ## Facility gallery (`facility.routes.js` — `/api/facilities`)
 
 `authenticate` + `authorizeSuperAdmin` on every route — the website is one office's voice.

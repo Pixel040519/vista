@@ -41,7 +41,7 @@ const LIVE_SQL = `(a.published_at IS NOT NULL AND a.published_at <= NOW()
     AND (a.expires_at IS NULL OR a.expires_at > NOW()))`;
 
 const SELECT_SQL = `
-  SELECT a.id, a.title, a.content, a.summary, a.category, a.target_audience,
+  SELECT a.id, a.title, a.content, a.category, a.target_audience,
          a.is_public, a.is_pinned, a.published_at, a.expires_at, a.notified_at,
          a.image_path, a.posted_by, a.created_at, a.updated_at,
          u.full_name AS posted_by_name, ${STATE_SQL} AS state
@@ -56,7 +56,7 @@ function present(req, row) {
 // Multipart bodies arrive as strings; Joi's default convert turns "true" and
 // ISO strings into booleans and dates. An empty string from a cleared field
 // means "not set", which Joi would otherwise reject as an invalid date.
-const OPTIONAL_FIELDS = ['summary', 'publish_at', 'expires_at'];
+const OPTIONAL_FIELDS = ['publish_at', 'expires_at'];
 function blanksToNull(body) {
   const out = { ...body };
   for (const k of OPTIONAL_FIELDS) if (out[k] === '') out[k] = null;
@@ -66,7 +66,6 @@ function blanksToNull(body) {
 const schema = Joi.object({
   title:           Joi.string().trim().min(1).max(255).required(),
   content:         Joi.string().trim().min(1).max(20000).required(),
-  summary:         Joi.string().trim().max(300).allow(null),
   category:        Joi.string().valid(...CATEGORIES).default('General'),
   target_audience: Joi.string().valid(...AUDIENCES).default('all'),
   is_public:       Joi.boolean().default(false),
@@ -125,6 +124,17 @@ function resolvePublishedAt(value, existing) {
   return current && new Date(current) <= new Date() ? current : new Date();
 }
 
+// The notification and push body: the start of the post, cut at a word rather
+// than mid-word. The full text is one tap away in the app.
+const PREVIEW_LENGTH = 180;
+function previewOf(content) {
+  const text = content.replace(/\s+/g, ' ').trim();
+  if (text.length <= PREVIEW_LENGTH) return text;
+  const cut = text.slice(0, PREVIEW_LENGTH);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > PREVIEW_LENGTH / 2 ? cut.slice(0, space) : cut).replace(/[\s.,;:!?-]+$/, '')}…`;
+}
+
 async function loadRow(id, db = { query }) {
   const r = await db.query(`${SELECT_SQL} WHERE a.id = $1 AND a.is_active = TRUE`, [id]);
   if (!r.rowCount) throw new AppError('Announcement not found.', 404);
@@ -142,7 +152,7 @@ async function notifyParents(client, row) {
   if (row.notified_at) return [];
   if (!PARENT_AUDIENCES.includes(row.target_audience) || row.state !== 'published') return [];
 
-  const body = row.summary || row.content.slice(0, 180);
+  const body = previewOf(row.content);
   const r = await client.query(
     `INSERT INTO notifications (recipient_id, title, body, type, reference_id)
      SELECT u.id, $1, $2, 'announcement', $3
@@ -160,7 +170,7 @@ function pushAfterCommit(recipients, row) {
   pushService.sendAnnouncement(recipients, {
     id: row.id,
     title: row.title,
-    summary: row.summary || row.content.slice(0, 180),
+    body: previewOf(row.content),
   });
 }
 
@@ -201,10 +211,10 @@ router.post('/', authorizeAnyAdmin, uploadAnnouncementImage, async (req, res, ne
     const { row, recipients } = await withTransaction(async (client) => {
       const ins = await client.query(
         `INSERT INTO announcements
-           (title, content, summary, category, target_audience, is_public, is_pinned,
+           (title, content, category, target_audience, is_public, is_pinned,
             published_at, expires_at, image_path, posted_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
-        [value.title, value.content, value.summary, value.category, value.target_audience,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+        [value.title, value.content, value.category, value.target_audience,
          value.is_public, value.is_pinned, resolvePublishedAt(value, null), value.expires_at,
          image?.image_path || null, req.user.id]
       );
@@ -242,11 +252,11 @@ router.put('/:id', authorizeAnyAdmin, uploadAnnouncementImage, async (req, res, 
     const { row, recipients } = await withTransaction(async (client) => {
       await client.query(
         `UPDATE announcements
-            SET title=$1, content=$2, summary=$3, category=$4, target_audience=$5,
-                is_public=$6, is_pinned=$7, published_at=$8, expires_at=$9,
-                image_path=$10, updated_at=NOW(), updated_by=$11
-          WHERE id=$12`,
-        [value.title, value.content, value.summary, value.category, value.target_audience,
+            SET title=$1, content=$2, category=$3, target_audience=$4,
+                is_public=$5, is_pinned=$6, published_at=$7, expires_at=$8,
+                image_path=$9, updated_at=NOW(), updated_by=$10
+          WHERE id=$11`,
+        [value.title, value.content, value.category, value.target_audience,
          value.is_public, value.is_pinned, resolvePublishedAt(value, existing), value.expires_at,
          imagePath, req.user.id, existing.id]
       );
