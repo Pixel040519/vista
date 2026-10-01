@@ -1,7 +1,6 @@
 // src/components/Navbar.jsx
 import React, { useState, useEffect } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
-import { VISTA_LOGIN_URL } from '../../config';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 
 const Navbar = () => {
   const navigate = useNavigate();
@@ -42,12 +41,24 @@ const Navbar = () => {
     <>
       {/* Utility bar — scrolls away, unlike the nav below it */}
       <div className="bg-[#001f3f] text-slate-300 dark:bg-[#001024]">
-        <div className={`${label} mx-auto flex h-9 max-w-7xl items-center justify-end px-6 sm:px-12 lg:px-24`}>
-          {/* The full address needs xl to fit; the locality alone carries the smaller widths. */}
-          <span className="selectable xl:hidden">Grace Park West, Caloocan City</span>
-          <span className="selectable hidden xl:inline">
-            #253 C. Cordero St., Bet. 5th &amp; 6th Ave. Grace Park West, Caloocan City
+        <div className={`${label} mx-auto flex h-11 max-w-7xl items-stretch justify-end px-6 sm:justify-between sm:px-12 lg:px-24`}>
+          <span className="hidden items-center text-slate-400 sm:flex">
+            Knowledge · Benevolence · Courage
           </span>
+          <Link
+            to="/portal"
+            className="flex items-center gap-2 text-yellow-400 transition-colors hover:text-yellow-300 sm:border-l sm:border-white/15 sm:pl-5"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="8" r="4" />
+              <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
+            </svg>
+            VISTA Portal
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M5 12h14" />
+              <path d="m13 6 6 6-6 6" />
+            </svg>
+          </Link>
         </div>
       </div>
 
@@ -106,15 +117,6 @@ const Navbar = () => {
                 </svg>
               )}
             </button>
-
-            <a
-              href={VISTA_LOGIN_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="rounded-full bg-yellow-400 px-6 py-2.5 text-[13.5px] font-bold tracking-wide text-[#002855] shadow-sm transition-colors hover:bg-yellow-300 dark:bg-yellow-500 dark:hover:bg-yellow-400"
-            >
-              LOGIN
-            </a>
           </nav>
 
           {/* Mobile Controls */}
@@ -172,15 +174,14 @@ const Navbar = () => {
                 </li>
               ))}
               <li className="border-t border-slate-200 pt-4 dark:border-white/10">
-                <a
-                  href={VISTA_LOGIN_URL}
-                  target="_blank"
-                  rel="noreferrer"
+                {/* The strip's Portal link scrolls away; this one stays with the pinned nav. */}
+                <Link
+                  to="/portal"
                   onClick={() => setIsOpen(false)}
                   className="block w-full rounded-full bg-yellow-400 py-3 text-center text-sm font-bold tracking-wide text-[#002855] shadow-sm transition-colors hover:bg-yellow-300 dark:bg-yellow-500 dark:hover:bg-yellow-400"
                 >
-                  LOGIN
-                </a>
+                  VISTA PORTAL
+                </Link>
               </li>
             </ul>
           </div>

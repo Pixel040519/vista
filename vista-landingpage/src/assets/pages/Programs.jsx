@@ -7,9 +7,12 @@ import PageHeader from '../components/PageHeader';
 import { Label, Icon, IconTile, SECTION, HEADING } from '../components/ui';
 import EnrollCta from '../components/EnrollCta';
 
+// `admissions` is the id of the Admissions accordion section that holds this
+// level's requirements; the card's link lands on it and opens it.
 const academicLevels = [
   {
     id: 'tots',
+    admissions: 'tots-new',
     title: 'Tots (Preschool)',
     levels: 'Pre-Nursery, Nursery, Kinder',
     description:
@@ -23,6 +26,7 @@ const academicLevels = [
   },
   {
     id: 'elementary',
+    admissions: 'elem-shs-new',
     title: 'Grade School',
     levels: 'Grades 1 to 6',
     description:
@@ -36,6 +40,7 @@ const academicLevels = [
   },
   {
     id: 'jhs',
+    admissions: 'elem-shs-new',
     title: 'Junior High School',
     levels: 'Grades 7 to 10',
     description:
@@ -49,6 +54,7 @@ const academicLevels = [
   },
   {
     id: 'shs',
+    admissions: 'elem-shs-new',
     title: 'Senior High School',
     levels: 'Grades 11 to 12',
     description:
@@ -112,15 +118,12 @@ const Programs = () => {
                   <p className="leading-relaxed text-slate-600 dark:text-slate-300">
                     {level.description}
                   </p>
-                  <div className="mt-auto flex items-center justify-between border-t border-slate-100 pt-5 dark:border-white/10">
-                    <Label className="text-slate-500 dark:text-slate-400">
-                      Accredited curriculum
-                    </Label>
+                  <div className="mt-auto border-t border-slate-100 pt-5 dark:border-white/10">
                     <button
-                      onClick={() => navigate('/admissions')}
+                      onClick={() => navigate(`/admissions#${level.admissions}`)}
                       className="font-semibold text-blue-700 hover:underline dark:text-yellow-400"
                     >
-                      Inquire now &rarr;
+                      Admission requirements &rarr;
                     </button>
                   </div>
                 </article>

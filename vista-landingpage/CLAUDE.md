@@ -22,7 +22,7 @@ npm run lint
 
 `vite.config.js` sets `server.port: 5174`. Both this app and `vista-dashboard` used to default
 to 5173, so whichever started second silently moved — which meant the `VITE_VISTA_URL` fallback
-could point the LOGIN button at *this* app instead of the dashboard. Do not remove the pin.
+could point the staff sign-in links at *this* app instead of the dashboard. Do not remove the pin.
 
 ## Linking into the VISTA dashboard
 
@@ -31,8 +31,29 @@ cross-origin anchors, never react-router routes.
 
 - `src/config.js` reads `VITE_VISTA_URL` (see `.env.example`) and exports `VISTA_LOGIN_URL`.
   The fallback is `http://localhost:5173`, the port the dashboard pins.
-- Three places link there: the desktop LOGIN, the mobile-menu LOGIN, and Home's
-  "Open the portal". All are `<a target="_blank" rel="noreferrer">`.
+- **Only the Portal page links there** (`pages/Portal.jsx`, route `/portal`): its Teachers
+  and Administrators rows, both `<a target="_blank" rel="noreferrer">` to the same `/login`.
+  They are two rows on purpose and one destination on purpose — VISTA decides what an
+  account sees from its role after sign-in, so separate login pages would add a wrong door
+  and no security. The navbar no longer links out: the navy strip's "VISTA Portal", the
+  mobile menu's button and Home's "Open the portal" are all router links to `/portal`.
+- The strip above the nav holds the motto and that Portal link; the address that used to
+  sit there is on Contact and in the footer. The strip scrolls away while the nav stays
+  pinned, which is why the mobile menu keeps its own Portal button.
+- **Parents do not sign in on the web.** The Portal page sends them to the `vista_parent`
+  app: download buttons from `VITE_PARENT_APP_ANDROID_URL` / `VITE_PARENT_APP_IOS_URL`
+  (each optional — a button renders only for a link that is set, and with neither the panel
+  says the school office provides the app), then the four setup steps, which restate the
+  invitation flow in the root `CLAUDE.md`. Keep them in step with it: there is no
+  self-registration, and no label here may imply a sign-up.
+- The page describes **how each audience gets in, not what each role can do** — the
+  per-role scope blurbs were taken out deliberately. Home's portal band follows the same
+  rule: three cards (Parents & guardians, Teachers, Administrators), each an icon, a name
+  and a "Mobile app" / "Web" label, under the same headline as the Portal page. It used to
+  list Advisers as well, with a line on what each role does.
+- **VISTA is named on this site as the school's "academic performance monitoring system"**,
+  on Home and on the Portal page alike — not "student monitoring system". Use that phrase
+  if VISTA is introduced anywhere else here.
 - `import.meta.env` is **inlined at build time**, so production needs `VITE_VISTA_URL` set
   before `npm run build`; it cannot be changed afterwards without rebuilding.
 
@@ -84,6 +105,17 @@ band on Home read "How to enroll"; the band on Programs reads "See admission req
 online form to a page whose first block says it is for information only and that requirements
 are submitted at the school office. There is no online application, so no label may imply one —
 "Apply now" and "Enroll now" included.
+
+**Each level card on Programs links to its own requirements.** "Admission requirements →" goes
+to `/admissions#<section id>` (`admissions` on each entry of `academicLevels`), and Admissions
+opens the section the hash names on arrival — Tots to `tots-new`, every other level to
+`elem-shs-new`, because Admissions keeps one list for Elementary through Senior High. The
+accordion starts closed otherwise. Admissions tracks the last hash it saw, so a second link
+while already on the page opens its section too; the scrolling is `ScrollManager`'s, and each
+section carries `scroll-mt-28` to clear the sticky nav. Renaming a section `id` breaks these
+links silently: the page just opens with everything closed. The cards used to read
+"Inquire now", which promised a form, and carried an "Accredited curriculum" label that
+nobody had confirmed — both were removed.
 
 ## News carousel on Home (`components/NewsCarousel.jsx`)
 
@@ -145,6 +177,9 @@ Built to stay short however much the school posts:
   falls back to "the last page came back full" against an API without `total`.
 - `announcementFromApi()` trims `content` and `summary`: they render with
   `whitespace-pre-line`, so a trailing Enter showed as blank lines at the end of a post.
+- The Facebook button beside the heading reads **"Follow us on Facebook"**. It said "See all
+  updates on Facebook", which implied this page was the partial list — untrue once it paged
+  through every public post.
 
 ## Design system
 

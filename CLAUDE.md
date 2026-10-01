@@ -21,7 +21,8 @@ services plus the Flutter mobile apps:
 
 The landing page is **not** part of the application. It is the school's brochure site and must
 keep rendering with the backend down. It reaches VISTA in two ways: a link to the dashboard's
-`/login` at `VITE_VISTA_URL`, and — optionally, when `VITE_API_URL` is set — reads of the
+`/login` at `VITE_VISTA_URL` — from its own `/portal` page, which sends staff there and
+parents to the `vista_parent` app — and — optionally, when `VITE_API_URL` is set — reads of the
 announcements and facility gallery that admins publish (see "Public content" below). Every
 read fails soft, but only the gallery falls back to bundled content: announcements have no
 bundled list on purpose, and their section says there is nothing rather than invent something.
@@ -88,7 +89,7 @@ Flutter apps    ↗                       → FastAPI (/api/ai/* proxied to :800
 
 The frontend **never calls FastAPI directly** — all AI endpoints go through Node's `ai.routes.js` where JWT + role checks live. The FastAPI service stays role-agnostic.
 
-The landing page sits outside this: it links into the dashboard's login, and reads
+The landing page sits outside this: its `/portal` page links into the dashboard's login, and reads
 `/api/public/*` — **the only unauthenticated reads in Node**, where every other route is
 JWT-gated. That exception was a deliberate decision and is kept deliberately narrow: GET only,
 explicit column lists, only rows an admin made public, rate-limited per IP. Do not widen it

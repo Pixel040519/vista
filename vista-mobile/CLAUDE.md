@@ -67,6 +67,20 @@ Parent app must render a dedicated screen showing the reason and a "Contact scho
 
 - iOS + Android: `ph.nrys.vista.parent`.
 
+## Where parents are told about the app
+
+The landing page's `/portal` (`vista-landingpage/src/assets/pages/Portal.jsx`) is the public
+guide to this app: download buttons, four setup steps and three common questions. Two things
+there depend on this repo:
+
+- **The store links** are build-time env on the landing page, `VITE_PARENT_APP_ANDROID_URL`
+  and `VITE_PARENT_APP_IOS_URL`. Each is optional; a button appears only for a link that is
+  set. Fill them in when a store listing goes live — nothing here publishes them.
+- **The setup steps restate the activation flow above** (the school authorizes the email →
+  install → a one-time code valid 10 minutes → the parent chooses a password and is signed
+  in) and the FAQ restates **Forgot password?** on the login screen. Change either flow and
+  that page has to change with it.
+
 ## Flutter conventions
 
 - **Router refresh on session change**: `GoRouter.redirect` does not re-run when a Riverpod provider changes. `router.dart` bridges `sessionProvider` → `refreshListenable` via a `ValueNotifier<int>` incremented inside `ref.listen(sessionProvider, ...)`. Without this the splash redirect fires once at boot, sees `session.isLoading`, and never navigates away when `/me` resolves.

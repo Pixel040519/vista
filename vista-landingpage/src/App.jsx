@@ -6,6 +6,7 @@ import Programs from './assets/pages/Programs';
 import Contact from './assets/pages/Contact';
 import Admissions from './assets/pages/Admissions';
 import Announcements from './assets/pages/Announcements';
+import Portal from './assets/pages/Portal';
 import './style.css';
 
 // React Router keeps the previous scroll position across navigations and ignores
@@ -66,6 +67,7 @@ function App() {
           <Route path="/contact" element={<Contact />} />
           <Route path="/announcements" element={<Announcements />} />
           <Route path="/admissions" element={<Admissions />} />
+          <Route path="/portal" element={<Portal />} />
         </Routes>
       </main>
     </div>

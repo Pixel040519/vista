@@ -30,7 +30,8 @@ cp .env.example .env.local
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `VITE_VISTA_URL` | Where the VISTA dashboard is served from. The LOGIN button and "Open the portal" link to `<VITE_VISTA_URL>/login`. | `http://localhost:5173` |
+| `VITE_VISTA_URL` | Where the VISTA dashboard is served from. The Portal page's Teachers and Administrators rows link to `<VITE_VISTA_URL>/login`. | `http://localhost:5173` |
+| `VITE_PARENT_APP_ANDROID_URL`, `VITE_PARENT_APP_IOS_URL` | Store listings for the parent app. Each set one becomes a download button on `/portal`; with neither, the page points parents to the school office. | *(empty)* |
 | `VITE_API_URL` | Where the Node API is served from, for the read-only `/api/public/*` calls. **Unset means a fully static site** — which is also exactly what it falls back to when the API is unreachable. | *(empty)* |
 
 Vite inlines `import.meta.env` at build time, so set both **before** `npm run build` for
@@ -46,12 +47,14 @@ here and nothing errors. And the API's `ALLOWED_ORIGINS` must include this site'
 |---|---|
 | `/` | Full-screen campus hero, quick facts, **news & announcements carousel** (newest 9; a card opens the post in a modal), programme table, **facilities mosaic** (four rooms at a time, arrows to the rest; a card opens the photo viewer), VISTA portal, enrolment CTA |
 | `/about` | Preface, brief history, vision and mission, the Guiding Principles, school hymn |
-| `/programs` | The four academic levels and the curriculum highlights |
-| `/admissions` | Requirements by student type (accordion), when to enroll |
-| `/announcements` | Every public post, six at a time with **Load more announcements**; cards start collapsed and expand in place with Read more / Show less. Links to the Facebook page |
+| `/programs` | The four academic levels and the curriculum highlights. Each level's **Admission requirements** link opens its section on `/admissions` |
+| `/admissions` | Requirements by student type (accordion; `/admissions#<section id>` arrives with that section open), when to enroll |
+| `/announcements` | Every public post, six at a time with **Load more announcements**; cards start collapsed and expand in place with Read more / Show less. **Follow us on Facebook** links to the school's page |
 | `/contact` | Location, phones, emails, Facebook |
+| `/portal` | How each audience gets into VISTA: parents get the mobile app (download buttons, four setup steps, common questions); teachers and administrators get a link to the dashboard's sign-in |
 
-There is no `/login` route here — LOGIN opens the dashboard in a new tab.
+There is no `/login` route here — the Portal page's staff rows open the dashboard in a new
+tab. "VISTA Portal" in the strip above the navigation leads to `/portal`.
 
 ## Content
 
@@ -96,7 +99,7 @@ applied when re-exporting them.
 ```
 src/
   App.jsx                    routes + ScrollManager
-  config.js                  VITE_VISTA_URL → VISTA_LOGIN_URL, VITE_API_URL → API_URL
+  config.js                  VITE_VISTA_URL → VISTA_LOGIN_URL, VITE_API_URL → API_URL, parent app store links
   style.css                  Tailwind, fonts, cursor/selection/drag rules, the mosaic's page-turn animation
   assets/
     components/  Navbar, Footer, PageHeader, ui.jsx (shared primitives),
@@ -106,7 +109,7 @@ src/
                  EnrollCta (the yellow "Ready to enroll" band)
     data/        announcements.js, facilities.js  — API mappers
     lib/         publicContent.js  — the fail-soft reads and their hooks
-    pages/       Home, About, Programs, Admissions, Announcements, Contact
+    pages/       Home, About, Programs, Admissions, Announcements, Contact, Portal
 ```
 
 `EnrollCta` is the **only** renderer of the yellow CTA band. It was duplicated between Home

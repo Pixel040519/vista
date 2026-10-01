@@ -1,6 +1,6 @@
 // src/pages/Admissions.jsx
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import PageHeader from '../components/PageHeader';
@@ -86,7 +86,18 @@ const Admissions = () => {
   const navigate = useNavigate();
   // Single-open accordion, starting with everything closed: opening a section
   // closes whichever one was open, and clicking an open section closes it.
-  const [openId, setOpenId] = useState('');
+  //
+  // A link that names a section in its hash (the Programs cards do) arrives with
+  // that section already open; ScrollManager does the scrolling. Tracked against
+  // the last hash seen so a second link while already here opens its section too.
+  const { hash } = useLocation();
+  const linked = sections.some((s) => s.id === hash.slice(1)) ? hash.slice(1) : '';
+  const [openId, setOpenId] = useState(linked);
+  const [seenHash, setSeenHash] = useState(hash);
+  if (hash !== seenHash) {
+    setSeenHash(hash);
+    if (linked) setOpenId(linked);
+  }
   const toggle = (id) => setOpenId((prev) => (prev === id ? '' : id));
 
   return (
@@ -135,7 +146,10 @@ const Admissions = () => {
                 return (
                   <div
                     key={s.id}
-                    className={i < sections.length - 1 ? 'border-b border-slate-200 dark:border-white/10' : ''}
+                    id={s.id}
+                    className={`scroll-mt-28 ${
+                      i < sections.length - 1 ? 'border-b border-slate-200 dark:border-white/10' : ''
+                    }`}
                   >
                     <h3>
                       <button

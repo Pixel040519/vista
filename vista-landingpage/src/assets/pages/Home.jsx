@@ -1,10 +1,9 @@
 // src/pages/Home.jsx
 import React, { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import { Label } from '../components/ui';
-import { VISTA_LOGIN_URL } from '../../config';
 import { useFacilities } from '../lib/publicContent';
 import NewsCarousel from '../components/NewsCarousel';
 import FacilityMosaic from '../components/FacilityMosaic';
@@ -42,8 +41,18 @@ const academicLevels = [
 
 const portalRoles = [
   {
+    who: 'Parents & guardians',
+    how: 'Mobile app',
+    icon: (
+      <>
+        <rect x="6" y="2" width="12" height="20" rx="2" />
+        <path d="M11 18h2" />
+      </>
+    ),
+  },
+  {
     who: 'Teachers',
-    what: 'Record attendance and scores per subject, and write observations as they go.',
+    how: 'Web',
     icon: (
       <>
         <path d="M12 6.5C10.5 5 8.5 4.5 4 4.5v13c4.5 0 6.5.5 8 2 1.5-1.5 3.5-2 8-2v-13c-4.5 0-6.5.5-8 2z" />
@@ -52,23 +61,13 @@ const portalRoles = [
     ),
   },
   {
-    who: 'Advisers',
-    what: 'See one class across every learning area — the whole row, not one column.',
+    who: 'Administrators',
+    how: 'Web',
     icon: (
       <>
         <path d="M17 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
         <circle cx="9.5" cy="7" r="3.5" />
         <path d="M22 20v-2a4 4 0 0 0-3-3.87" />
-      </>
-    ),
-  },
-  {
-    who: 'Parents',
-    what: 'Follow your own child’s attendance, grades and behavior from the parent app.',
-    icon: (
-      <>
-        <rect x="6" y="2" width="12" height="20" rx="2" />
-        <path d="M11 18h2" />
       </>
     ),
   },
@@ -262,21 +261,18 @@ const Home = () => {
                 The VISTA portal
               </Label>
               <h2 className="mb-4 text-3xl font-bold leading-tight tracking-tight text-[#001f3f] sm:text-[36px] dark:text-white">
-                Everyone sees exactly their own part
+                Parents use the app. Staff sign in on the web.
               </h2>
               <p className="mb-7 leading-relaxed text-slate-600 dark:text-slate-300">
-                VISTA is the school&apos;s own student monitoring system. Access is decided by role,
-                so a teacher, an adviser and a parent each open a different portal with the same
-                login.
+                VISTA is the school&apos;s own academic performance monitoring system. The portal
+                page shows each group where to start.
               </p>
-              <a
-                href={VISTA_LOGIN_URL}
-                target="_blank"
-                rel="noreferrer"
+              <Link
+                to="/portal"
                 className="font-semibold text-blue-700 hover:underline dark:text-yellow-400"
               >
                 Open the portal →
-              </a>
+              </Link>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-3">
@@ -302,10 +298,7 @@ const Home = () => {
                     </svg>
                   </div>
                   <div className="font-semibold text-[#001f3f] dark:text-white">{role.who}</div>
-                  <div className="text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                    {role.what}
-                  </div>
-                  <div className="mt-1 h-[3px] w-8 rounded-full bg-yellow-400" />
+                  <Label className="text-slate-500 dark:text-slate-400">{role.how}</Label>
                 </div>
               ))}
             </div>
