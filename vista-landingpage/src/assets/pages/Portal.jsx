@@ -43,7 +43,7 @@ const questions = [
   },
   {
     q: 'I forgot my password',
-    a: 'Parents can reset it from the app’s sign-in screen with a code sent by email. Teachers and administrators should contact the school office.',
+    a: 'Parents can reset it from the app’s sign-in screen with a code sent by email. Teachers and administrators choose “Forgot password?” on the VISTA sign-in page.',
   },
   {
     q: 'I have more than one child at the school',
@@ -160,7 +160,8 @@ const Portal = () => (
               ))}
             </div>
             <p className="mt-auto text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-              Both open VISTA in a new tab. Accounts are issued by the school; there is no sign-up.
+              Both open VISTA in a new tab. Access is by invitation; there is no sign-up. First
+              time? Choose &ldquo;Activate your account&rdquo; there and set your own password.
             </p>
           </div>
         </div>

@@ -1,71 +1,105 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Search, MoreHorizontal, X, Plus, Info, Phone, Mail, Home } from 'lucide-react'
+import { Search, X, Plus, Phone, Mail, Home, RotateCcw, ShieldCheck, Pencil, UserRound, ShieldOff } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { Modal, PhoneInput } from './UI'
 import { useGuardianEmailCheck, describeEmailCheck } from './GuardianEmailCheck'
 import { studentApi } from '../api/client'
+import { useAuth } from '../context/AuthContext'
 import {
-  accessOf, accessClasses, accessLabel, accessDetail, grantLabel, canInvite, canRevoke,
+  PARENT_ACCESS_STATES, accessOf, resolveParentAccess, canInvite, canRevoke,
 } from '../utils/parentAccess'
+import {
+  whenSignedIn, invitedLine, expiredLine, IN_PROGRESS_LINE, invitationOpenUntil,
+} from '../utils/accessDisplay'
+import {
+  RosterFilters, stateChips, PersonCell, AccessChip, AccessCell, RowActions, RowMenu, useRowMenus,
+  WhatHappensNext, InvitationCreated, titled,
+} from './AccountRoster'
 
-// The Parents tab of Account Management — Version A of the design.
+// The Parents tab of Account Management.
 //
-// It is a roster, the same shape as Teachers and Admins: search, state
-// chips, one table, a per-row Manage access menu. Everything it writes goes
-// through an endpoint that already existed, so this is a second ENTRY POINT to
-// each rule and never a second rule: `PUT /guardians/:gid` for the person's own
-// details (which fans out to every learner on the account and to `users`),
-// `POST /guardians` with `link_parent_id` to attach a learner, and the
-// invitation routes for access.
+// It is the same roster as Teachers and Admins — built from the same pieces in
+// AccountRoster.jsx, so the three tabs read as one page: search and state chips,
+// one table (person · what they cover · account access · actions), an Edit
+// pencil and a ⋯ menu, and the same "Invitation created" confirmation. What is
+// genuinely different stays different: a parent covers children rather than
+// classes, so a row also opens a panel listing them, and their access is
+// revoked rather than deactivated.
 //
-// What it owns that a learner's page cannot: every account at once, the whole
-// of one account — all its children, not just the learner you came from — and
-// therefore the access actions, which reach every one of those children.
+// Everything it writes goes through an endpoint that already existed, so this
+// is a second ENTRY POINT to each rule and never a second rule: `PUT
+// /guardians/:gid` for the person's own details (which fans out to every
+// learner on the account and to `users`), `POST /guardians` with
+// `link_parent_id` to attach a learner, and the invitation routes for access.
 
 // Same list as GuardianManager.jsx, AddStudentWizard.jsx and the batch upload.
 const RELATIONSHIPS = ['Mother','Father','Guardian','Grandmother','Grandfather','Aunt','Uncle','Sibling','Other']
 
-// The five derived states, in the order an admin works through them: the ones
-// needing attention first, the settled ones last.
-const STATES = [
-  { id: '',           label: 'All'                   },
-  { id: 'active',     label: 'Active'                },
-  { id: 'pending',    label: 'Pending Activation'    },
-  { id: 'in_progress',label: 'Activation In Progress'},
-  { id: 'expired',    label: 'Expired'               },
-  { id: 'revoked',    label: 'Revoked'               },
-]
+// The parent states in the order the staff tabs list theirs; Revoked stands
+// where Deactivated does. 'none' never appears here — every row is an account.
+const STATES = ['active', 'pending', 'in_progress', 'expired', 'revoked']
+  .map(id => PARENT_ACCESS_STATES.find(s => s.id === id))
 
 const childName = (c) => `${c.surname}, ${c.first_name}`
 const gradeShort = (g) => (g === 'Kinder' ? 'Kinder' : String(g || '').replace('Grade ', 'G'))
-// Two letters for the avatar. `nameInitial()` in utils/nameHelper.js gives one,
-// which reads as an abbreviation of nothing next to a "Surname, First" label.
-const initials = (p) =>
-  `${(p.surname || '')[0] || ''}${(p.first_name || '')[0] || ''}`.toUpperCase() || '?'
 
-export default function ParentAccounts({ createOpen, onCloseCreate, onCountChange }) {
+/** The one line under the chip — the staff tabs' wording, a parent's facts. */
+const parentAccessDetail = (p, meId) => {
+  switch (accessOf(p).id) {
+    case 'active':      return p.last_login_at ? `Last signed in ${whenSignedIn(p.last_login_at)}` : 'Has activated the VISTA Parent app'
+    case 'pending':     return invitedLine(p.invitation, meId)
+    case 'in_progress': return IN_PROGRESS_LINE
+    case 'expired':     return expiredLine(p.invitation)
+    case 'revoked':     return 'Access revoked · guardian records unchanged'
+    default:            return ''
+  }
+}
+
+/** The steps a parent follows — in the app, not on this site. */
+const parentSteps = (email) => [
+  'Open the VISTA Parent app on their phone',
+  'Tap "Activate my account"',
+  `Enter ${email} and follow the code sent there`,
+]
+
+const PARENT_NEXT = [
+  <>Saving sends nothing. The account waits as <b className="text-blue-700">Pending Activation</b> for 30 days.</>,
+  <>Tell them to open the VISTA Parent app and tap <b className="text-slate-800">Activate my account</b>.</>,
+  <>They enter this email, receive a 6-digit code, and create their password.</>,
+]
+
+export default function ParentAccounts({ createOpen, onOpenCreate, onCloseCreate, onCountsChange }) {
+  const { user } = useAuth()
+  const meId = user?.id
   const [parents, setParents]   = useState([])
-  const [summary, setSummary]   = useState({})
+  const [summary, setSummary]   = useState(null)   // null until the first load
   const [total, setTotal]       = useState(0)
   const [loading, setLoading]   = useState(true)
   const [search, setSearch]     = useState('')
   const [state, setState]       = useState('')
-  const [selected, setSelected] = useState(null)   // the account in the panel
-  const [menuFor, setMenuFor]   = useState(null)   // account id whose menu is open
+  const [panel, setPanel]       = useState(null)   // { id, mode: 'view' | 'edit' | 'add' }
+  const [revokeTarget, setRevokeTarget] = useState(null)
+  const [created, setCreated]   = useState(null)   // the account just invited
+  const [busy, setBusy]         = useState(false)
+  const menus = useRowMenus()
 
   const fetchParents = useCallback(async () => {
     setLoading(true)
     try {
       const res = await studentApi.listParents({ search, state, limit: 100 })
+      const sum = res.data.summary || {}
       setParents(res.data.parents || [])
-      setSummary(res.data.summary || {})
+      setSummary(sum)
       setTotal(res.data.total || 0)
-      onCountChange?.(res.data.all_total || 0)
+      onCountsChange?.({
+        total: res.data.all_total || 0,
+        waiting: (sum.pending || 0) + (sum.in_progress || 0) + (sum.expired || 0),
+      })
     } catch { /* interceptor toasts */ }
     setLoading(false)
-  }, [search, state, onCountChange])
+  }, [search, state, onCountsChange])
 
   // Debounced, like the Teachers and Admins tabs.
   useEffect(() => {
@@ -73,148 +107,133 @@ export default function ParentAccounts({ createOpen, onCloseCreate, onCountChang
     return () => clearTimeout(t)
   }, [fetchParents])
 
-  // The open menu belongs to a row; anything that changes the rows under it
-  // closes it, or it would hang over a different account than it was opened on.
-  useEffect(() => { setMenuFor(null) }, [parents])
-  useEffect(() => {
-    if (!menuFor) return
-    const close = () => setMenuFor(null)
-    const esc = (e) => { if (e.key === 'Escape') setMenuFor(null) }
-    window.addEventListener('click', close)
-    window.addEventListener('keydown', esc)
-    return () => { window.removeEventListener('click', close); window.removeEventListener('keydown', esc) }
-  }, [menuFor])
+  // The panel shows the row as it is in the list, so a refetch hands it the new
+  // one — adding a child must not leave the panel showing what was true before.
+  const selected = panel ? parents.find(p => p.id === panel.id) : null
 
-  // The panel renders a copy of the row, so a refetch has to hand it the new
-  // one — otherwise adding a child leaves the list correct and the panel still
-  // showing what was true before the save.
-  useEffect(() => {
-    if (!selected) return
-    const fresh = parents.find(p => p.id === selected.id)
-    if (fresh && fresh !== selected) setSelected(fresh)
-  }, [parents]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Access is per account, so any child's (student, guardian) pair reaches it.
+  // A scoped admin is only ever handed in-scope children, which is what the
+  // API's own scope check on that learner then accepts.
+  const anchorOf = (p) => p.children[0]
+  const kidsOf = (p) => p.children.length + (p.other_children || 0)
+
+  const run = async (fn, done) => {
+    setBusy(true)
+    try {
+      const res = await fn()
+      toast.success(res.data?.message || done, { duration: 6000 })
+      fetchParents()
+      return true
+    } catch { return false /* interceptor toasts */ } finally { setBusy(false) }
+  }
+
+  const grant = (p) => run(
+    () => studentApi.inviteGuardian(anchorOf(p).student_id, anchorOf(p).guardian_id),
+    'Invitation issued.'
+  )
+
+  const revoke = async () => {
+    const p = revokeTarget
+    const ok = await run(
+      () => studentApi.revokeGuardianAccess(anchorOf(p).student_id, anchorOf(p).guardian_id),
+      'Access revoked.'
+    )
+    if (ok) setRevokeTarget(null)
+  }
+
+  // Only what the state allows, in the same shape as the staff menus: grant
+  // first (Reissue, or Restore for a revoked account that already chose a
+  // password), then the account itself, and revoking below the line in red.
+  const menuFor = (p) => {
+    const access = accessOf(p)
+    const items = []
+    if (canInvite(access.id)) {
+      const restore = access.id === 'revoked' && p.has_password
+      items.push({
+        key: 'grant', icon: restore ? ShieldCheck : RotateCcw,
+        label: restore ? 'Restore access' : 'Reissue invitation',
+        hint: restore ? 'They can sign in again with their password' : 'Opens it again for 30 days',
+        run: () => grant(p),
+      })
+    }
+    items.push({ key: 'view', icon: UserRound, label: 'View account', hint: 'Contact details and children', run: () => setPanel({ id: p.id, mode: 'view' }) })
+    items.push({ key: 'edit', icon: Pencil, label: 'Edit details', run: () => setPanel({ id: p.id, mode: 'edit' }) })
+    items.push({ key: 'add', icon: Plus, label: 'Add a child', run: () => setPanel({ id: p.id, mode: 'add' }) })
+    const danger = canRevoke(access.id)
+      ? [{ key: 'revoke', icon: ShieldOff, label: 'Revoke access', hint: `Reaches ${kidsOf(p) === 1 ? 'their child' : `all ${kidsOf(p)} children`}`, run: () => setRevokeTarget(p) }]
+      : []
+    return { items, danger }
+  }
+
+  const filtered = !!(search || state)
 
   return (
-    <div className="space-y-4">
-      {/* Filters */}
-      <div className="card p-4 space-y-3">
-        <div className="relative">
-          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input className="input pl-10"
-            placeholder="Search by parent name, email, or the learner they look after"
-            value={search} onChange={e => setSearch(e.target.value)} />
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {STATES
-            .map(s => ({
-              ...s,
-              n: s.id ? (summary[s.id] || 0) : Object.values(summary).reduce((a, b) => a + b, 0),
-            }))
-            // A state nobody is in is not a filter worth offering. Two chips are
-            // never dropped, both for the reason the Enrollment page found the
-            // hard way: **All**, which is how you get back, and the **selected**
-            // one — which renders at 0 if it has to, or choosing a state whose
-            // last account just changed would hide the control still filtering
-            // the list, leaving an empty table that reads as "no parents".
-            .filter(s => !s.id || s.n > 0 || state === s.id)
-            .map(({ n, ...s }) => (
-              <button key={s.id || 'all'} onClick={() => setState(s.id)}
-                className={clsx(
-                  'px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors',
-                  state === s.id
-                    ? 'bg-brand-500 text-white border-brand-500'
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                )}>
-                {s.label} <span className="opacity-70">{n}</span>
-              </button>
-            ))}
-        </div>
-      </div>
+    <div className="space-y-5">
+      {/* No chips until the first load answers — "All 0" would read as "no parents". */}
+      <RosterFilters search={search} onSearch={setSearch}
+        placeholder="Search by name, email or child" label="Search parents"
+        chips={summary ? stateChips(STATES, summary, Object.values(summary).reduce((a, b) => a + b, 0)) : []}
+        value={state} onChange={setState} />
 
-      {/* Roster */}
       <div className="card overflow-visible">
         <div className="overflow-x-auto">
           <table className="table-base">
             <thead>
               <tr>
                 <th>Parent</th>
-                <th>Looks after</th>
-                <th>Parent app access</th>
-                <th>Registered email</th>
-                <th className="w-16"></th>
+                <th>Children</th>
+                <th>Account access</th>
+                <th className="!text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={5} className="py-10 text-center text-sm text-slate-400">Loading parent accounts…</td></tr>
+                <tr><td colSpan={4} className="py-10 text-center text-sm text-slate-500">Loading parent accounts…</td></tr>
               )}
               {!loading && !parents.length && (
-                <tr><td colSpan={5} className="py-12 text-center">
+                <tr><td colSpan={4} className="py-12 text-center">
                   <p className="text-sm text-slate-500">
-                    {search || state ? 'No parent accounts match these filters.' : 'No parent accounts yet.'}
+                    {filtered ? 'No accounts match this filter.' : 'No parent accounts yet. Invite a parent with their email — they choose their own password in the VISTA Parent app.'}
                   </p>
-                  {(search || state) && (
+                  {filtered && (
                     <button onClick={() => { setSearch(''); setState('') }}
-                      className="mt-2 text-sm font-semibold text-brand-600">Clear filters</button>
+                      className="mt-2 text-sm font-semibold text-brand-600">Show all</button>
                   )}
                 </td></tr>
               )}
               {!loading && parents.map((p) => {
+                const key = `parent:${p.id}`
                 const access = accessOf(p)
                 return (
-                  // `!` is required: `.table-base tbody tr:hover` in index.css is
-                  // a class plus two elements, so it outranks a bare utility and
-                  // a plain `hover:bg-…` here silently does nothing — the same
-                  // specificity trap as `!text-center` on a table header. The
-                  // brand tint is stronger than the default slate-50/60 on
-                  // purpose: these rows open a panel, so the hover has to read
-                  // as "clickable" rather than as a faint stripe.
-                  <tr key={p.id} className="hover:!bg-brand-50 cursor-pointer transition-colors"
-                    onClick={() => setSelected(p)}>
-                    <td>
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 shrink-0 rounded-full bg-brand-50 text-brand-700 grid place-items-center text-xs font-bold">
-                          {initials(p)}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="font-semibold text-slate-900">{p.surname}, {p.first_name}</div>
-                          <div className="text-xs text-slate-500">{p.phone || '—'}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="flex flex-wrap gap-1.5">
+                  // Rows open the account panel, which the staff tabs have no
+                  // need for — a parent's children are the account. `!` is
+                  // required: `.table-base tbody tr:hover` outranks a bare
+                  // `hover:bg-…` (see "Tables" in the dashboard CLAUDE.md).
+                  <tr key={p.id} className="hover:!bg-brand-50/60 cursor-pointer transition-colors"
+                    onClick={() => setPanel({ id: p.id, mode: 'view' })}>
+                    <td><PersonCell person={p} muted={access.id === 'revoked'} /></td>
+                    <td className="max-w-xs">
+                      <div className="flex flex-wrap gap-1">
                         {p.children.map(c => (
                           <span key={c.guardian_id}
-                            className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs">
+                            className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-xs font-medium">
                             {childName(c)} · {gradeShort(c.grade_level)}
                           </span>
                         ))}
                         {p.other_children > 0 && (
-                          <span className="px-2 py-0.5 rounded-full border border-dashed border-slate-300 text-slate-500 text-xs"
+                          <span className="px-2 py-0.5 rounded-md border border-dashed border-slate-300 text-slate-500 text-xs"
                             title="This account also covers learners outside your grade levels">
                             +{p.other_children} outside your grades
                           </span>
                         )}
                       </div>
                     </td>
+                    <td><AccessCell state={access} detail={parentAccessDetail(p, meId)} /></td>
                     <td>
-                      <span className={clsx('inline-block whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-semibold border', accessClasses(access.id))}>
-                        {accessLabel(access.id)}
-                      </span>
-                      <div className="text-xs text-slate-500 mt-1">{accessDetail(p)}</div>
-                    </td>
-                    <td className="text-sm text-slate-700">{p.email}</td>
-                    <td className="relative text-right" onClick={e => e.stopPropagation()}>
-                      <button
-                        aria-label={`Manage access for ${p.surname}, ${p.first_name}`}
-                        onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === p.id ? null : p.id) }}
-                        className="w-8 h-8 grid place-items-center rounded-lg border border-slate-200 hover:bg-slate-50">
-                        <MoreHorizontal size={16} className="text-slate-600" />
-                      </button>
-                      {menuFor === p.id && (
-                        <AccessMenu parent={p} onDone={() => { setMenuFor(null); fetchParents() }} />
-                      )}
+                      <RowActions editLabel={`Edit ${p.surname}, ${p.first_name}`}
+                        onEdit={() => setPanel({ id: p.id, mode: 'edit' })}
+                        menu={<RowMenu label={`More actions for ${p.surname}, ${p.first_name}`}
+                          open={menus.isOpen(key)} onToggle={menus.toggle(key)} {...menuFor(p)} />} />
                     </td>
                   </tr>
                 )
@@ -224,129 +243,63 @@ export default function ParentAccounts({ createOpen, onCloseCreate, onCountChang
         </div>
       </div>
 
-      {!loading && !!parents.length && (
-        <div className="flex items-center justify-between text-xs text-slate-500">
-          <span>Showing {parents.length} of {total} account{total === 1 ? '' : 's'}</span>
-          <span>No password is ever set or shown here — a parent chooses their own in the VISTA Parent app.</span>
-        </div>
+      {!loading && total > parents.length && (
+        <p className="text-xs text-slate-500">Showing {parents.length} of {total} — search to narrow the list.</p>
       )}
 
       {selected && (
-        <ParentPanel parent={selected} onClose={() => setSelected(null)}
-          onChanged={fetchParents} />
+        <ParentPanel key={`${selected.id}:${panel.mode}`} parent={selected} meId={meId} initialMode={panel.mode}
+          onClose={() => setPanel(null)} onChanged={fetchParents} />
       )}
 
       {createOpen && (
-        <AddParentModal onClose={onCloseCreate}
-          onCreated={() => { onCloseCreate(); fetchParents() }} />
+        <InviteParentModal onClose={onCloseCreate}
+          onCreated={(account) => { onCloseCreate(); setCreated(account); fetchParents() }} />
       )}
+
+      <Modal open={!!created} onClose={() => setCreated(null)} title="Invite Parent">
+        {created && (
+          <InvitationCreated
+            name={`${created.surname}, ${created.first_name}`}
+            email={created.email}
+            roleLabel="Parent"
+            state={resolveParentAccess({ hasAccount: true, accountStatus: created.account_status, invitation: created.invitation })}
+            openUntil={invitationOpenUntil(created.invitation)}
+            steps={parentSteps(created.email)}
+            onDone={() => setCreated(null)}
+            onAnother={() => { setCreated(null); onOpenCreate?.() }} />
+        )}
+      </Modal>
+
+      <Modal open={!!revokeTarget} onClose={() => setRevokeTarget(null)} title="Revoke access?" size="sm">
+        {revokeTarget && (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600 leading-relaxed">
+              <b className="text-slate-900">{revokeTarget.surname}, {revokeTarget.first_name}</b> will no longer be able
+              to sign in to the VISTA Parent app. One email is one login, so this reaches{' '}
+              <b className="text-slate-900">{kidsOf(revokeTarget) === 1 ? 'their child' : `all ${kidsOf(revokeTarget)} of their children`}</b>,
+              not just one. Their guardian records and history are untouched, and access can be restored later.
+            </p>
+            <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
+              <button onClick={() => setRevokeTarget(null)} className="btn-secondary">Keep access</button>
+              <button disabled={busy} onClick={revoke} className="btn-primary !bg-red-600 hover:!bg-red-700">Revoke access</button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }
 
-/* ── Manage access ────────────────────────────────────────────────────────
- * Only the actions the state allows, each with a line saying what it does.
- * Reissue and Restore are the same endpoint — `grantLabel()` decides which
- * word, because a revoked account that already holds a password is being
- * switched back on, not re-invited.
- */
-function AccessMenu({ parent, onDone }) {
-  const [busy, setBusy] = useState(false)
-  const [confirmRevoke, setConfirmRevoke] = useState(false)
-  const access = accessOf(parent)
-  // Access is per account, so any child's row reaches it. A scoped admin is
-  // only ever handed in-scope children, which is what the API's own scope
-  // check on that learner then accepts.
-  const anchor = parent.children[0]
-  const kids = parent.children.length + (parent.other_children || 0)
-
-  const run = async (fn, done) => {
-    setBusy(true)
-    try {
-      const res = await fn()
-      toast.success(res.data?.message || done, { duration: 6000 })
-      onDone()
-    } catch { /* interceptor toasts */ } finally { setBusy(false) }
-  }
-
-  return (
-    <>
-      <div onClick={e => e.stopPropagation()}
-        className="absolute right-4 top-full z-20 mt-1 w-80 p-1.5 text-left bg-white border border-slate-200 rounded-2xl shadow-xl">
-        <div className="px-2.5 pt-2 pb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-          Manage access
-        </div>
-        {canInvite(access.id) && (
-          <button disabled={busy}
-            onClick={() => run(
-              () => studentApi.inviteGuardian(anchor.student_id, anchor.guardian_id),
-              'Invitation issued.'
-            )}
-            className="block w-full px-2.5 py-2 text-left rounded-xl hover:bg-slate-50 disabled:opacity-50">
-            <span className="block text-sm font-semibold text-slate-900">{grantLabel(parent)}</span>
-            <span className="block mt-0.5 text-[11.5px] leading-snug text-slate-500">
-              {access.id === 'revoked'
-                ? 'Switches the account back on. They already chose a password, so nothing is re-sent.'
-                : 'Restarts the 30 days. Sends nothing — the parent asks for the code from the app.'}
-            </span>
-          </button>
-        )}
-        {canRevoke(access.id) && (
-          <>
-            <div className="h-px mx-2 my-1.5 bg-slate-200" />
-            <button disabled={busy} onClick={() => setConfirmRevoke(true)}
-              className="block w-full px-2.5 py-2 text-left rounded-xl hover:bg-slate-50 disabled:opacity-50">
-              <span className="block text-sm font-semibold text-red-700">Revoke access</span>
-              <span className="block mt-0.5 text-[11.5px] leading-snug text-slate-500">
-                Cuts off the app for {kids === 1 ? 'their child' : `all ${kids} children`} on this account.
-              </span>
-            </button>
-          </>
-        )}
-        {!canInvite(access.id) && !canRevoke(access.id) && (
-          <p className="px-2.5 py-2 text-[11.5px] leading-snug text-slate-500">
-            Nothing to change here.
-          </p>
-        )}
-      </div>
-
-      <Modal open={confirmRevoke} onClose={() => setConfirmRevoke(false)} title="Revoke parent app access?" size="sm">
-        <div className="space-y-3 text-sm text-slate-600">
-          <p>
-            <strong className="text-slate-900">{parent.surname}, {parent.first_name}</strong> will no longer be able
-            to sign in to the VISTA Parent app.
-          </p>
-          <p>
-            One email is one login, so this reaches{' '}
-            <strong className="text-slate-900">{kids === 1 ? 'their child' : `all ${kids} of their children`}</strong>,
-            not just one. Their guardian records and history are untouched, and access can be
-            restored later.
-          </p>
-        </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <button onClick={() => setConfirmRevoke(false)} className="btn-secondary">Cancel</button>
-          <button disabled={busy}
-            onClick={() => run(
-              () => studentApi.revokeGuardianAccess(anchor.student_id, anchor.guardian_id),
-              'Access revoked.'
-            )}
-            className="btn-primary !bg-red-600 hover:!bg-red-700">Revoke access</button>
-        </div>
-      </Modal>
-    </>
-  )
-}
-
 /* ── One account, and the children on it ──────────────────────────────────
- * The reason this tab exists alongside Manage Guardians: attaching another
- * learner to an account that already exists. Everything else here is read-only
- * — a parent's name and number are edited on the learner, where the save
- * already reaches every learner on the account.
+ * The reason this tab has a panel the staff tabs do not: a parent's account IS
+ * its children, and attaching another learner to an account that already
+ * exists is something no learner's page can do. It opens on whatever the row
+ * asked for — viewing, the Edit pencil, or the menu's Add a child.
  */
-function ParentPanel({ parent, onClose, onChanged }) {
-  const [adding, setAdding] = useState(false)
-  const [editing, setEditing] = useState(false)
-  useEffect(() => { setEditing(false); setAdding(false) }, [parent.id])
+function ParentPanel({ parent, meId, initialMode = 'view', onClose, onChanged }) {
+  const [adding, setAdding] = useState(initialMode === 'add')
+  const [editing, setEditing] = useState(initialMode === 'edit')
   useEffect(() => {
     const esc = (e) => { if (e.key === 'Escape' && !adding && !editing) onClose() }
     window.addEventListener('keydown', esc)
@@ -366,20 +319,17 @@ function ParentPanel({ parent, onClose, onChanged }) {
       <div className="absolute inset-0 bg-slate-900/40" onClick={onClose} />
       <aside className="relative w-full max-w-xl h-full bg-white border-l border-slate-200 shadow-2xl flex flex-col animate-fade-in">
         <div className="px-6 py-5 border-b border-slate-200 flex items-start gap-3">
-          <div className="w-11 h-11 shrink-0 rounded-full bg-brand-50 text-brand-700 grid place-items-center text-sm font-bold">
-            {initials(parent)}
+          <div className="w-11 h-11 shrink-0 rounded-full bg-brand-100 text-brand-700 grid place-items-center text-sm font-bold">
+            {`${(parent.surname || '')[0] || ''}${(parent.first_name || '')[0] || ''}`.toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
             <h3 className="text-lg font-bold text-slate-900">{parent.surname}, {parent.first_name}</h3>
-            {/* The pill must never break: "Pending Activation" and "Activation
-                In Progress" are two words wide and wrapped inside the rounded
-                border, which read as two separate chips. It stays whole and the
-                detail beside it moves to its own line instead. */}
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-0.5">
-              <span className={clsx('shrink-0 whitespace-nowrap px-2 py-0.5 rounded-full text-[11px] font-semibold border', accessClasses(access.id))}>
-                {accessLabel(access.id)}
-              </span>
-              <span className="text-xs text-slate-500">{accessDetail(parent)}</span>
+            {/* The chip must never break: "Activation In Progress" wrapped inside
+                its rounded border read as two chips. It stays whole and the
+                detail moves to its own line instead. */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
+              <AccessChip state={access} />
+              <span className="text-xs text-slate-500">{parentAccessDetail(parent, meId)}</span>
             </div>
           </div>
           <button onClick={onClose} aria-label="Close"
@@ -395,7 +345,7 @@ function ParentPanel({ parent, onClose, onChanged }) {
           ) : (
             <section className="space-y-2">
               <div className="flex items-baseline justify-between">
-                <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Contact</h4>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Contact</h4>
                 <button onClick={() => setEditing(true)}
                   className="text-xs font-semibold text-brand-600">Edit details</button>
               </div>
@@ -404,14 +354,14 @@ function ParentPanel({ parent, onClose, onChanged }) {
               </div>
               <div className="flex items-center gap-2.5 text-sm text-slate-700">
                 <Mail size={15} className="text-slate-400" />{parent.email}
-                <span className="px-1.5 py-0.5 rounded-full bg-slate-100 text-[11px] text-slate-500">Registered</span>
+                <span className="px-1.5 py-0.5 rounded-full bg-slate-100 text-[11px] text-slate-500">Sign-in email</span>
               </div>
               {parent.home_address && (
                 <div className="flex items-start gap-2.5 text-sm text-slate-700">
                   <Home size={15} className="mt-0.5 shrink-0 text-slate-400" />{parent.home_address}
                 </div>
               )}
-              <p className="text-[11.5px] leading-snug text-slate-500">
+              <p className="text-xs leading-snug text-slate-500">
                 These are the person’s own details, so a save reaches every learner on this account — the same write
                 Manage Guardians makes.
               </p>
@@ -420,16 +370,16 @@ function ParentPanel({ parent, onClose, onChanged }) {
 
           <section className="space-y-2.5">
             <div className="flex items-baseline justify-between">
-              <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Children · {parent.children.length}
               </h4>
-              <span className="text-[11.5px] text-slate-500">They see these learners in the app</span>
+              <span className="text-xs text-slate-500">They see these learners in the app</span>
             </div>
             {parent.children.map(c => (
               <div key={c.guardian_id} className="flex items-center gap-3 px-3.5 py-2.5 border border-slate-200 rounded-xl">
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold text-slate-900">{childName(c)}</div>
-                  <div className="text-[11.5px] text-slate-500">
+                  <div className="text-xs text-slate-500">
                     {c.grade_level}{c.section ? ` · ${c.section}` : ''} · {c.relationship}
                   </div>
                 </div>
@@ -440,7 +390,7 @@ function ParentPanel({ parent, onClose, onChanged }) {
               </div>
             ))}
             {parent.other_children > 0 && (
-              <p className="text-[11.5px] text-slate-500">
+              <p className="text-xs text-slate-500">
                 This account also covers {parent.other_children} learner{parent.other_children === 1 ? '' : 's'} outside
                 your grade levels.
               </p>
@@ -457,12 +407,12 @@ function ParentPanel({ parent, onClose, onChanged }) {
           </section>
 
           <section className="space-y-2">
-            <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Parent app access</h4>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Account access</h4>
             <div className="px-3.5 py-3 border border-slate-200 rounded-xl">
               <p className="text-xs leading-relaxed text-slate-500">
                 {access.id === 'active'
                   ? 'Activated with this address, so it can’t be changed here.'
-                  : 'Reissue, revoke and restore are on the Manage access menu in the list.'}
+                  : 'Reissue, revoke and restore are on the ⋯ menu in the list.'}
                 {' '}Revoking reaches{' '}
                 <strong className="text-slate-700 font-semibold">
                   {kids === 1 ? 'their child' : `all ${kids} children`}
@@ -724,21 +674,28 @@ function AddChild({ parent, onCancel, onAdded }) {
   )
 }
 
-/* ── Add parent — Version C, one modal ────────────────────────────────────
- * The children are part of the create, never a step after it: an account with
- * no learner is a state nothing in the app can express, and the server refuses
- * it too (`children` is min(1)). Save stays disabled until one is listed.
+/* ── Invite Parent ────────────────────────────────────────────────────────
+ * Laid out like Invite Teacher and Invite Admin — the person in one row, then
+ * Sign-in email beside Mobile number, then what this account covers, then
+ * "What happens next" — with the one thing a parent needs that staff do not:
+ * their children. Those are part of the create, never a step after it: an
+ * account with no learner is a state nothing in the app can express, and the
+ * server refuses it too (`children` is min(1)). Save stays disabled until one
+ * is listed.
  *
  * There is no "send the invitation?" switch. An account exists only because an
  * email was authorized, so creating one without inviting would ask for a row
- * the model has no state for — the note says what happens instead.
+ * the model has no state for.
  */
 const emptyChild = () => ({
   key: Math.random().toString(36).slice(2),
   student: null, relationship: 'Mother', is_emergency_contact: false,
 })
 
-function AddParentModal({ onClose, onCreated }) {
+const FIELD_LABEL = 'block text-sm font-medium text-slate-700 mb-1.5'
+const SECTION_LABEL = 'text-xs font-semibold text-slate-500 uppercase tracking-wider'
+
+function InviteParentModal({ onClose, onCreated }) {
   const [form, setForm] = useState({ surname: '', first_name: '', middle_name: '', phone: '', email: '' })
   const [children, setChildren] = useState([emptyChild()])
   const [busy, setBusy] = useState(false)
@@ -768,8 +725,7 @@ function AddParentModal({ onClose, onCreated }) {
           is_emergency_contact: c.is_emergency_contact,
         })),
       })
-      toast.success(res.data?.message || 'Parent added.', { duration: 7000 })
-      onCreated()
+      onCreated(res.data.parent)
     } catch { /* interceptor toasts */ } finally { setBusy(false) }
   }
 
@@ -778,63 +734,55 @@ function AddParentModal({ onClose, onCreated }) {
     // do the scrolling — so the sections below sit in their own scroll area and
     // the footer stays pinned. Without that the modal simply clipped everything
     // past 84vh, which hid the second child row and the button that adds it.
-    <Modal open onClose={onClose} title="Add parent" size="lg" selfScroll>
-      <p className="-mt-1 mb-4 shrink-0 text-[12.5px] text-slate-500">
-        They become a guardian of every learner you add below.
-      </p>
-
-      <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-5">
+    <Modal open onClose={onClose} size="lg" selfScroll
+      title={titled('Invite Parent', "They'll choose their own password when they activate the VISTA Parent app.")}>
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-6">
         <section className="space-y-3">
-          <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Parent details</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="block text-sm font-medium text-slate-700">Surname
-              <input className="input mt-1.5" required value={form.surname}
+          <p className={SECTION_LABEL}>Parent details</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className={FIELD_LABEL} htmlFor="ip-surname">Surname</label>
+              <input id="ip-surname" className="input" placeholder="Dela Cruz" required value={form.surname}
                 onChange={e => set({ surname: e.target.value })} />
-            </label>
-            <label className="block text-sm font-medium text-slate-700">First name
-              <input className="input mt-1.5" required value={form.first_name}
+            </div>
+            <div>
+              <label className={FIELD_LABEL} htmlFor="ip-first">First name</label>
+              <input id="ip-first" className="input" placeholder="Juan" required value={form.first_name}
                 onChange={e => set({ first_name: e.target.value })} />
-            </label>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="block text-sm font-medium text-slate-700">
-              Middle name <span className="text-xs font-normal text-slate-400">optional</span>
-              <input className="input mt-1.5" value={form.middle_name}
+            </div>
+            <div>
+              <label className={FIELD_LABEL} htmlFor="ip-middle">Middle name <span className="text-slate-500 font-normal">(optional)</span></label>
+              <input id="ip-middle" className="input" placeholder="Santos" value={form.middle_name}
                 onChange={e => set({ middle_name: e.target.value })} />
-            </label>
-            <label className="block text-sm font-medium text-slate-700">Mobile number
-              <PhoneInput className="input mt-1.5 pr-10" required value={form.phone}
-                onChange={v => set({ phone: v })} />
-            </label>
+            </div>
           </div>
-        </section>
-
-        <section className="space-y-3">
-          <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Parent app access</h4>
-          <label className="block text-sm font-medium text-slate-700">Registered Email Address
-            <input type="email" required value={form.email}
-              className={clsx('input mt-1.5', emailView?.invalid && '!border-red-400 focus:!ring-red-500/20')}
-              onChange={e => set({ email: e.target.value })}
-              onBlur={() => emailCheck.check(form)} />
-            {emailView?.invalid && (
-              <span className="block mt-1.5 text-xs font-normal text-red-600">{emailView.message}</span>
-            )}
-          </label>
-          <div className="flex gap-2.5 px-3.5 py-3 bg-slate-50 border border-slate-200 rounded-xl">
-            <Info size={15} className="shrink-0 mt-0.5 text-brand-600" />
-            <p className="text-[11.5px] leading-relaxed text-slate-600">
-              Saving authorizes this address for the VISTA Parent app. No password is set here and nothing is sent
-              now — the parent asks for a code from the app and chooses their own password.
-            </p>
+          <div className="grid grid-cols-1 sm:grid-cols-[1.6fr_1fr] gap-3">
+            <div>
+              <label className={FIELD_LABEL} htmlFor="ip-email">Sign-in email</label>
+              <input id="ip-email" type="email" required placeholder="name@email.com" value={form.email}
+                className={clsx('input', emailView?.invalid && '!border-red-400 focus:!ring-red-500/20')}
+                onChange={e => set({ email: e.target.value })}
+                onBlur={() => emailCheck.check(form)} />
+              {emailView?.invalid
+                ? <p className="mt-1.5 text-xs text-red-600">{emailView.message}</p>
+                : <p className="mt-1.5 text-xs text-slate-500 leading-relaxed">
+                    They'll sign in to the app with this address. You can still correct it until they activate.
+                  </p>}
+            </div>
+            <div>
+              <label className={FIELD_LABEL} htmlFor="ip-phone">Mobile number</label>
+              <PhoneInput id="ip-phone" className="input pr-10" required value={form.phone}
+                onChange={v => set({ phone: v })} />
+            </div>
           </div>
         </section>
 
         <section className="space-y-2.5">
           <div className="flex items-baseline justify-between">
-            <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Children</h4>
-            <span className="text-[11.5px] font-semibold text-amber-700">At least one required</span>
+            <p className={SECTION_LABEL}>Children</p>
+            <span className="text-xs text-slate-500">They become a guardian of every learner listed</span>
           </div>
-          {children.map((c, i) => (
+          {children.map((c) => (
             <ChildRow key={c.key} row={c}
               taken={picked.filter(p => p.key !== c.key).map(p => p.student.id)}
               onChange={(patch) => setChildren(cs => cs.map(x => x.key === c.key ? { ...x, ...patch } : x))}
@@ -846,19 +794,15 @@ function AddParentModal({ onClose, onCreated }) {
             <Plus size={16} /> Add another child
           </button>
         </section>
+
+        <WhatHappensNext steps={PARENT_NEXT} />
       </div>
 
-      <div className="mt-4 pt-4 shrink-0 border-t border-slate-200 flex items-center justify-between gap-4">
-        <p className="text-[11.5px] leading-snug text-slate-500 max-w-xs">
-          The account and {picked.length === 1 ? 'the child' : `all ${picked.length} children`} are saved together,
-          or not at all.
-        </p>
-        <div className="flex items-center gap-2">
-          <button onClick={onClose} className="btn-secondary">Cancel</button>
-          <button disabled={!ready || busy} onClick={save} className="btn-primary disabled:opacity-50">
-            {busy ? 'Saving…' : picked.length > 1 ? `Add parent & ${picked.length} children` : 'Add parent'}
-          </button>
-        </div>
+      <div className="mt-4 pt-4 shrink-0 border-t border-slate-100 flex justify-end gap-3">
+        <button onClick={onClose} className="btn-secondary">Cancel</button>
+        <button disabled={!ready || busy} onClick={save} className="btn-primary disabled:opacity-50">
+          {busy ? 'Creating…' : 'Create invitation'}
+        </button>
       </div>
     </Modal>
   )

@@ -236,7 +236,7 @@ const getStudentWithGuardians = async (id, { includeArchived = false } = {}) => 
        SELECT pi.invited_at, pi.expires_at, pi.consumed_at, pi.revoked_at, pi.code_expires_at,
               (pi.code_hash IS NOT NULL AND pi.code_expires_at > NOW()) AS has_live_code,
               ib.full_name AS invited_by_name
-         FROM parent_invitations pi
+         FROM account_invitations pi
          LEFT JOIN users ib ON ib.id = pi.invited_by
         WHERE pi.user_id = ps.parent_id
         ORDER BY pi.invited_at DESC
@@ -473,7 +473,7 @@ router.get('/parents', authorizeAnyAdmin, async (req, res, next) => {
 
     const result = await query(
       `SELECT u.id, u.surname, u.first_name, u.middle_name, u.full_name,
-              u.email, u.phone, u.account_status,
+              u.email, u.phone, u.account_status, u.last_login_at,
               -- What canChangeEmail() keys on. The registered address stops
               -- being the school's to edit once the parent has set a password,
               -- and the test is that, never account_status -- a revoked account
@@ -488,6 +488,7 @@ router.get('/parents', authorizeAnyAdmin, async (req, res, next) => {
                 'consumed_at',     inv.consumed_at,
                 'revoked_at',      inv.revoked_at,
                 'has_live_code',   inv.has_live_code,
+                'invited_by',      inv.invited_by,
                 'invited_by_name', inv.invited_by_name
               ) END AS invitation,
               COALESCE(json_agg(json_build_object(
@@ -511,16 +512,16 @@ router.get('/parents', authorizeAnyAdmin, async (req, res, next) => {
          LEFT JOIN LATERAL (
            SELECT pi.invited_at, pi.expires_at, pi.consumed_at, pi.revoked_at,
                   (pi.code_hash IS NOT NULL AND pi.code_expires_at > NOW()) AS has_live_code,
-                  ib.full_name AS invited_by_name
-             FROM parent_invitations pi
+                  pi.invited_by, ib.full_name AS invited_by_name
+             FROM account_invitations pi
              LEFT JOIN users ib ON ib.id = pi.invited_by
             WHERE pi.user_id = u.id
-            ORDER BY pi.invited_at DESC
+            ORDER BY pi.invited_at DESC, (pi.consumed_at IS NULL AND pi.revoked_at IS NULL) DESC
             LIMIT 1
          ) inv ON TRUE
         WHERE u.role = 'parent'
         GROUP BY u.id, inv.invited_at, inv.expires_at, inv.consumed_at,
-                 inv.revoked_at, inv.has_live_code, inv.invited_by_name
+                 inv.revoked_at, inv.has_live_code, inv.invited_by, inv.invited_by_name
         ORDER BY u.surname, u.first_name`
     )
 
@@ -649,8 +650,17 @@ router.post('/parents', authorizeAnyAdmin, async (req, res, next) => {
     })
 
     const names = learners.rows.map(s => `${s.surname}, ${s.first_name}`)
+    // The invitation rides back so the dashboard can show the same "Invitation
+    // created" confirmation a teacher or admin invite gets — status, open-until
+    // date and the steps to hand over.
+    const invitation = await latestInvitation({ query }, out.parentId)
     res.status(201).json({
       parent_id: out.parentId,
+      parent: {
+        id: out.parentId, surname: value.surname, first_name: value.first_name,
+        email: value.email, role: 'parent', has_password: false,
+        account_status: 'pending', invitation,
+      },
       message: `${value.surname}, ${value.first_name} was added as a guardian of ${names.join(' and ')}. `
              + `${value.email} is authorized for the VISTA Parent app — they activate it themselves from the app.`,
     })

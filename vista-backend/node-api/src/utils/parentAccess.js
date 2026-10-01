@@ -3,7 +3,7 @@
  *
  * Nothing writes a "status" column for this. Two facts already answer it —
  * users.account_status (can this account sign in) and the account's newest
- * parent_invitations row (where is the invitation up to) — and deriving keeps
+ * account_invitations row (where is the invitation up to) — and deriving keeps
  * them from disagreeing, the same reason the Students page derives
  * status_display instead of storing a second enrolment status.
  *
@@ -34,7 +34,7 @@ const isPast = (value) => {
  * @param {object}  input
  * @param {boolean} input.hasAccount    parent_student.parent_id IS NOT NULL
  * @param {string}  input.accountStatus users.account_status
- * @param {object}  [input.invitation]  the newest parent_invitations row, or null
+ * @param {object}  [input.invitation]  the newest account_invitations row, or null
  *        {string}  invitation.expires_at
  *        {string}  invitation.consumed_at
  *        {string}  invitation.revoked_at

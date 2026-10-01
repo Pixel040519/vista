@@ -37,6 +37,16 @@ cp .env.example .env
 # Edit .env with your DB credentials and JWT secrets
 ```
 
+### 2b. Apply migrations
+There is no migration runner. Apply each file in `database/migrations/` by hand, oldest
+first — each one is safe to re-run — and always before starting code that needs it:
+```bash
+psql vista_db -f database/migrations/<file>.sql
+```
+`2026_10_04_staff_invitations.sql` (renames `parent_invitations` to `account_invitations`,
+adds `users.last_login_at`) must be applied before running the staff-invitation code;
+until it is, every sign-in fails with `column "last_login_at" of relation "users" does not exist`.
+
 ### 3. Start Node.js API
 ```bash
 cd node-api
@@ -63,27 +73,51 @@ uvicorn main:app --reload --port 8000
 ### Auth Endpoints (Node.js)
 | Method | Endpoint | Description | Auth |
 |--------|----------|-------------|------|
-| POST | /api/auth/register | Create a staff account | Super Admin |
+| POST | /api/auth/register | Bootstrap an account with a password (scripts only — staff are invited through `/api/accounts`) | Super Admin |
 | POST | /api/auth/login | Login | None |
 | POST | /api/auth/refresh | Refresh token | None |
 | GET | /api/auth/me | Get current user | Bearer |
-| POST | /api/auth/activation/request | Ask for an activation code | None |
+| POST | /api/auth/activation/request | Ask for an activation code (parents and staff alike) | None |
 | POST | /api/auth/activation/verify | Verify the code → activation token | None |
 | POST | /api/auth/activation/complete | Set password, activate, sign in | None |
 | POST | /api/auth/password-reset/request | Ask for a reset code | None |
 | POST | /api/auth/password-reset/verify | Verify the code → reset token | None |
 | POST | /api/auth/password-reset/complete | Set a new password (no sign-in) | None |
 
+**Every account is an invitation.** An admin authorizes an email address and never
+sets, sees or can recover the password: parents through
+`POST /api/students/:id/guardians/:guardianId/invitation` or `POST /api/students/parents`,
+teachers and admins through `POST /api/accounts/teachers` and `POST /api/accounts/admins`.
+Creating one sends nothing; the holder asks for a code — a parent in the VISTA Parent app,
+staff from "Activate your account" on the dashboard's sign-in page — and chooses their own
+password.
+
 `register` was unauthenticated and took `role` from the request body, so anyone
-who could reach the API could mint a `super_admin`. It is now super-admin only,
-and `parent` is gone from its role list — **parent accounts exist only where an
-admin has authorized the email**, through `POST /api/students/:id/guardians/:guardianId/invitation`.
+who could reach the API could mint a `super_admin`. It is now super-admin only, has
+no `parent` role, and is kept for bootstrapping and scripts — the one path that
+still takes a password.
 
 The six unauthenticated activation and reset routes answer **identically whether
 or not the email has an account** — same message, same status, same timing — so
 they cannot be used to discover which addresses are registered. They are rate
 limited per IP and per email in every environment. See "Parent portal accounts
-are invitations" in the root `CLAUDE.md` before changing any of them.
+are invitations" and "Staff accounts are invitations too" in the root `CLAUDE.md`
+before changing any of them.
+
+### Account Endpoints
+| Method | Endpoint | Description | Role |
+|--------|----------|-------------|------|
+| GET | /api/accounts/teachers | Teachers with assignments, advisory and account access state | Admin |
+| POST | /api/accounts/teachers | Invite a teacher (no password; a `password` field is refused) | Admin |
+| PUT | /api/accounts/teachers/:id | Edit details and assignments; email only until they activate | Admin |
+| POST / DELETE | /api/accounts/teachers/:id/invitation | Reissue (30 days) / cancel an unused invitation | Admin |
+| DELETE | /api/accounts/teachers/:id | Deactivate (closes any open invitation) | Admin |
+| GET | /api/accounts/admins | Admin accounts with access state | Super Admin |
+| POST | /api/accounts/admins | Invite an ECE, Elementary or Super Admin — Super Admin needs `confirm_password` (your own) | Super Admin |
+| PUT | /api/accounts/admins/:id | Edit; role moves only between ECE and Elementary | Super Admin |
+| POST / DELETE | /api/accounts/admins/:id/invitation | Reissue / cancel an unused invitation | Super Admin |
+| DELETE | /api/accounts/admins/:id | Deactivate — never yourself, never the last active Super Admin | Super Admin |
+| GET / POST | /api/students/parents | Parent accounts with their children / invite a parent with at least one child | Admin |
 
 ### Student Endpoints
 | Method | Endpoint | Description | Role |

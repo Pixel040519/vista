@@ -10,56 +10,16 @@
  * account is reused rather than duplicated (the sibling case), and an email
  * belonging to a teacher or admin is refused — linking it would hand that staff
  * account a learner's parent-side access.
+ *
+ * The invitation mechanics shared with staff accounts — issuing, revoking,
+ * re-pointing — are in utils/invitations.js; this module adds the rules that
+ * only make sense for a parent.
  */
 const { AppError } = require('../middleware/error.middleware')
 const { ROLES } = require('./roles')
-const { invitationExpiry } = require('./authCodes')
-
-/** The newest invitation for an account, live or not. */
-const latestInvitation = async (client, userId) => {
-  const r = await client.query(
-    `SELECT id, email, invited_at, expires_at, consumed_at, revoked_at,
-            (code_hash IS NOT NULL AND code_expires_at > NOW()) AS has_live_code,
-            code_expires_at
-       FROM parent_invitations
-      WHERE user_id = $1
-      ORDER BY invited_at DESC
-      LIMIT 1`,
-    [userId]
-  )
-  return r.rows[0] || null
-}
-
-/**
- * Create or refresh the live invitation.
- *
- * The partial unique index allows exactly one unconsumed, unrevoked row per
- * account, so this updates that row when it exists and inserts otherwise.
- * Either way any unused code is cleared — which is how "issuing a new code
- * invalidates the previous one" happens by construction rather than by rule.
- *
- * Sends nothing. No message goes out until the parent asks for a code.
- */
-const issueInvitation = async (client, { userId, email, invitedBy }) => {
-  const expiresAt = invitationExpiry()
-  const updated = await client.query(
-    `UPDATE parent_invitations
-        SET email = $2, invited_by = $3, invited_at = NOW(), expires_at = $4,
-            code_hash = NULL, code_issued_at = NULL, code_expires_at = NULL,
-            code_attempts = 0, updated_at = NOW()
-      WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL
-      RETURNING id`,
-    [userId, email, invitedBy || null, expiresAt]
-  )
-  if (updated.rows.length) return updated.rows[0].id
-
-  const inserted = await client.query(
-    `INSERT INTO parent_invitations (user_id, email, invited_by, expires_at)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    [userId, email, invitedBy || null, expiresAt]
-  )
-  return inserted.rows[0].id
-}
+const {
+  latestInvitation, issueInvitation, revokeLiveInvitation, changeInvitationEmail,
+} = require('./invitations')
 
 /**
  * Give this email access to the portal.
@@ -162,26 +122,8 @@ const alsoLinkedNote = (n) => n
  * the account and all history stay — this is access, not deletion.
  */
 const revokeParentAccess = async (client, { userId, revokedBy }) => {
-  await client.query(
-    `UPDATE parent_invitations
-        SET revoked_at = NOW(), revoked_by = $2,
-            code_hash = NULL, code_issued_at = NULL, code_expires_at = NULL, updated_at = NOW()
-      WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL`,
-    [userId, revokedBy || null]
-  )
+  await revokeLiveInvitation(client, { userId, revokedBy })
   await client.query("UPDATE users SET account_status='revoked', updated_at=NOW() WHERE id=$1", [userId])
-}
-
-/** Change the address an unclaimed invitation points at. */
-const changeInvitationEmail = async (client, { userId, email }) => {
-  await client.query('UPDATE users SET email=$2, updated_at=NOW() WHERE id=$1', [userId, email])
-  await client.query(
-    `UPDATE parent_invitations
-        SET email = $2, code_hash = NULL, code_issued_at = NULL, code_expires_at = NULL,
-            code_attempts = 0, updated_at = NOW()
-      WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL`,
-    [userId, email]
-  )
 }
 
 /**

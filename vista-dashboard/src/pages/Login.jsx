@@ -1,14 +1,17 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { Eye, EyeOff, LogIn } from 'lucide-react'
+import { Eye, EyeOff, LogIn, KeyRound } from 'lucide-react'
 import toast from 'react-hot-toast'
 import nrysLogo from '../assets/NRYS_logo.png'
 
 export default function Login() {
   const { login } = useAuth()
   const navigate   = useNavigate()
-  const [form, setForm]         = useState({ email: '', password: '' })
+  // A finished password reset lands here with the email filled in and a note
+  // saying it worked — see pages/AccountAccess.jsx.
+  const { state: arrival } = useLocation()
+  const [form, setForm]         = useState({ email: arrival?.email || '', password: '' })
   const [show, setShow]         = useState(false)
   const [loading, setLoading]   = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
@@ -75,6 +78,12 @@ export default function Login() {
             <p className="text-slate-500 text-sm mt-1">Sign in to your account to continue</p>
           </div>
 
+          {arrival?.notice && (
+            <p className="mb-5 px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-100 text-sm text-emerald-800" role="status">
+              {arrival.notice}
+            </p>
+          )}
+
           <form onSubmit={handle} className="space-y-5">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">Email address</label>
@@ -91,7 +100,12 @@ export default function Login() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">Password</label>
+              <div className="flex items-baseline justify-between mb-1.5">
+                <label className="block text-sm font-medium text-slate-700">Password</label>
+                <Link to="/forgot-password" className="text-xs font-semibold text-brand-600 hover:text-brand-700">
+                  Forgot password?
+                </Link>
+              </div>
               <div className="relative">
                 <input
                   type={show ? 'text' : 'password'}
@@ -138,9 +152,17 @@ export default function Login() {
             </button>
           </form>
 
-          <p className="mt-8 text-center text-xs text-slate-400">
-            Contact your school administrator to reset your password.
-          </p>
+          {/* Staff accounts are invitations: an admin authorizes the email and
+              the staff member chooses their own password here. */}
+          <div className="mt-7 flex items-center gap-3 text-xs text-slate-500">
+            <span className="flex-1 h-px bg-slate-200" />
+            First time here?
+            <span className="flex-1 h-px bg-slate-200" />
+          </div>
+          <Link to="/activate"
+            className="mt-4 w-full inline-flex items-center justify-center gap-2 py-2.5 rounded-xl border border-brand-200 bg-brand-50 text-brand-700 text-sm font-semibold hover:bg-brand-100 transition-colors">
+            <KeyRound size={16} /> Activate your account
+          </Link>
         </div>
 
         <p className="text-slate-500 text-xs text-center mt-6">

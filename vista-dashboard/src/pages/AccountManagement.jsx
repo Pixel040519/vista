@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  UserCog, Plus, Search, Pencil, Trash2, ShieldOff,
-  ShieldCheck, Eye, EyeOff, X, BookOpen, ChevronDown, History, GraduationCap
+  UserCog, Plus, Pencil, Trash2, ShieldOff, ShieldCheck, X, BookOpen, History,
+  GraduationCap, RotateCcw, MailPlus, AlertTriangle,
 } from 'lucide-react'
 import { accountApi, curriculumApi } from '../api/client'
 import { LoadingSpinner, EmptyState, Modal, PhoneInput } from '../components/UI'
@@ -11,6 +11,14 @@ import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
 import { useAuth } from '../context/AuthContext'
 import { ROLES, ROLE_LABELS } from '../utils/roles'
 import ParentAccounts from '../components/ParentAccounts'
+import {
+  STAFF_ACCESS_STATES, staffAccessOf, staffAccessDetail, canReissue, canCancel, canChangeStaffEmail,
+} from '../utils/staffAccess'
+import { invitationOpenUntil } from '../utils/accessDisplay'
+import {
+  RosterFilters, stateChips, PersonCell, AccessCell, RowActions, RowMenu, useRowMenus,
+  WhatHappensNext, InvitationCreated, titled,
+} from '../components/AccountRoster'
 
 // ── School Data ───────────────────────────────────────────────
 const GRADE_LEVELS = [
@@ -123,6 +131,7 @@ function AssignmentRow({ row, index, onChange, onRemove, takenAssignments = [], 
         <button
           type="button"
           onClick={() => onRemove(index)}
+          aria-label="Remove assignment"
           className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
         >
           <X size={15} />
@@ -135,6 +144,85 @@ function AssignmentRow({ row, index, onChange, onRemove, takenAssignments = [], 
 // ── Empty assignment row ──────────────────────────────────────
 const emptyRow = () => ({ grade_level: '', section: '', subject: '' })
 
+
+// ── Shared form pieces ────────────────────────────────────────
+const LABEL = 'block text-sm font-medium text-slate-700 mb-1.5'
+const OPTIONAL = <span className="text-slate-500 font-normal">(optional)</span>
+const SECTION = 'text-xs font-semibold text-slate-500 uppercase tracking-wider'
+
+// Name fields in one row, then sign-in email beside mobile — the same layout in
+// both forms. Email is editable until the account holder activates (a typo is
+// the likeliest reason an invitation goes unused); after that it is how they
+// sign in, and the API refuses to change it.
+function PersonFields({ form, setField, mode, emailEditable }) {
+  return (
+    <>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div>
+          <label className={LABEL} htmlFor="pf-surname">Surname</label>
+          <input id="pf-surname" className="input" placeholder="Dela Cruz" value={form.surname}
+            onChange={e => setField('surname', e.target.value)} onBlur={e => setField('surname', titleCase(e.target.value))} required />
+        </div>
+        <div>
+          <label className={LABEL} htmlFor="pf-first">First name</label>
+          <input id="pf-first" className="input" placeholder="Juan" value={form.first_name}
+            onChange={e => setField('first_name', e.target.value)} onBlur={e => setField('first_name', titleCase(e.target.value))} required />
+        </div>
+        <div>
+          <label className={LABEL} htmlFor="pf-middle">Middle name {OPTIONAL}</label>
+          <input id="pf-middle" className="input" placeholder="Santos" value={form.middle_name}
+            onChange={e => setField('middle_name', e.target.value)} onBlur={e => setField('middle_name', titleCase(e.target.value))} />
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-[1.6fr_1fr] gap-3">
+        <div>
+          <label className={LABEL} htmlFor="pf-email">Sign-in email</label>
+          <input id="pf-email" className="input" type="email" placeholder="name@school.edu.ph"
+            value={form.email} onChange={e => setField('email', e.target.value)}
+            required disabled={!emailEditable} />
+          <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+            {!emailEditable
+              ? "They've activated their account, so this is how they sign in and can't be changed here."
+              : mode === 'edit'
+                ? "Can still be corrected because they haven't activated yet. Saving a new address cancels any code already sent."
+                : "They'll sign in with this address. You can still correct it until they activate."}
+          </p>
+        </div>
+        <div>
+          <label className={LABEL} htmlFor="pf-phone">Mobile number {OPTIONAL}</label>
+          <PhoneInput id="pf-phone" className="input pr-10" value={form.phone}
+            onChange={v => setField('phone', v)} />
+        </div>
+      </div>
+    </>
+  )
+}
+
+// What saving a staff invitation does, said once where it is decided.
+const STAFF_NEXT = [
+  <>Saving sends nothing. The account waits as <b className="text-blue-700">Pending Activation</b> for 30 days.</>,
+  <>Tell them to open VISTA's sign-in page and choose <b className="text-slate-800">Activate your account</b>.</>,
+  <>They enter this email, receive a 6-digit code, and create their password.</>,
+]
+
+function FormFooter({ onClose, saving, label, savingLabel }) {
+  return (
+    <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+      <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+      <button type="submit" disabled={saving} className="btn-primary justify-center disabled:opacity-60">
+        {saving ? savingLabel : label}
+      </button>
+    </div>
+  )
+}
+
+/** The fields an edit actually sends: email only while it can still change, and only if it did. */
+const trimForEdit = (payload, initial, emailEditable) => {
+  if (!emailEditable || payload.email.trim().toLowerCase() === (initial?.email || '').toLowerCase()) delete payload.email
+  delete payload.full_name
+  return payload
+}
+
 // ── Teacher Form (shared by create + edit) ────────────────────
 function TeacherForm({ initial, onSubmit, onClose, mode }) {
   const { user, gradeScope, isSuperAdmin } = useAuth()
@@ -143,13 +231,13 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
   const gradeOptions = GRADE_LEVELS.filter(g => effectiveScope.includes(g))
   const isRowLocked = (row) => !isSuperAdmin && !!row.grade_level && !effectiveScope.includes(row.grade_level)
   const teacherId = initial?.id || null
+  const emailEditable = mode === 'create' || canChangeStaffEmail(initial)
   const [form, setForm] = useState({
     surname:     initial?.surname     || '',
     first_name:  initial?.first_name   || '',
     middle_name: initial?.middle_name  || '',
     email:       initial?.email      || '',
     phone:       initial?.phone      || '',
-    password:    '',
     assignments: initial?.assignments?.length
       ? initial.assignments.map(a => ({
           grade_level: a.grade_level,
@@ -158,7 +246,6 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
         }))
       : [emptyRow()],
   })
-  const [showPw, setShowPw]   = useState(false)
   const [saving, setSaving]   = useState(false)
   const [takenAssignments, setTakenAssignments] = useState([])
   const [pastYears, setPastYears] = useState({}) // { "2024-2025": [{grade_level,section,subject},...] }
@@ -212,92 +299,29 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
 
     setSaving(true)
     try {
-      // Strip email on edit — backend updateSchema does not accept it
       const payload = { ...form, assignments: validAssignments }
-      if (mode === 'edit') delete payload.email
-      // strip generated field — backend computes it
-      delete payload.full_name
-      // Strip empty password on edit so it doesn't trigger min-length validation
-      if (mode === 'edit' && !payload.password) delete payload.password
-      await onSubmit(payload)
-    } finally {
+      await onSubmit(mode === 'edit' ? trimForEdit(payload, initial, emailEditable) : payload)
+    } catch { /* the interceptor toasts the API's reason; the form stays open */ } finally {
       setSaving(false)
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      {/* Basic Info */}
-      <div>
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">
-          Account Information
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Surname *</label>
-            <input className="input" placeholder="Dela Cruz" value={form.surname}
-              onChange={e => setField('surname', e.target.value)} onBlur={e => setField('surname', titleCase(e.target.value))} required />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">First Name *</label>
-            <input className="input" placeholder="Juan" value={form.first_name}
-              onChange={e => setField('first_name', e.target.value)} onBlur={e => setField('first_name', titleCase(e.target.value))} required />
-          </div>
-          <div className="col-span-2">
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Middle Name <span className="text-slate-400 font-normal">(optional)</span></label>
-            <input className="input" placeholder="Santos" value={form.middle_name}
-              onChange={e => setField('middle_name', e.target.value)} onBlur={e => setField('middle_name', titleCase(e.target.value))} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Email Address *</label>
-            <input className="input" type="email" placeholder="teacher@school.edu.ph"
-              value={form.email} onChange={e => setField('email', e.target.value)}
-              required disabled={mode === 'edit'} />
-            {mode === 'edit' && (
-              <p className="text-xs text-slate-400 mt-1">Email cannot be changed.</p>
-            )}
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Phone *</label>
-            <PhoneInput className="input pr-10" value={form.phone}
-              onChange={v => setField('phone', v)} required />
-          </div>
-          <div className="col-span-2">
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              {mode === 'edit' ? 'New Password (leave blank to keep current)' : 'Password *'}
-            </label>
-            <div className="relative">
-              <input
-                className="input pr-10"
-                type={showPw ? 'text' : 'password'}
-                placeholder={mode === 'edit' ? '••••••••' : 'Min. 8 characters'}
-                value={form.password}
-                onChange={e => setField('password', e.target.value)}
-                required={mode === 'create'}
-              />
-              <button type="button" onClick={() => setShowPw(!showPw)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
-              </button>
-            </div>
-          </div>
-        </div>
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="space-y-3">
+        <p className={SECTION}>Teacher details</p>
+        <PersonFields form={form} setField={setField} mode={mode} emailEditable={emailEditable} />
       </div>
 
       {/* Assignments */}
       <div>
         <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-          <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Teaching Assignments
-            </p>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Grade level, section and subject this teacher handles
-            </p>
-          </div>
+          <p className={SECTION}>
+            Teaching assignments{mode === 'create' && <span className="normal-case tracking-normal font-normal"> (optional)</span>}
+          </p>
           <button type="button" onClick={addRow}
-            className="flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:text-brand-700 px-2.5 py-1.5 rounded-lg hover:bg-brand-50 transition-colors">
-            <Plus size={13} /> Add Row
+            className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 px-2.5 py-1.5 rounded-lg hover:bg-brand-50 transition-colors">
+            <Plus size={13} /> Add row
           </button>
         </div>
 
@@ -343,9 +367,9 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
 
         <div className="space-y-2">
           {/* Header */}
-          <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 px-0.5">
+          <div className="hidden sm:grid grid-cols-[1fr_1fr_1fr_auto] gap-2 px-0.5">
             {['Grade Level', 'Section', 'Subject', ''].map((h, i) => (
-              <p key={i} className="text-xs font-semibold text-slate-400 uppercase tracking-wide">{h}</p>
+              <p key={i} className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</p>
             ))}
           </div>
 
@@ -363,8 +387,8 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
           ))}
 
           {form.assignments.length === 0 && (
-            <p className="text-xs text-slate-400 py-2 text-center">
-              No assignments added. Click "Add Row" to assign subjects.
+            <p className="text-xs text-slate-500 py-2 text-center">
+              No assignments. Use "Add row" to assign subjects — or add them later.
             </p>
           )}
         </div>
@@ -389,16 +413,11 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
         )}
       </div>
 
-      {/* Actions */}
-      <div className="flex gap-3 pt-1 border-t border-slate-100">
-        <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
-        <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
-          {saving
-            ? (mode === 'create' ? 'Creating...' : 'Saving...')
-            : (mode === 'create' ? 'Create Teacher' : 'Save Changes')
-          }
-        </button>
-      </div>
+      {mode === 'create' && <WhatHappensNext steps={STAFF_NEXT} />}
+
+      <FormFooter onClose={onClose} saving={saving}
+        label={mode === 'create' ? 'Create invitation' : 'Save changes'}
+        savingLabel={mode === 'create' ? 'Creating…' : 'Saving…'} />
     </form>
   )
 }
@@ -470,8 +489,8 @@ function AssignmentTags({ assignments = [], advisory = [] }) {
 }
 
 // ── Delete Confirm Modal ──────────────────────────────────────
-function DeleteConfirm({ teacher, onConfirm, onClose }) {
-  const [mode, setMode]       = useState('deactivate') // 'deactivate' | 'permanent'
+function DeleteConfirm({ teacher, onConfirm, onClose, initialMode = 'deactivate' }) {
+  const [mode, setMode]       = useState(initialMode) // 'deactivate' | 'permanent'
   const [deleting, setDeleting] = useState(false)
 
   const handle = async () => {
@@ -635,179 +654,254 @@ function AssignmentHistory({ teacher, onClose }) {
   )
 }
 
-// ── Main Page ─────────────────────────────────────────────────
 // ── Admin Form ────────────────────────────────────────────────
-function AdminForm({ initial, onSubmit, onClose, mode }) {
+// Super Admin can be invited here, behind the two guards the API enforces: a
+// warning that says what the role reaches, and the inviting super admin's own
+// password. It is a creation-time choice only — an existing admin's role moves
+// between the two scoped tiers and never to or from Super Admin.
+const ADMIN_ROLE_OPTIONS = [
+  { id: ROLES.ADMIN_ECE,   label: ROLE_LABELS[ROLES.ADMIN_ECE],   desc: 'Kinder learners, teachers and curriculum' },
+  { id: ROLES.ADMIN_ELEM,  label: ROLE_LABELS[ROLES.ADMIN_ELEM],  desc: 'Grades 1–6 learners, teachers and curriculum' },
+  { id: ROLES.SUPER_ADMIN, label: ROLE_LABELS[ROLES.SUPER_ADMIN], desc: 'The whole school, including school years and admin accounts' },
+]
+
+function AdminForm({ initial, onSubmit, onClose, mode, superAdminCount }) {
+  const emailEditable = mode === 'create' || canChangeStaffEmail(initial)
+  const isExistingSuper = mode === 'edit' && initial?.role === ROLES.SUPER_ADMIN
   const [form, setForm] = useState({
     surname:     initial?.surname     || '',
     first_name:  initial?.first_name  || '',
     middle_name: initial?.middle_name || '',
     email:       initial?.email       || '',
     phone:       initial?.phone       || '',
-    password:    '',
-    role:        initial?.role        || ROLES.ADMIN_ECE,
+    role:        initial?.role        || '',
+    confirm_password: '',
   })
-  const [showPw, setShowPw] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [error, setError]   = useState('')
 
-  const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
+  const setField = (k, v) => { setForm(p => ({ ...p, [k]: v })); setError('') }
+  const grantingSuper = mode === 'create' && form.role === ROLES.SUPER_ADMIN
 
   const handleSubmit = async e => {
     e.preventDefault()
+    if (!form.role) { setError('Choose a role.'); return }
     setSaving(true)
     try {
       const payload = { ...form }
+      if (!grantingSuper) delete payload.confirm_password
       if (mode === 'edit') {
-        delete payload.email
-        if (!payload.password) delete payload.password
+        trimForEdit(payload, initial, emailEditable)
+        if (isExistingSuper) delete payload.role
       }
       await onSubmit(payload)
+    } catch (err) {
+      // createAdmin is a silent call, so its refusal (a wrong confirming
+      // password, an email already in use) is shown here instead of a toast.
+      // Edits are not silent — the interceptor has already toasted them.
+      if (mode === 'create') setError(err?.response?.data?.error || 'Something went wrong. Please try again.')
     } finally {
       setSaving(false)
     }
   }
 
+  const roleChoices = mode === 'create'
+    ? ADMIN_ROLE_OPTIONS
+    : ADMIN_ROLE_OPTIONS.filter(o => isExistingSuper ? o.id === ROLES.SUPER_ADMIN : o.id !== ROLES.SUPER_ADMIN)
+
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <div>
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Account Information</p>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Surname *</label>
-            <input className="input" value={form.surname}
-              onChange={e => setField('surname', e.target.value)}
-              onBlur={e => setField('surname', titleCase(e.target.value))} required />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">First Name *</label>
-            <input className="input" value={form.first_name}
-              onChange={e => setField('first_name', e.target.value)}
-              onBlur={e => setField('first_name', titleCase(e.target.value))} required />
-          </div>
-          <div className="col-span-2">
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Middle Name <span className="text-slate-400 font-normal">(optional)</span>
-            </label>
-            <input className="input" value={form.middle_name}
-              onChange={e => setField('middle_name', e.target.value)}
-              onBlur={e => setField('middle_name', titleCase(e.target.value))} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Email *</label>
-            <input className="input" type="email" value={form.email}
-              onChange={e => setField('email', e.target.value)}
-              required disabled={mode === 'edit'} />
-            {mode === 'edit' && <p className="text-xs text-slate-400 mt-1">Email cannot be changed.</p>}
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Phone *</label>
-            <PhoneInput className="input pr-10" value={form.phone}
-              onChange={v => setField('phone', v)} required />
-          </div>
-          <div className="col-span-2">
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Role *</label>
-            <select className="input" value={form.role}
-              onChange={e => setField('role', e.target.value)}
-              disabled={mode === 'edit' && initial?.role === ROLES.SUPER_ADMIN}
-              required>
-              <option value={ROLES.ADMIN_ECE}>{ROLE_LABELS[ROLES.ADMIN_ECE]} (Kinder)</option>
-              <option value={ROLES.ADMIN_ELEM}>{ROLE_LABELS[ROLES.ADMIN_ELEM]} (Grade 1 – Grade 6)</option>
-              {mode === 'edit' && initial?.role === ROLES.SUPER_ADMIN && (
-                <option value={ROLES.SUPER_ADMIN}>{ROLE_LABELS[ROLES.SUPER_ADMIN]}</option>
-              )}
-            </select>
-            <p className="text-xs text-slate-400 mt-1">
-              Super Admin accounts cannot be created from this UI.
-            </p>
-          </div>
-          <div className="col-span-2">
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              {mode === 'edit' ? 'New Password (leave blank to keep current)' : 'Password *'}
-            </label>
-            <div className="relative">
-              <input
-                className="input pr-10"
-                type={showPw ? 'text' : 'password'}
-                placeholder={mode === 'edit' ? '••••••••' : 'Min. 8 characters'}
-                value={form.password}
-                onChange={e => setField('password', e.target.value)}
-                required={mode === 'create'}
-              />
-              <button type="button" onClick={() => setShowPw(!showPw)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                {showPw ? <EyeOff size={15}/> : <Eye size={15}/>}
-              </button>
-            </div>
-          </div>
-        </div>
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="space-y-3">
+        <p className={SECTION}>Admin details</p>
+        <PersonFields form={form} setField={setField} mode={mode} emailEditable={emailEditable} />
       </div>
 
-      <div className="flex gap-3 pt-2 border-t border-slate-100">
-        <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
-        <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
-          {saving ? 'Saving...' : (mode === 'edit' ? 'Save Changes' : 'Create Admin')}
-        </button>
-      </div>
+      <fieldset className="space-y-2">
+        <legend className={clsx(SECTION, 'mb-3')}>Role</legend>
+        {roleChoices.map(o => {
+          const on = form.role === o.id
+          return (
+            <label key={o.id}
+              className={clsx('flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-colors',
+                isExistingSuper ? 'cursor-default' : 'cursor-pointer',
+                on ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500' : 'border-slate-200 bg-white hover:bg-slate-50')}>
+              <input type="radio" name="admin-role" value={o.id} checked={on} disabled={isExistingSuper}
+                onChange={() => setField('role', o.id)} className="w-4 h-4 accent-brand-500 shrink-0" />
+              <span className="flex-1 min-w-0">
+                <span className="block text-sm font-semibold text-slate-800">{o.label}</span>
+                <span className="block text-xs text-slate-500 mt-0.5">{o.desc}</span>
+              </span>
+              {o.id === ROLES.SUPER_ADMIN && (
+                <span className="shrink-0 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-semibold">Full access</span>
+              )}
+            </label>
+          )
+        })}
+        {isExistingSuper && (
+          <p className="text-xs text-slate-500">A Super Admin's role can't be changed.</p>
+        )}
+      </fieldset>
+
+      {grantingSuper && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3.5">
+          <div className="flex gap-3">
+            <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-amber-900">This gives full control of VISTA</p>
+              <p className="text-[13px] text-amber-800 leading-relaxed mt-0.5">
+                A Super Admin can change school years, enrolment status, every admin account and the
+                public website. Keep it to the principal and one backup. VISTA has{' '}
+                <b>{superAdminCount}</b> Super Admin{superAdminCount === 1 ? '' : 's'} now.
+              </p>
+            </div>
+          </div>
+          <div className="sm:pl-[30px]">
+            <label htmlFor="confirm-pw" className="block text-sm font-medium text-amber-900 mb-1.5">
+              Enter your password to confirm
+            </label>
+            <input id="confirm-pw" type="password" autoComplete="current-password" required
+              className="input !border-amber-300" value={form.confirm_password}
+              onChange={e => setField('confirm_password', e.target.value)} />
+          </div>
+        </div>
+      )}
+
+      {mode === 'create' && !grantingSuper && <WhatHappensNext steps={STAFF_NEXT} />}
+
+      {error && <p className="text-sm text-red-600 -mt-2" role="alert">{error}</p>}
+
+      <FormFooter onClose={onClose} saving={saving}
+        label={mode === 'edit' ? 'Save changes' : grantingSuper ? 'Create Super Admin invitation' : 'Create invitation'}
+        savingLabel={mode === 'edit' ? 'Saving…' : 'Creating…'} />
     </form>
   )
 }
 
+// ── Row menu items ────────────────────────────────────────────
+// Only the actions the account's state allows. Anything that ends access
+// (cancel, deactivate, delete) goes below the divider in red and confirms first.
+function staffMenu(staff, actions) {
+  const state = staffAccessOf(staff).id
+  const items = []
+  if (canReissue(state)) items.push({ key: 'reissue', icon: RotateCcw, label: 'Reissue invitation', hint: 'Opens it again for 30 days', run: actions.reissue })
+  if (state === 'deactivated' && actions.reactivate) {
+    items.push({
+      key: 'reactivate', icon: ShieldCheck, label: 'Reactivate',
+      hint: staff.has_password ? 'They can sign in again with their password' : 'Reopens their invitation for 30 days',
+      run: actions.reactivate,
+    })
+  }
+  items.push({ key: 'edit', icon: Pencil, label: 'Edit details', run: actions.edit })
+  if (actions.history) items.push({ key: 'history', icon: History, label: 'Assignment history', run: actions.history })
+
+  const danger = []
+  if (canCancel(state)) danger.push({ key: 'cancel', icon: X, label: 'Cancel invitation', run: actions.cancel })
+  if (state === 'active' && actions.deactivate) danger.push({ key: 'deactivate', icon: ShieldOff, label: 'Deactivate', run: actions.deactivate })
+  if (state === 'deactivated' && actions.remove) danger.push({ key: 'remove', icon: Trash2, label: 'Delete permanently', run: actions.remove })
+  return { items, danger }
+}
+
+// ── Cancel invitation confirm ─────────────────────────────────
+function CancelInvitation({ staff, onConfirm, onClose }) {
+  const [busy, setBusy] = useState(false)
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-600 leading-relaxed">
+        <b className="text-slate-900">{formatName(staff)}</b> will no longer be able to activate their account,
+        and any code already sent stops working. The account is deactivated rather than deleted — reactivate it
+        later to invite them again.
+      </p>
+      <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
+        <button onClick={onClose} className="btn-secondary">Keep invitation</button>
+        <button disabled={busy}
+          onClick={async () => { setBusy(true); try { await onConfirm() } catch { /* interceptor toasts */ } finally { setBusy(false) } }}
+          className="btn-primary !bg-red-600 hover:!bg-red-700">Cancel invitation</button>
+      </div>
+    </div>
+  )
+}
+
+/** The steps a staff member follows — on the dashboard's own sign-in page. */
+const staffSteps = (email) => [
+  `Open ${window.location.origin}/login`,
+  'Choose "Activate your account"',
+  `Enter ${email} and follow the code sent there`,
+]
+
+const notActivated = (rows) =>
+  rows.filter(r => ['pending', 'in_progress', 'expired'].includes(staffAccessOf(r).id)).length
+
+/** "19 teachers · 4 haven't activated yet" — the same sentence on every tab. */
+const countLine = (n, noun, waiting) =>
+  `${n} ${noun}${n !== 1 ? 's' : ''}${waiting ? ` · ${waiting} haven't activated yet` : ''}`
+
+const staffCounts = (rows) => rows.reduce((acc, r) => {
+  const id = staffAccessOf(r).id
+  acc[id] = (acc[id] || 0) + 1
+  return acc
+}, {})
+
 export default function AccountManagement() {
-  const { isSuperAdmin } = useAuth()
+  const { user, isSuperAdmin } = useAuth()
+  const meId = user?.id
   const [tab, setTab] = useState('teachers')
-  const [showParentCreate, setShowParentCreate] = useState(false)
-  const [parentCount, setParentCount] = useState(0)
+  const menus = useRowMenus()
+
+  // ── Teachers ───────────────────────────────────────────────
   const [teachers, setTeachers]   = useState([])
   const [loading, setLoading]     = useState(true)
   const [search, setSearch]       = useState('')
-  const [filterActive, setFilterActive] = useState('all')
+  const [teacherState, setTeacherState] = useState('')
 
   const [showCreate, setShowCreate] = useState(false)
   const [editTarget, setEditTarget] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleteMode, setDeleteMode] = useState('deactivate')   // which option the dialog opens on
   const [historyTarget, setHistoryTarget] = useState(null)
+  const [cancelTarget, setCancelTarget] = useState(null)   // { kind, staff }
+  const [created, setCreated] = useState(null)             // { kind, account }
 
   const fetch_ = useCallback(async () => {
     setLoading(true)
     try {
       const params = {}
       if (search) params.search = search
-      if (filterActive !== 'all') params.is_active = filterActive
       const res = await accountApi.listTeachers(params)
       setTeachers(res.data.teachers)
     } catch {}
     setLoading(false)
-  }, [search, filterActive])
+  }, [search])
 
   useEffect(() => {
     const t = setTimeout(fetch_, 300)
     return () => clearTimeout(t)
   }, [fetch_])
 
-  // ── Create ─────────────────────────────────────────────────
+  // Every write answers with a sentence saying what happened; show that.
+  const announce = (res, fallback) => toast.success(res?.data?.message || fallback, { duration: 6000 })
+
   const handleCreate = async (data) => {
-    await accountApi.createTeacher(data)
-    toast.success(`${formatName(data)}'s account created!`)
+    const res = await accountApi.createTeacher(data)
     setShowCreate(false)
+    setCreated({ kind: 'teacher', account: res.data.teacher })
     fetch_()
   }
 
-  // ── Edit ───────────────────────────────────────────────────
   const handleEdit = async (data) => {
-    await accountApi.updateTeacher(editTarget.id, data)
-    toast.success('Account updated successfully.')
+    const res = await accountApi.updateTeacher(editTarget.id, data)
+    announce(res, 'Account updated.')
     setEditTarget(null)
     fetch_()
   }
 
-  // ── Reactivate ─────────────────────────────────────────────
   const handleReactivate = async (teacher) => {
-    await accountApi.updateTeacher(teacher.id, { is_active: true })
-    toast.success(`${formatName(teacher)}'s account reactivated.`)
-    fetch_()
+    try {
+      const res = await accountApi.updateTeacher(teacher.id, { is_active: true })
+      announce(res, `${formatName(teacher)}'s account reactivated.`)
+      fetch_()
+    } catch {}
   }
 
-  // ── Delete / Deactivate ────────────────────────────────────
   const handleDelete = async (mode) => {
     if (mode === 'permanent') {
       await accountApi.deletePermanent(deleteTarget.id)
@@ -820,17 +914,17 @@ export default function AccountManagement() {
     fetch_()
   }
 
-  const active   = teachers.filter(t => t.is_active)
-  const inactive = teachers.filter(t => !t.is_active)
-
   // ── Admins (super_admin only) ─────────────────────────────
   const [admins, setAdmins] = useState([])
   const [adminsLoading, setAdminsLoading] = useState(false)
   const [adminSearch, setAdminSearch] = useState('')
-  const [adminFilterActive, setAdminFilterActive] = useState('all')
+  const [adminState, setAdminState] = useState('')
   const [showAdminCreate, setShowAdminCreate] = useState(false)
   const [adminEditTarget, setAdminEditTarget] = useState(null)
   const [adminDeleteTarget, setAdminDeleteTarget] = useState(null)
+  // Counted over every admin, not the search result: the warning in the invite
+  // form states how many Super Admins VISTA has, whatever the list is showing.
+  const [superAdminCount, setSuperAdminCount] = useState(0)
 
   const fetchAdmins = useCallback(async () => {
     if (!isSuperAdmin) return
@@ -838,12 +932,20 @@ export default function AccountManagement() {
     try {
       const params = {}
       if (adminSearch) params.search = adminSearch
-      if (adminFilterActive !== 'all') params.is_active = adminFilterActive
       const res = await accountApi.listAdmins(params)
       setAdmins(res.data.admins || [])
     } catch {}
     setAdminsLoading(false)
-  }, [isSuperAdmin, adminSearch, adminFilterActive])
+  }, [isSuperAdmin, adminSearch])
+
+  const fetchSuperAdminCount = useCallback(async () => {
+    if (!isSuperAdmin) return
+    try {
+      const res = await accountApi.listAdmins({})
+      setSuperAdminCount((res.data.admins || [])
+        .filter(a => a.role === ROLES.SUPER_ADMIN && staffAccessOf(a).id === 'active').length)
+    } catch {}
+  }, [isSuperAdmin])
 
   useEffect(() => {
     if (tab !== 'admins') return
@@ -851,29 +953,74 @@ export default function AccountManagement() {
     return () => clearTimeout(t)
   }, [tab, fetchAdmins])
 
+  useEffect(() => { if (showAdminCreate) fetchSuperAdminCount() }, [showAdminCreate, fetchSuperAdminCount])
+
   const handleCreateAdmin = async (data) => {
-    await accountApi.createAdmin(data)
-    toast.success(`${formatName(data)}'s admin account created!`)
+    const res = await accountApi.createAdmin(data)
     setShowAdminCreate(false)
+    setCreated({ kind: 'admin', account: res.data.admin })
     fetchAdmins()
   }
   const handleEditAdmin = async (data) => {
-    await accountApi.updateAdmin(adminEditTarget.id, data)
-    toast.success('Admin account updated.')
+    const res = await accountApi.updateAdmin(adminEditTarget.id, data)
+    announce(res, 'Admin account updated.')
     setAdminEditTarget(null)
     fetchAdmins()
   }
   const handleDeleteAdmin = async () => {
-    await accountApi.deleteAdmin(adminDeleteTarget.id)
-    toast.success(`${formatName(adminDeleteTarget)} deactivated.`)
-    setAdminDeleteTarget(null)
-    fetchAdmins()
+    try {
+      await accountApi.deleteAdmin(adminDeleteTarget.id)
+      toast.success(`${formatName(adminDeleteTarget)} deactivated.`)
+      setAdminDeleteTarget(null)
+      fetchAdmins()
+    } catch {}
   }
   const handleReactivateAdmin = async (admin) => {
-    await accountApi.updateAdmin(admin.id, { is_active: true })
-    toast.success(`${formatName(admin)}'s admin account reactivated.`)
-    fetchAdmins()
+    try {
+      const res = await accountApi.updateAdmin(admin.id, { is_active: true })
+      announce(res, `${formatName(admin)}'s admin account reactivated.`)
+      fetchAdmins()
+    } catch {}
   }
+
+  // ── Invitations (both staff kinds) ─────────────────────────
+  const refetch = (kind) => (kind === 'admin' ? fetchAdmins() : fetch_())
+  const handleReissue = async (kind, staff) => {
+    try {
+      const res = kind === 'admin'
+        ? await accountApi.reissueAdminInvitation(staff.id)
+        : await accountApi.reissueTeacherInvitation(staff.id)
+      announce(res, 'Invitation reissued.')
+      refetch(kind)
+    } catch {}
+  }
+  const handleCancelInvitation = async () => {
+    const { kind, staff } = cancelTarget
+    const res = kind === 'admin'
+      ? await accountApi.cancelAdminInvitation(staff.id)
+      : await accountApi.cancelTeacherInvitation(staff.id)
+    announce(res, 'Invitation cancelled.')
+    setCancelTarget(null)
+    refetch(kind)
+  }
+
+  // ── Parents (their own component; it reports its counts up) ──
+  const [showParentCreate, setShowParentCreate] = useState(false)
+  const [parentCounts, setParentCounts] = useState(null)   // null until the tab has loaded once
+
+  const shownTeachers = teacherState ? teachers.filter(t => staffAccessOf(t).id === teacherState) : teachers
+  const shownAdmins   = adminState ? admins.filter(a => staffAccessOf(a).id === adminState) : admins
+
+  // One header, one primary action, the same sentence under the title.
+  const HEADER = {
+    teachers: { line: countLine(teachers.length, 'teacher', notActivated(teachers)), action: 'Invite Teacher', open: () => setShowCreate(true) },
+    admins:   { line: countLine(admins.length, 'admin', notActivated(admins)),       action: 'Invite Admin',   open: () => setShowAdminCreate(true) },
+    parents:  { line: parentCounts ? countLine(parentCounts.total, 'parent', parentCounts.waiting) : ' ', action: 'Invite Parent', open: () => setShowParentCreate(true) },
+  }[tab]
+
+  // Every admin sees Teachers and Parents — both are scoped by grade on the
+  // server. Admins is the super admin's alone.
+  const TABS = [['teachers', 'Teachers'], ...(isSuperAdmin ? [['admins', 'Admins']] : []), ['parents', 'Parents']]
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -881,348 +1028,169 @@ export default function AccountManagement() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="page-title">Account Management</h1>
-          <p className="page-subtitle">
-            {tab === 'teachers'
-              ? `${active.length} active · ${inactive.length} inactive teacher${teachers.length !== 1 ? 's' : ''}`
-              : tab === 'admins'
-              ? `${admins.length} admin account${admins.length !== 1 ? 's' : ''}`
-              : `${parentCount} parent account${parentCount !== 1 ? 's' : ''}`}
-          </p>
+          <p className="page-subtitle">{HEADER.line}</p>
         </div>
-        {tab === 'teachers' && (
-          <button onClick={() => setShowCreate(true)} className="btn-primary">
-            <Plus size={16} /> Add Teacher
-          </button>
-        )}
-        {tab === 'admins' && (
-          <button onClick={() => setShowAdminCreate(true)} className="btn-primary">
-            <Plus size={16} /> Add Admin
-          </button>
-        )}
-        {tab === 'parents' && (
-          <button onClick={() => setShowParentCreate(true)} className="btn-primary">
-            <Plus size={16} /> Add Parent
-          </button>
-        )}
+        <button onClick={HEADER.open} className="btn-primary">
+          <MailPlus size={16} /> {HEADER.action}
+        </button>
       </div>
 
-      {/* Tabs (Admins tab only for super_admin) */}
-      {isSuperAdmin && (
-        <div className="flex items-center gap-2 border-b border-slate-200">
-          <button onClick={() => setTab('teachers')}
+      {/* Tabs */}
+      <div className="flex items-center gap-2 border-b border-slate-200">
+        {TABS.map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)}
             className={clsx(
               'px-4 py-2 text-sm font-semibold transition-colors border-b-2 -mb-px',
-              tab === 'teachers'
+              tab === id
                 ? 'border-brand-500 text-brand-600'
                 : 'border-transparent text-slate-500 hover:text-slate-700'
             )}>
-            Teachers
+            {label}
           </button>
-          <button onClick={() => setTab('admins')}
-            className={clsx(
-              'px-4 py-2 text-sm font-semibold transition-colors border-b-2 -mb-px',
-              tab === 'admins'
-                ? 'border-brand-500 text-brand-600'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
-            )}>
-            Admins
-          </button>
-          <button onClick={() => setTab('parents')}
-            className={clsx(
-              'px-4 py-2 text-sm font-semibold transition-colors border-b-2 -mb-px',
-              tab === 'parents'
-                ? 'border-brand-500 text-brand-600'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
-            )}>
-            Parents
-          </button>
-        </div>
-      )}
+        ))}
+      </div>
 
-      {/* The Parents tab is its own component — a roster of parent portal
-          accounts, plus the one thing a learner's page cannot do: attach
-          another learner to an account that already exists. */}
       {tab === 'parents' && (
         <ParentAccounts
           createOpen={showParentCreate}
+          onOpenCreate={() => setShowParentCreate(true)}
           onCloseCreate={() => setShowParentCreate(false)}
-          onCountChange={setParentCount}
+          onCountsChange={setParentCounts}
         />
       )}
 
       {tab === 'teachers' && <>
-      {/* Filters */}
-      <div className="card p-4 flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input className="input pl-10" placeholder="Search by name or email..."
-            value={search} onChange={e => setSearch(e.target.value)} />
-        </div>
-        <div className="flex rounded-xl border border-slate-200 overflow-hidden text-sm font-medium">
-          {[
-            { val: 'all',  label: 'All'      },
-            { val: 'true', label: 'Active'   },
-            { val: 'false',label: 'Inactive' },
-          ].map(opt => (
-            <button
-              key={opt.val}
-              onClick={() => setFilterActive(opt.val)}
-              className={clsx(
-                'px-4 py-2 transition-colors',
-                filterActive === opt.val
-                  ? 'bg-brand-500 text-white'
-                  : 'bg-white text-slate-600 hover:bg-slate-50'
-              )}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      </div>
+        <RosterFilters search={search} onSearch={setSearch}
+          placeholder="Search by name or email" label="Search teachers"
+          chips={stateChips(STAFF_ACCESS_STATES, staffCounts(teachers), teachers.length)}
+          value={teacherState} onChange={setTeacherState} />
 
-      {/* Table */}
-      <div className="card overflow-hidden">
-        {loading ? <LoadingSpinner /> : teachers.length === 0 ? (
-          <EmptyState
-            icon={UserCog}
-            title="No teacher accounts found"
-            description="Create a teacher account to get started."
-            action={<button onClick={() => setShowCreate(true)} className="btn-primary">Add Teacher</button>}
-          />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="table-base">
-              <thead>
-                <tr>
-                  <th>Teacher</th>
-                  <th>Contact</th>
-                  <th>Assignments</th>
-                  <th>Status</th>
-                  <th>Created</th>
-                  <th className="text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {teachers.map(t => (
-                  <tr key={t.id} className={!t.is_active ? 'opacity-50' : ''}>
-                    {/* Teacher info */}
-                    <td>
-                      <div className="flex items-center gap-3">
-                        <div className={clsx(
-                          'w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0',
-                          t.is_active ? 'bg-brand-100 text-brand-700' : 'bg-slate-100 text-slate-400'
-                        )}>
-                          {nameInitial(t)}
-                        </div>
-                        <div>
-                          <p className="font-medium text-slate-800">{formatName(t)}</p>
-                          <p className="text-xs text-slate-400">{t.email}</p>
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* Phone */}
-                    <td className="text-sm text-slate-500">{t.phone || '—'}</td>
-
-                    {/* Assignments */}
-                    <td className="max-w-xs">
-                      <AssignmentTags assignments={t.assignments} advisory={t.advisory} />
-                    </td>
-
-                    {/* Status badge */}
-                    <td>
-                      <span className={clsx(
-                        'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
-                        t.is_active
-                          ? 'bg-emerald-50 text-emerald-700'
-                          : 'bg-slate-100 text-slate-500'
-                      )}>
-                        <span className={clsx(
-                          'w-1.5 h-1.5 rounded-full',
-                          t.is_active ? 'bg-emerald-500' : 'bg-slate-400'
-                        )} />
-                        {t.is_active ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-
-                    {/* Date */}
-                    <td className="text-xs text-slate-400 font-mono whitespace-nowrap">
-                      {new Date(t.created_at).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
-                    </td>
-
-                    {/* Actions */}
-                    <td>
-                      <div className="flex items-center gap-1 justify-start">
-                        <button
-                          onClick={() => setHistoryTarget(t)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                          title="Assignment History"
-                        >
-                          <History size={15} />
-                        </button>
-
-                        <button
-                          onClick={() => setEditTarget(t)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
-                          title="Edit"
-                        >
-                          <Pencil size={15} />
-                        </button>
-
-                        {!t.is_active && (
-                          <button
-                            onClick={() => handleReactivate(t)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
-                            title="Reactivate"
-                          >
-                            <ShieldCheck size={15} />
-                          </button>
-                        )}
-
-                        <button
-                          onClick={() => setDeleteTarget(t)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                          title="Delete / Deactivate"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </td>
+        <div className="card overflow-visible">
+          {loading ? <LoadingSpinner /> : shownTeachers.length === 0 ? (
+            teachers.length ? (
+              <NoMatch onClear={() => setTeacherState('')} />
+            ) : (
+              <EmptyState icon={UserCog} title="No teacher accounts yet"
+                description="Invite a teacher with their email. They choose their own password when they activate."
+                action={<button onClick={() => setShowCreate(true)} className="btn-primary">Invite Teacher</button>} />
+            )
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table-base">
+                <thead>
+                  <tr>
+                    <th>Teacher</th>
+                    <th>Assignments</th>
+                    <th>Account access</th>
+                    <th className="!text-right">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
+                </thead>
+                <tbody>
+                  {shownTeachers.map(t => {
+                    const key = `teacher:${t.id}`
+                    return (
+                      <tr key={t.id}>
+                        <td><PersonCell person={t} muted={staffAccessOf(t).id === 'deactivated'} /></td>
+                        <td className="max-w-xs"><AssignmentTags assignments={t.assignments} advisory={t.advisory} /></td>
+                        <td><AccessCell state={staffAccessOf(t)} detail={staffAccessDetail(t, { meId })} /></td>
+                        <td>
+                          <RowActions editLabel={`Edit ${formatName(t)}`} onEdit={() => setEditTarget(t)}
+                            menu={<RowMenu label={`More actions for ${formatName(t)}`}
+                              open={menus.isOpen(key)} onToggle={menus.toggle(key)}
+                              {...staffMenu(t, {
+                                reissue:    () => handleReissue('teacher', t),
+                                reactivate: () => handleReactivate(t),
+                                edit:       () => setEditTarget(t),
+                                history:    () => setHistoryTarget(t),
+                                cancel:     () => setCancelTarget({ kind: 'teacher', staff: t }),
+                                deactivate: () => { setDeleteMode('deactivate'); setDeleteTarget(t) },
+                                remove:     () => { setDeleteMode('permanent'); setDeleteTarget(t) },
+                              })} />} />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </>}
 
-      {/* Admins tab body (super_admin only) */}
-      {tab === 'admins' && isSuperAdmin && (<>
-        <div className="card p-4 flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input className="input pl-10" placeholder="Search by name or email..."
-              value={adminSearch} onChange={e => setAdminSearch(e.target.value)} />
-          </div>
-          <div className="flex rounded-xl border border-slate-200 overflow-hidden text-sm font-medium">
-            {[
-              { val: 'all',  label: 'All'      },
-              { val: 'true', label: 'Active'   },
-              { val: 'false',label: 'Inactive' },
-            ].map(opt => (
-              <button
-                key={opt.val}
-                onClick={() => setAdminFilterActive(opt.val)}
-                className={clsx(
-                  'px-4 py-2 transition-colors',
-                  adminFilterActive === opt.val
-                    ? 'bg-brand-500 text-white'
-                    : 'bg-white text-slate-600 hover:bg-slate-50'
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
+      {tab === 'admins' && isSuperAdmin && <>
+        <RosterFilters search={adminSearch} onSearch={setAdminSearch}
+          placeholder="Search by name or email" label="Search admins"
+          chips={stateChips(STAFF_ACCESS_STATES, staffCounts(admins), admins.length)}
+          value={adminState} onChange={setAdminState} />
 
-        <div className="card overflow-hidden">
-          {adminsLoading ? <LoadingSpinner /> : admins.length === 0 ? (
-            <EmptyState
-              icon={UserCog}
-              title="No admin accounts yet"
-              description="Create an ECE or Elementary admin to delegate grade-scoped management."
-              action={<button onClick={() => setShowAdminCreate(true)} className="btn-primary">Add Admin</button>}
-            />
+        <div className="card overflow-visible">
+          {adminsLoading ? <LoadingSpinner /> : shownAdmins.length === 0 ? (
+            admins.length ? (
+              <NoMatch onClear={() => setAdminState('')} />
+            ) : (
+              <EmptyState icon={UserCog} title="No admin accounts yet"
+                description="Invite an ECE or Elementary admin to delegate grade-scoped management."
+                action={<button onClick={() => setShowAdminCreate(true)} className="btn-primary">Invite Admin</button>} />
+            )
           ) : (
             <div className="overflow-x-auto">
               <table className="table-base">
                 <thead>
                   <tr>
                     <th>Admin</th>
-                    <th>Contact</th>
                     <th>Role</th>
-                    <th>Status</th>
-                    <th>Created</th>
-                    <th className="text-right">Actions</th>
+                    <th>Account access</th>
+                    <th className="!text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {admins.map(a => (
-                    <tr key={a.id} className={!a.is_active ? 'opacity-50' : ''}>
-                      <td>
-                        <div className="flex items-center gap-3">
-                          <div className={clsx(
-                            'w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0',
-                            a.is_active ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-400'
-                          )}>
-                            {nameInitial(a)}
-                          </div>
-                          <div>
-                            <p className="font-medium text-slate-800">{formatName(a)}</p>
-                            <p className="text-xs text-slate-400">{a.email}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="text-sm text-slate-500">{a.phone || '—'}</td>
-                      <td>
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-50 text-slate-700 border border-slate-200">
-                          {ROLE_LABELS[a.role] || a.role}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={clsx(
-                          'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
-                          a.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                        )}>
-                          <span className={clsx('w-1.5 h-1.5 rounded-full', a.is_active ? 'bg-emerald-500' : 'bg-slate-400')} />
-                          {a.is_active ? 'Active' : 'Inactive'}
-                        </span>
-                      </td>
-                      <td className="text-xs text-slate-400 font-mono whitespace-nowrap">
-                        {new Date(a.created_at).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
-                      </td>
-                      <td>
-                        <div className="flex items-center gap-1 justify-start">
-                          <button onClick={() => setAdminEditTarget(a)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
-                            title="Edit">
-                            <Pencil size={15} />
-                          </button>
-                          {a.role !== ROLES.SUPER_ADMIN && !a.is_active && (
-                            <button onClick={() => handleReactivateAdmin(a)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
-                              title="Reactivate">
-                              <ShieldCheck size={15} />
-                            </button>
-                          )}
-                          {a.role !== ROLES.SUPER_ADMIN && a.is_active && (
-                            <button onClick={() => setAdminDeleteTarget(a)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                              title="Deactivate">
-                              <Trash2 size={15} />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {shownAdmins.map(a => {
+                    const key = `admin:${a.id}`
+                    const isMe = a.id === meId
+                    return (
+                      <tr key={a.id}>
+                        <td>
+                          <PersonCell person={a} tone="purple" muted={staffAccessOf(a).id === 'deactivated'}
+                            suffix={isMe && <span className="ml-1.5 text-xs font-normal text-slate-500">(you)</span>} />
+                        </td>
+                        <td>
+                          <span className={clsx('inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold',
+                            a.role === ROLES.SUPER_ADMIN ? 'bg-slate-800 text-white' : 'bg-purple-50 text-purple-700')}>
+                            {ROLE_LABELS[a.role] || a.role}
+                          </span>
+                        </td>
+                        <td><AccessCell state={staffAccessOf(a)} detail={staffAccessDetail(a, { meId })} /></td>
+                        <td>
+                          <RowActions editLabel={`Edit ${formatName(a)}`} onEdit={() => setAdminEditTarget(a)}
+                            menu={<RowMenu label={`More actions for ${formatName(a)}`}
+                              open={menus.isOpen(key)} onToggle={menus.toggle(key)}
+                              {...staffMenu(a, {
+                                reissue:    () => handleReissue('admin', a),
+                                reactivate: () => handleReactivateAdmin(a),
+                                edit:       () => setAdminEditTarget(a),
+                                cancel:     () => setCancelTarget({ kind: 'admin', staff: a }),
+                                // Never yourself — the API refuses it too.
+                                deactivate: isMe ? null : () => setAdminDeleteTarget(a),
+                              })} />} />
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
           )}
         </div>
-      </>)}
+      </>}
 
       {/* ── Admin Create / Edit / Delete Modals ─────────────── */}
       <Modal open={showAdminCreate} onClose={() => setShowAdminCreate(false)}
-        title="Create Admin Account" size="lg">
-        <AdminForm mode="create" onSubmit={handleCreateAdmin} onClose={() => setShowAdminCreate(false)} />
+        title={titled('Invite Admin', "They'll choose their own password when they activate the account.")} size="lg">
+        <AdminForm mode="create" onSubmit={handleCreateAdmin} onClose={() => setShowAdminCreate(false)}
+          superAdminCount={superAdminCount} />
       </Modal>
       <Modal open={!!adminEditTarget} onClose={() => setAdminEditTarget(null)}
-        title="Edit Admin Account" size="lg">
+        title="Edit Admin" size="lg">
         {adminEditTarget && (
           <AdminForm mode="edit" initial={adminEditTarget} onSubmit={handleEditAdmin} onClose={() => setAdminEditTarget(null)} />
         )}
@@ -1234,6 +1202,11 @@ export default function AccountManagement() {
             <p className="text-sm text-slate-600">
               Deactivate <b>{formatName(adminDeleteTarget)}</b>'s account? They won't be able to sign in. Historical records are preserved.
             </p>
+            {adminDeleteTarget.role === ROLES.SUPER_ADMIN && (
+              <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+                This is a Super Admin account. VISTA always keeps at least one active Super Admin.
+              </p>
+            )}
             <div className="flex gap-3 pt-2 border-t border-slate-100">
               <button type="button" onClick={() => setAdminDeleteTarget(null)} className="btn-secondary flex-1">Cancel</button>
               <button type="button" onClick={handleDeleteAdmin} className="btn-primary flex-1 justify-center !bg-red-600 hover:!bg-red-700">
@@ -1244,51 +1217,66 @@ export default function AccountManagement() {
         )}
       </Modal>
 
-      {/* ── Create Modal ───────────────────────────────────── */}
+      {/* ── Teacher Create / Edit ──────────────────────────── */}
       <Modal open={showCreate} onClose={() => setShowCreate(false)}
-        title="Create Teacher Account" size="lg">
-        <TeacherForm
-          mode="create"
-          onSubmit={handleCreate}
-          onClose={() => setShowCreate(false)}
-        />
+        title={titled('Invite Teacher', "They'll choose their own password when they activate the account.")} size="lg">
+        <TeacherForm mode="create" onSubmit={handleCreate} onClose={() => setShowCreate(false)} />
       </Modal>
 
-      {/* ── Edit Modal ─────────────────────────────────────── */}
-      <Modal open={!!editTarget} onClose={() => setEditTarget(null)}
-        title="Edit Teacher Account" size="lg">
+      <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title="Edit Teacher" size="lg">
         {editTarget && (
-          <TeacherForm
-            mode="edit"
-            initial={editTarget}
-            onSubmit={handleEdit}
-            onClose={() => setEditTarget(null)}
-          />
+          <TeacherForm mode="edit" initial={editTarget} onSubmit={handleEdit} onClose={() => setEditTarget(null)} />
         )}
       </Modal>
 
-      {/* ── Delete Modal ───────────────────────────────────── */}
+      {/* ── Invitation created (staff; Parents shows its own) ── */}
+      <Modal open={!!created} onClose={() => setCreated(null)}
+        title={created?.kind === 'admin' ? 'Invite Admin' : 'Invite Teacher'}>
+        {created && (
+          <InvitationCreated
+            name={formatName(created.account)}
+            email={created.account.email}
+            roleLabel={ROLE_LABELS[created.account.role] || 'Staff'}
+            state={staffAccessOf(created.account)}
+            openUntil={invitationOpenUntil(created.account.invitation)}
+            steps={staffSteps(created.account.email)}
+            onDone={() => setCreated(null)}
+            onAnother={() => {
+              const kind = created.kind
+              setCreated(null)
+              if (kind === 'admin') setShowAdminCreate(true); else setShowCreate(true)
+            }} />
+        )}
+      </Modal>
+
+      <Modal open={!!cancelTarget} onClose={() => setCancelTarget(null)} title="Cancel invitation?" size="sm">
+        {cancelTarget && (
+          <CancelInvitation staff={cancelTarget.staff} onConfirm={handleCancelInvitation} onClose={() => setCancelTarget(null)} />
+        )}
+      </Modal>
+
       <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)}
-        title="Remove Teacher Account">
+        title={deleteMode === 'permanent' ? 'Delete Teacher Account' : 'Remove Teacher Account'}>
         {deleteTarget && (
-          <DeleteConfirm
-            teacher={deleteTarget}
-            onConfirm={handleDelete}
-            onClose={() => setDeleteTarget(null)}
-          />
+          <DeleteConfirm teacher={deleteTarget} initialMode={deleteMode}
+            onConfirm={handleDelete} onClose={() => setDeleteTarget(null)} />
         )}
       </Modal>
 
-      {/* ── Assignment History Modal ──────────────────────── */}
-      <Modal open={!!historyTarget} onClose={() => setHistoryTarget(null)}
-        title="Assignment History">
+      <Modal open={!!historyTarget} onClose={() => setHistoryTarget(null)} title="Assignment History">
         {historyTarget && (
-          <AssignmentHistory
-            teacher={historyTarget}
-            onClose={() => setHistoryTarget(null)}
-          />
+          <AssignmentHistory teacher={historyTarget} onClose={() => setHistoryTarget(null)} />
         )}
       </Modal>
+    </div>
+  )
+}
+
+function NoMatch({ onClear }) {
+  return (
+    <div className="py-12 text-center">
+      <p className="text-sm text-slate-500">No accounts match this filter.</p>
+      <button onClick={onClear} className="mt-2 text-sm font-semibold text-brand-600">Show all</button>
     </div>
   )
 }

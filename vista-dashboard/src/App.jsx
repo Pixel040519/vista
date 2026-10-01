@@ -3,6 +3,7 @@ import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/Layout/Layout'
 import Login from './pages/Login'
+import AccountAccess from './pages/AccountAccess'
 import Dashboard from './pages/Dashboard'
 import Students from './pages/Students'
 import StudentDetail from './pages/StudentDetail'
@@ -51,6 +52,8 @@ export default function App() {
         />
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/activate" element={<AccountAccess mode="activate" />} />
+          <Route path="/forgot-password" element={<AccountAccess mode="reset" />} />
           <Route path="/" element={
             <PrivateRoute><Layout /></PrivateRoute>
           }>

@@ -46,6 +46,11 @@ cross-origin anchors, never react-router routes.
   says the school office provides the app), then the four setup steps, which restate the
   invitation flow in the root `CLAUDE.md`. Keep them in step with it: there is no
   self-registration, and no label here may imply a sign-up.
+- **Staff accounts are invitations too.** The staff panel's note says access is by
+  invitation and points first-timers at "Activate your account" on the sign-in page, and
+  the FAQ sends staff who forgot their password to "Forgot password?" there — not to the
+  school office, which can no longer set a password for anyone. Keep both in step with
+  "Staff accounts are invitations too" in the root `CLAUDE.md`.
 - The page describes **how each audience gets in, not what each role can do** — the
   per-role scope blurbs were taken out deliberately. Home's portal band follows the same
   rule: three cards (Parents & guardians, Teachers, Administrators), each an icon, a name

@@ -22,7 +22,9 @@ npm run dev
 
 | Route | Page | Access |
 |-------|------|--------|
-| `/login` | Login | Public |
+| `/login` | Sign in, with **Forgot password?** and **Activate your account** | Public |
+| `/activate` | First sign-in for an invited teacher or admin: email → 6-digit code → own password | Public |
+| `/forgot-password` | Reset a password with a code sent by email | Public |
 | `/` | Dashboard | All roles |
 | `/students` | Student list + add | All (edit: admin/teacher) |
 | `/students/:id` | Student profile + AI insights | All |
@@ -35,7 +37,7 @@ npm run dev
 | `/risk` | AI risk overview | Admin, Teacher |
 | `/announcements` | Announcements — a **VISTA Portal** tab (staff, parents in the app) and a **Public Website** tab | All (post: admin; website: super admin, read-only for scoped admins) |
 | `/facilities` | Facility Gallery — the photos the website shows | Super admin |
-| `/accounts` | Teacher, admin and parent accounts | Admin |
+| `/accounts` | Teacher, admin and parent accounts — invited by email; no admin ever sets a password | Admin (Admins tab: super admin) |
 | `/curriculum` | School years, subjects, sections, advisers, assessment mode | Admin |
 | `/enrollment` | One school year's roster | Admin |
 | `/enrollment/promotion` | Year-End Promotion wizard | Admin |
@@ -56,10 +58,13 @@ src/
 │   │   ├── Layout.jsx
 │   │   ├── Sidebar.jsx
 │   │   └── Topbar.jsx
+│   ├── AccountRoster.jsx   ← shared pieces of the three Account Management tabs
+│   ├── ParentAccounts.jsx  ← the Parents tab
 │   └── UI/
 │       └── index.jsx       ← StatCard, RiskBadge, Modal, etc.
 └── pages/
     ├── Login.jsx
+    ├── AccountAccess.jsx   ← /activate and /forgot-password
     ├── Dashboard.jsx       ← AI charts + risk alerts
     ├── Students.jsx        ← List + search + add
     ├── StudentDetail.jsx   ← Full profile + 5 tabs

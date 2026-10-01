@@ -99,19 +99,25 @@ const queueMail = ({ to, subject, text }) => {
 /**
  * Activation code. Deliberately carries no student name, grade, section or LRN:
  * this message goes to an address nobody has proved they control yet, so it
- * must not disclose anything about a child.
+ * must not disclose anything about a child — or, for staff, about the role
+ * being granted.
+ *
+ * `forParent` only chooses where the message says to enter the code: a parent
+ * activates in the VISTA Parent app, staff on the dashboard's sign-in page.
  */
-const sendActivationCode = (email, code, ttlMinutes) => queueMail({
+const sendActivationCode = (email, code, ttlMinutes, { forParent = true } = {}) => queueMail({
   to: email,
   subject: 'Your VISTA activation code',
   text: [
-    'Your VISTA Parent app verification code is:',
+    forParent ? 'Your VISTA Parent app verification code is:' : 'Your VISTA verification code is:',
     '',
     `    ${code}`,
     '',
     `The code expires in ${ttlMinutes} minutes and can be used once.`,
     '',
-    'Enter it in the VISTA Parent app to finish activating your account and choose your password.',
+    forParent
+      ? 'Enter it in the VISTA Parent app to finish activating your account and choose your password.'
+      : 'Enter it on the VISTA sign-in page, under "Activate your account", to finish activating your account and choose your password.',
     '',
     'If you were not expecting this, you can ignore this message — no account is created or changed until the code is used.',
   ].join('\n'),

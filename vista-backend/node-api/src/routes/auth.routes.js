@@ -104,6 +104,13 @@ const buildUserPayload = async (req, user) => {
   return payload;
 };
 
+/**
+ * Record a sign-in. The staff roster shows it ("Last signed in today, 7:42 AM"),
+ * which is what tells an admin an Active account is actually in use.
+ */
+const stampLogin = (userId) =>
+  query('UPDATE users SET last_login_at=NOW() WHERE id=$1', [userId]);
+
 // POST /api/auth/register
 //
 // Was unauthenticated AND took `role` from the request body, so anyone who
@@ -163,6 +170,7 @@ router.post('/login', loginPerIp, async (req, res, next) => {
 
     if (!await bcrypt.compare(value.password, user.password_hash)) throw new AppError('Invalid credentials.', 401);
 
+    await stampLogin(user.id);
     res.json({
       message: 'Login successful.',
       user: await buildUserPayload(req, user),
@@ -230,12 +238,19 @@ router.get('/me', authenticate, async (req, res, next) => {
 });
 
 /* ──────────────────────────────────────────────────────────────────────────
- * Parent account activation
+ * Account activation — parents and staff alike
  *
- * VISTA has no self-registration. A parent account exists only where an admin
- * has authorized the email address (Students → Manage Guardians → Add
- * Invitation); these three endpoints let the holder of that address prove they
- * control it and choose their own password.
+ * VISTA has no self-registration. An account exists only where an admin has
+ * authorized the email address — Students → Manage Guardians → Add Invitation
+ * for a parent, Account Management → Invite Teacher / Invite Admin for staff —
+ * and these three endpoints let the holder of that address prove they control
+ * it and choose their own password. A parent does it from the VISTA Parent
+ * app, staff from "Activate your account" on the dashboard's sign-in page; the
+ * endpoints are the same and never ask which.
+ *
+ * `u.is_active = TRUE` on every lookup: a deactivated staff account must not
+ * be activatable, whatever its invitation says. Parent accounts are never
+ * deactivated (they are revoked instead), so the clause costs them nothing.
  *
  * ANTI-ENUMERATION. These are the only unauthenticated endpoints in the API
  * that take an arbitrary email, so they are the ones that could be used to ask
@@ -276,11 +291,11 @@ router.post('/activation/request', requestCodePerIp, requestCodePerEmail, async 
 
     const email = value.email.trim();
     const r = await query(
-      `SELECT u.id, u.account_status, pi.id AS invitation_id, pi.expires_at
+      `SELECT u.id, u.role, u.account_status, pi.id AS invitation_id, pi.expires_at
          FROM users u
-         LEFT JOIN parent_invitations pi
+         LEFT JOIN account_invitations pi
            ON pi.user_id = u.id AND pi.consumed_at IS NULL AND pi.revoked_at IS NULL
-        WHERE LOWER(u.email) = LOWER($1) AND u.role = 'parent'
+        WHERE LOWER(u.email) = LOWER($1) AND u.is_active = TRUE
         LIMIT 1`,
       [email]
     );
@@ -296,12 +311,14 @@ router.post('/activation/request', requestCodePerIp, requestCodePerEmail, async 
       // Only the hash is stored. The code itself goes straight to the mailer
       // and is never written to a log, an error or a retry record.
       await query(
-        `UPDATE parent_invitations
+        `UPDATE account_invitations
             SET code_hash=$2, code_issued_at=NOW(), code_expires_at=$3, code_attempts=0, updated_at=NOW()
           WHERE id=$1`,
         [row.invitation_id, await hashCode(code), codeExpiry()]
       );
-      sendActivationCode(email, code, CODE_TTL_MINUTES);
+      // The role only chooses where the message tells them to enter the code.
+      // It changes nothing about the response, which stays identical.
+      sendActivationCode(email, code, CODE_TTL_MINUTES, { forParent: row.role === 'parent' });
     } else {
       await equalizeWork();
     }
@@ -328,9 +345,9 @@ router.post('/activation/verify', verifyCodePerIp, verifyCodePerEmail, async (re
     const r = await query(
       `SELECT pi.id, pi.code_hash, pi.code_expires_at, pi.code_attempts, pi.expires_at
          FROM users u
-         JOIN parent_invitations pi
+         JOIN account_invitations pi
            ON pi.user_id = u.id AND pi.consumed_at IS NULL AND pi.revoked_at IS NULL
-        WHERE LOWER(u.email) = LOWER($1) AND u.role='parent' AND u.account_status='pending'
+        WHERE LOWER(u.email) = LOWER($1) AND u.is_active = TRUE AND u.account_status='pending'
         LIMIT 1`,
       [value.email.trim()]
     );
@@ -349,12 +366,18 @@ router.post('/activation/verify', verifyCodePerIp, verifyCodePerEmail, async (re
       // invitation itself survives — they can ask for another code, which is
       // the designed way back and keeps a wrong guess from costing them the
       // whole invitation.
+      //
+      // The casts are load-bearing: without them Postgres deduces $2 as
+      // smallint for the column and as integer for the comparison, refuses the
+      // statement, and a wrong code answered 500 — a different status from the
+      // 400 an unknown email gets, which is exactly the tell these endpoints
+      // exist not to give.
       const attempts = inv.code_attempts + 1;
       await query(
-        `UPDATE parent_invitations
-            SET code_attempts=$2,
-                code_hash = CASE WHEN $2 >= $3 THEN NULL ELSE code_hash END,
-                code_expires_at = CASE WHEN $2 >= $3 THEN NULL ELSE code_expires_at END,
+        `UPDATE account_invitations
+            SET code_attempts=$2::int,
+                code_hash = CASE WHEN $2::int >= $3::int THEN NULL ELSE code_hash END,
+                code_expires_at = CASE WHEN $2::int >= $3::int THEN NULL ELSE code_expires_at END,
                 updated_at=NOW()
           WHERE id=$1`,
         [inv.id, attempts, MAX_CODE_ATTEMPTS]
@@ -365,7 +388,7 @@ router.post('/activation/verify', verifyCodePerIp, verifyCodePerEmail, async (re
     // Single use: spend the code now, before the password is chosen. If they
     // abandon the flow here the code is gone and they request a fresh one.
     await query(
-      `UPDATE parent_invitations
+      `UPDATE account_invitations
           SET code_hash=NULL, code_expires_at=NULL, updated_at=NOW()
         WHERE id=$1`,
       [inv.id]
@@ -404,11 +427,11 @@ router.post('/activation/complete', async (req, res, next) => {
     const user = await withTransaction(async (client) => {
       const r = await client.query(
         `SELECT pi.id AS invitation_id, u.id AS user_id
-           FROM parent_invitations pi
+           FROM account_invitations pi
            JOIN users u ON u.id = pi.user_id
           WHERE pi.id = $1
             AND pi.consumed_at IS NULL AND pi.revoked_at IS NULL AND pi.expires_at > NOW()
-            AND u.account_status = 'pending'
+            AND u.account_status = 'pending' AND u.is_active = TRUE
           FOR UPDATE OF pi`,
         [decoded.inv]
       );
@@ -417,12 +440,13 @@ router.post('/activation/complete', async (req, res, next) => {
       }
 
       const hash = await bcrypt.hash(value.password, await bcrypt.genSalt(12));
+      // last_login_at too: activating signs them in, below.
       await client.query(
-        "UPDATE users SET password_hash=$2, account_status='active', updated_at=NOW() WHERE id=$1",
+        "UPDATE users SET password_hash=$2, account_status='active', last_login_at=NOW(), updated_at=NOW() WHERE id=$1",
         [r.rows[0].user_id, hash]
       );
       await client.query(
-        'UPDATE parent_invitations SET consumed_at=NOW(), updated_at=NOW() WHERE id=$1',
+        'UPDATE account_invitations SET consumed_at=NOW(), updated_at=NOW() WHERE id=$1',
         [r.rows[0].invitation_id]
       );
 

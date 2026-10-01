@@ -68,6 +68,15 @@ export default api
 export const authApi = {
   login: (data) => api.post('/auth/login', data),
   me:    ()     => api.get('/auth/me'),
+
+  // Activation and password reset — unauthenticated, and `silent` because the
+  // pages show every refusal inline; a toast on top would say it twice.
+  requestActivation:  (email)                   => api.post('/auth/activation/request', { email }, { silent: true }),
+  verifyActivation:   (email, code)             => api.post('/auth/activation/verify', { email, code }, { silent: true }),
+  completeActivation: (activation_token, password) => api.post('/auth/activation/complete', { activation_token, password }, { silent: true }),
+  requestReset:       (email)                   => api.post('/auth/password-reset/request', { email }, { silent: true }),
+  verifyReset:        (email, code)             => api.post('/auth/password-reset/verify', { email, code }, { silent: true }),
+  completeReset:      (reset_token, password)   => api.post('/auth/password-reset/complete', { reset_token, password }, { silent: true }),
 }
 
 // ── Profile (self-service, any role) ─────────────────────────
@@ -220,12 +229,17 @@ export const accountApi = {
   deactivate:     (id)     => api.delete(`/accounts/teachers/${id}`),
   deletePermanent:(id)     => api.delete(`/accounts/teachers/${id}/permanent`),
   assignmentHistory: (id)  => api.get(`/accounts/teachers/${id}/assignment-history`),
+  reissueTeacherInvitation: (id) => api.post(`/accounts/teachers/${id}/invitation`),
+  cancelTeacherInvitation:  (id) => api.delete(`/accounts/teachers/${id}/invitation`),
 
-  // Admin accounts (super_admin only)
+  // Admin accounts (super_admin only). Creating a Super Admin is refused
+  // inline when the confirming password is wrong, so that call is silent.
   listAdmins:    (params)  => api.get('/accounts/admins', { params }),
-  createAdmin:   (data)    => api.post('/accounts/admins', data),
+  createAdmin:   (data)    => api.post('/accounts/admins', data, { silent: true }),
   updateAdmin:   (id, d)   => api.put(`/accounts/admins/${id}`, d),
   deleteAdmin:   (id)      => api.delete(`/accounts/admins/${id}`),
+  reissueAdminInvitation: (id) => api.post(`/accounts/admins/${id}/invitation`),
+  cancelAdminInvitation:  (id) => api.delete(`/accounts/admins/${id}/invitation`),
 }
 
 // ── Scores (Score Items & Student Scores) ────────────────────

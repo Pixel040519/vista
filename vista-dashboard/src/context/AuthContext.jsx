@@ -24,13 +24,18 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  const login = async (email, password) => {
-    const res = await authApi.login({ email, password })
-    const { user, accessToken, refreshToken } = res.data
+  // Both a sign-in and a completed activation answer with the same session
+  // payload, so both land here.
+  const startSession = ({ user, accessToken, refreshToken }) => {
     localStorage.setItem('accessToken', accessToken)
     localStorage.setItem('refreshToken', refreshToken)
     setUser(user)
     return user
+  }
+
+  const login = async (email, password) => {
+    const res = await authApi.login({ email, password })
+    return startSession(res.data)
   }
 
   const logout = () => {
@@ -95,7 +100,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{
-      user, login, logout, loading, activeAssignments, advisory, updateUser,
+      user, login, startSession, logout, loading, activeAssignments, advisory, updateUser,
       refreshUser, syncActiveSchoolYear,
       gradeScope, ...roleFlags,
     }}>

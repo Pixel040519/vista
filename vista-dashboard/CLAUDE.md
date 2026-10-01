@@ -42,7 +42,7 @@ Mirror of the backend module — same constants and helpers (`ROLES`, `ANY_ADMIN
 
 ## Branding
 
-School logo `src/assets/NRYS_logo.png` imported as `nrysLogo`. Used in the Sidebar header and the Login page. Sidebar logo uses explicit `width`/`height` attrs + inline `objectFit`/`display` styles (Chrome rendering fix). The brand accent palette is `brand` (Tailwind) — a muted navy-blue scale (`#2b4f9e` at 500) matching the school colors; the deeper `navy` scale remains the chrome (sidebar + login background). Login page (`pages/Login.jsx`) is a single centered card on the navy-950 background (dot grid + brand-blue radial glow + soft gradient overlay) — the previous two-column split was retired. Same layout serves desktop and mobile (no `lg:hidden` mobile branch). Card contains: bare 120×120 NRYS logo (no white wrapper/ring — image renders directly with `object-contain`), "Northern Rizal Yorklin School" heading, brand-blue "VISTA" wordmark with accent rules, then the email/password form. Failed logins surface as inline red helper text above the Sign In button (cleared on next keystroke); the toast on `catch` was removed to avoid duplicating the inline message. Successful logins still toast.
+School logo `src/assets/NRYS_logo.png` imported as `nrysLogo`. Used in the Sidebar header and the Login page. Sidebar logo uses explicit `width`/`height` attrs + inline `objectFit`/`display` styles (Chrome rendering fix). The brand accent palette is `brand` (Tailwind) — a muted navy-blue scale (`#2b4f9e` at 500) matching the school colors; the deeper `navy` scale remains the chrome (sidebar + login background). Login page (`pages/Login.jsx`) is a single centered card on the navy-950 background (dot grid + brand-blue radial glow + soft gradient overlay) — the previous two-column split was retired. Same layout serves desktop and mobile (no `lg:hidden` mobile branch). Card contains: bare 120×120 NRYS logo (no white wrapper/ring — image renders directly with `object-contain`), "Northern Rizal Yorklin School" heading, brand-blue "VISTA" wordmark with accent rules, then the email/password form. Failed logins surface as inline red helper text above the Sign In button (cleared on next keystroke); the toast on `catch` was removed to avoid duplicating the inline message. Successful logins still toast. The card also carries **Forgot password?** beside the Password label and, under a "First time here?" rule, **Activate your account** — see "Sign-in: activation and password reset" below. The old "Contact your school administrator to reset your password" line is gone: admins can no longer set passwords.
 
 ## Sidebar (`Sidebar.jsx`)
 
@@ -51,7 +51,7 @@ Two parallel `navGroups` arrays — `adminNavGroups` and `teacherNavGroups` — 
 - **Admin** (all three admin roles, 4 groups): Overview · Student Management (Students, Grades, ECE Competency, Behavior) · Tools (Risk Overview, Announcements, Facility Gallery — super_admin only) · Administration (Accounts, Curriculum). ECE Competency is hidden from `admin_elem` via per-item `roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ECE]`; **Grades** is hidden from `admin_ece` via `roles: [ROLES.SUPER_ADMIN, ROLES.ADMIN_ELEM]` (the mirror — ECE tracks learning via ECE Competency, not the grades table). `/grades` route in `App.jsx` is also wrapped in a `PrivateRoute` excluding `admin_ece`. Lists within each page (Students, Risk Overview, etc.) are server-filtered by the caller's `gradeScopeForRole`, so scoped admins never see out-of-scope rows.
 - **Teacher** (4 groups): Overview (Dashboard) · Today's Work (Attendance, Score Entry, ECE Competency — promoted to the top group so daily surfaces are one click away) · My Students (Students, Behavior, Risk Overview) · Communication (Announcements). Grades is admin-only (teachers view/enter grades via Score Entry). ECE Competency is safe for all teachers — the page renders an empty state if no Kinder assignments.
 
-**Super-admin-only gates** (not enforced at sidebar level, gated inside the page): the Curriculum page hides "Create New School Year" inside `SYSelector` and the SY edit pencil for non-super-admins, and the Subjects + Sections tabs only render grade-level cards for grades in the caller's `gradeScope` (super_admin sees all seven; `admin_ece` sees Kinder; `admin_elem` sees Grade 1–6). The Accounts page shows a `Teachers`/`Admins` tab bar only to super_admin (scoped admins see the teacher table directly with no tabs); the Admins tab mirrors the Teachers tab — search-by-name/email + All/Active/Inactive pill filter + `accountApi.listAdmins({ search, is_active })` with a 300 ms debounce. Each inactive (non-super_admin) admin row shows a Reactivate (`ShieldCheck`) button that PUTs `is_active: true`; the Deactivate (`Trash2`) button hides while the row is inactive so the two actions don't overlap.
+**Super-admin-only gates** (not enforced at sidebar level, gated inside the page): the Curriculum page hides "Create New School Year" inside `SYSelector` and the SY edit pencil for non-super-admins, and the Subjects + Sections tabs only render grade-level cards for grades in the caller's `gradeScope` (super_admin sees all seven; `admin_ece` sees Kinder; `admin_elem` sees Grade 1–6). The Accounts page shows a `Teachers`/`Admins`/`Parents` tab bar only to super_admin (scoped admins see the teacher table directly with no tabs); the Admins tab mirrors the Teachers tab — see "Account Management → Teachers and Admins" below.
 
 **User footer**: avatar + name/role is a `NavLink` to `/profile` (active state `bg-white/10`; mobile triggers `onClose` via `handleNavClick`). `LogOut` icon opens a confirmation `Modal` (`title="Sign out?"`, size `sm`); "Sign out" button is red (`!bg-red-600 hover:!bg-red-700`) to override `btn-primary`. Reason: prevent accidental logouts from the always-visible sidebar button.
 
@@ -72,10 +72,10 @@ Sizes are `sm` (`max-w-md`), `md` (`max-w-lg`, default), `lg` (`max-w-2xl`), `xl
 `overflow-y-auto` to **`overflow-hidden`** and hands the scrolling to the
 children — so a child that does not scroll is simply **clipped** at
 `max-h-[84vh]`, with everything past that line unreachable and no scrollbar to
-say so. The Add Parent modal lost its second child row, its "Add another child"
+say so. The Add Parent (now Invite Parent) modal lost its second child row, its "Add another child"
 button and its whole footer that way. Pass it only when the content really does
 own its overflow (`flex-1 min-h-0 overflow-y-auto` on the part that scrolls,
-`shrink-0` on a pinned footer), as Manage Guardians and Add Parent now do;
+`shrink-0` on a pinned footer), as Manage Guardians and Invite Parent now do;
 otherwise leave it off and let the body scroll. `title` is rendered inside an `<h3>`, so a subtitle has to be passed as block `<span>`s, not `<p>`.
 
 ## Tables
@@ -1493,20 +1493,106 @@ showing the photos it was built with.
 ### Profile (`pages/Profile.jsx`)
 Any authenticated role at `/profile`. Account summary card (avatar, full_name, role pill, email, phone, "Member since"). Editable **Personal Information** form (surname/first_name/middle_name/phone; email is disabled with helper text). **Change Password** form (current + new + confirm with individual show/hide toggles); 401 surfaces inline as "Current password is incorrect" rather than a toast. Teacher-only **My Teaching Assignments** read-only card rendered from `activeAssignments`. Calls `updateUser(patch)` from AuthContext after save so the sidebar updates immediately.
 
+### Sign-in: activation and password reset (`pages/AccountAccess.jsx`)
+
+Two public routes beside `/login`, one component with a `mode`: **`/activate`** (an
+invited teacher or admin choosing their first password) and **`/forgot-password`**
+(anyone with an active account). Both are email → 6-digit code → password over the
+unauthenticated `authApi` calls, all marked `silent` because every refusal is shown
+inline. The code step says "*if* this email has been invited" — the API answers every
+email identically and this page genuinely does not know. `CodeInput` is six boxes on
+one value: typing advances, Backspace on an empty box steps back, paste or autofill
+fills them all.
+
+Activation ends **signed in** through `startSession()` (new on `AuthContext`, shared
+with `login`), except for a parent, who is told to use the VISTA Parent app — the
+dashboard is not theirs. A reset ends **back at `/login`** with the email filled in
+and a green note, on purpose: signing in with the new password is the last proof it
+landed where it was meant to.
+
+### Account Management — one page, three rosters
+
+**The three tabs are built from the same pieces** in `components/AccountRoster.jsx`,
+so they read as one page: `RosterFilters` (search left, state chips beside it — a chip
+with nobody in it is hidden unless it is All or selected), `PersonCell` (two-letter
+avatar, `formatName`, email under it), `AccessCell` (chip with a dot, and one line
+under it), `RowActions` (Edit pencil + ⋯), `RowMenu` + `useRowMenus` (one open menu per
+page, portalled), `WhatHappensNext` and `InvitationCreated`. The words and colours of
+an access line are shared through `utils/accessDisplay.js` (`invitedLine`,
+`whenSignedIn`, `expiredLine`, `toneClasses`); the *states* stay in
+`utils/staffAccess.js` and `utils/parentAccess.js`, which mirror their backend modules.
+Change the look in the shared file, never in one tab.
+
+The header is shared too: one primary button per tab — **Invite Teacher**, **Invite
+Admin**, **Invite Parent**, each with the mail icon — and the same sentence under the
+title ("19 teachers · 4 haven't activated yet"). Every admin sees **Teachers** and
+**Parents** (both scoped by grade on the server); **Admins** is the super admin's
+alone. The whole tab bar used to be super-admin-only, which hid Parents from scoped
+admins although this file has always said the tab is theirs too.
+
+What is allowed to differ is what genuinely differs: the second column (assignments,
+role, or children), the state names (staff are **Deactivated**, parents **Revoked**),
+and that a parent row also opens the account panel, because a parent's account *is*
+its children.
+
+### Account Management → Teachers and Admins
+
+Staff accounts are invitations (root `CLAUDE.md`). **Invite Teacher** / **Invite
+Admin** open a form with no password field: name in one row, then **Sign-in email**
+beside an optional **Mobile number**, assignments for a teacher, and a "What happens
+next" note saying that saving sends nothing. The email stays editable on Edit only
+while `canChangeStaffEmail()` (no password ever set) and says why when it is locked.
+After saving, **Invitation created** shows the account's status and open-until date
+and the three steps to hand over, using this dashboard's real
+`window.location.origin` for the sign-in address, with a Copy button — VISTA has not
+emailed them, so the admin is the one who tells them.
+
+The Admin form picks the role from three radio cards. **Super Admin** carries a "Full
+access" tag and, when chosen, an amber warning naming how many active Super Admins
+VISTA has (counted from an unfiltered `listAdmins`, not the search result) and a
+required **Enter your password to confirm**. `createAdmin` is a `silent` call so a
+wrong password or a taken email shows inline in the form instead of a toast. On Edit a
+Super Admin's role is shown but not changeable.
+
+Both tables have the same columns: person · assignments (teachers) or role (admins) ·
+**Account access** · actions. Access is `staffAccessOf()` from `utils/staffAccess.js`
+(mirror of the backend module): a chip plus one line — "Last signed in today, 7:42 AM",
+"Invited Oct 2 by you · open until Nov 1", "A code was sent and is waiting to be
+entered", "Invitation cancelled · never activated". The filter is **state chips**
+counted client-side over what the search returned; a chip with nobody in it is hidden
+unless selected, the Parents tab's rule. Actions are an Edit pencil and a **⋯ menu**
+offering only what the state allows — Reissue invitation, Reactivate, Edit details,
+Assignment history (teachers), and below a divider in red Cancel invitation,
+Deactivate, Delete permanently (teachers, once deactivated). Cancel confirms in its
+own small dialog; Deactivate/Delete reuse the existing dialogs, opened on the chosen
+option. The admin row for yourself is marked "(you)" and offers no Deactivate.
+
+**The menu is portalled and `fixed`-positioned off its button.** The table sits in an
+`overflow-x-auto` wrapper, which also clips vertically, so a menu hanging below the
+last row was cut off. It opens upward when there is no room below and closes on
+scroll or resize rather than drifting from its row.
+
+`PhoneInput` now applies its pattern only when the field is required or has digits.
+It always displays the `+63 9` prefix, so an optional field left empty was never
+blank to the browser and the pattern blocked the save.
+
 ### Account Management → Parents (`components/ParentAccounts.jsx`)
 
-A third tab beside Teachers and Admins, open to **every admin** and
-bounded by grade scope rather than by role — a parent is student-derived, and
-scoped admins already manage guardians for their own learners. It is a roster in
-the same shape as its sibling tabs: search, state chips with counts, one table,
-a per-row **Manage access** menu. **A chip whose count is zero is not rendered**
-— a state nobody is in is not a filter worth offering — with the two exceptions
-the Enrollment page arrived at the hard way: **All**, which is how you get back,
-and the **selected** chip, which renders at `0` rather than vanishing, or
-reissuing the last expired invitation would remove the very control still
-filtering the list and leave an empty table that reads as "no parents". `AccountManagement.jsx` owns only the tab
-button, the header count and the **Add Parent** button; everything else is the
-component.
+Open to **every admin** and bounded by grade scope rather than by role — a parent is
+student-derived, and scoped admins already manage guardians for their own learners.
+It is the third roster of one page (see "one page, three rosters" above): the same
+filter bar, columns (Parent · Children · Account access · Actions), access line and ⋯
+menu as Teachers and Admins. The chips come from the API's `summary`, counted over the
+caller's whole scope, and are not drawn until the first load answers ("All 0" would
+read as "no parents"). `AccountManagement.jsx` owns only the tab button, the header
+line (reported up through `onCountsChange({ total, waiting })`) and the **Invite
+Parent** button; everything else is the component.
+
+The ⋯ menu offers Reissue invitation (or **Restore access** for a revoked account that
+already chose a password), View account, Edit details, Add a child, and below the line
+**Revoke access**, which confirms and names how many children it reaches. View, Edit
+and Add a child all open the account panel, on the matching mode; the row itself opens
+it on View, and the Edit pencil on Edit.
 
 **Everything it writes is a second *entry point*, never a second rule.**
 `ParentDetailsForm` edits the person through the very endpoint Manage Guardians
@@ -1530,7 +1616,11 @@ offered and then refused is worse than never offered. It also resolves a home
 address (the account's, else the learner's), because `guardianSchema` requires
 one even on the link path.
 
-**Add Parent creates the account and its children in one save.** `children` is
+**Invite Parent creates the account and its children in one save**, in the staff
+forms' layout (name in one row, Sign-in email beside Mobile number, then Children, then
+"What happens next") and ends on the same **Invitation created** screen, whose steps
+point at the VISTA Parent app's "Activate my account" — `POST /students/parents` returns
+the new account's invitation for exactly that. `children` is
 never empty and the button is disabled until one is picked: an account with no
 learner is a state nothing in the app can express, and it is precisely what the
 guardian delete path garbage-collects. There is **no "send the invitation?"

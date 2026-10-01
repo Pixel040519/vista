@@ -230,8 +230,10 @@ export function PhoneInput({ value = '', onChange, required, className = '', ...
         onClick={handleClick}
         maxLength={15}
         required={required}
-        // Native validation: must have full 9 digits after prefix
-        pattern="\+63 9\d{2} \d{7}"
+        // Native validation: must have full 9 digits after prefix. Skipped on an
+        // optional field left empty — the prefix is always displayed, so the
+        // input is never truly blank and the pattern would block the save.
+        pattern={required || getDigits(value).length ? '\\+63 9\\d{2} \\d{7}' : undefined}
         title="+63 9XX XXXXXXX — Enter 9 digits after +63 9"
       />
       {/* Digit counter */}

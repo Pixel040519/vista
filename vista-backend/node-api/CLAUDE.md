@@ -187,7 +187,17 @@ otherwise a year with an advisory and no assignments vanishes from the history.
 
 **Scoped admins** (`admin_ece`, `admin_elem`) see **all** teachers (the teacher list is not filtered by scope — both admin tiers share the same roster, so a teacher handling both ECE and elementary subjects appears under either admin). Scope is enforced at the assignment level only: `assertAssignmentsInScope` gates each assignment row on POST/PUT so scoped admins cannot create/save assignments outside their grade scope. On edit, the scope-aware DELETE in PUT only removes active-SY assignments whose `grade_level` is in the caller's scope, so out-of-scope active-SY assignments (edited by the other admin tier) remain intact. Historical assignments across past SYs are always preserved.
 
-**Admin account CRUD** (super_admin only): `GET/POST/PUT/DELETE /api/accounts/admins`. Create accepts role `admin_ece` or `admin_elem` (never `super_admin` — prevents self-escalation). Delete is soft — sets `is_active=FALSE`; the super_admin row is protected from delete.
+**Admin account CRUD** (super_admin only): `GET/POST/PUT/DELETE /api/accounts/admins`. Create accepts `admin_ece`, `admin_elem` or `super_admin`; the last requires `confirm_password`, the caller's own password, checked with bcrypt (403 when wrong). `PUT` moves a role only between the two scoped tiers and never changes a super admin's. Delete is soft (`is_active=FALSE`) and now reaches another super admin too, but never the caller (`PUT is_active:false` and `DELETE` both 400) and never the last super admin who can sign in (`assertNotLastSuperAdmin`, 409).
+
+**Staff accounts are invitations** (see the root `CLAUDE.md`). Both create routes insert `password_hash NULL`, `account_status 'pending'` and an `account_invitations` row via `issueInvitation()` from `utils/invitations.js`, and send nothing. All four create/update schemas refuse `password` with `Joi.forbidden()` rather than stripping it, so an old client is told the field is gone. Every list and single read carries `account_status`, `last_login_at`, `has_password`, the newest `invitation` (a correlated `invitationJsonSql()` subquery, so it sits beside the teacher list's `json_agg` without widening `GROUP BY`) and a derived `access` from `utils/staffAccess.js`. The helpers in the router are the only writers of staff access:
+
+| Helper | Does |
+|---|---|
+| `reissueStaffInvitation` | `POST /teachers|admins/:id/invitation` — reopens for 30 days, cancels any unused code, switches the account back on; 409 once a password exists |
+| `setStaffActive` | off: `is_active=FALSE` **and** closes the live invitation; on: back on if they have a password, otherwise a reissue |
+| `changeStaffEmail` | email edits on `PUT`, only while `has_password` is false (409 after), via `changeInvitationEmail()` |
+
+`DELETE /teachers|admins/:id/invitation` (**cancel**) is `setStaffActive(false)` on an account that never activated, 409 on one that did. Reads after a write use the pool *after* the transaction commits — the old create read its assignments inside the transaction through the pool and so always returned none.
 
 Teacher assignments are unique per `(grade_level, section, subject, school_year)`. Backend rejects duplicates on create/update scoped to the active SY. Teacher assignments are copied when creating a new SY with "copy from".
 
