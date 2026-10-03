@@ -292,34 +292,36 @@ export const curriculumApi = {
   updateSchoolYear:   (id, d)     => api.put(`/curriculum/school-years/${id}`, d),
   deleteSchoolYear:   (id)        => api.delete(`/curriculum/school-years/${id}`),
   enrollmentReadiness:(id)        => api.get(`/curriculum/school-years/${id}/enrollment-readiness`),
+  // Writes take an optional `params`: `{ allow_archived: true }` once a super
+  // admin has unlocked an archived school year on the Curriculum page.
   // Subjects (sy_id filters by school year)
   getSubjects:        (params)    => api.get('/curriculum/subjects', { params }),
   getSubjectsGrouped: (sy_id)     => api.get('/curriculum/subjects/grouped', { params: { sy_id } }),
-  createSubject:      (data)      => api.post('/curriculum/subjects', data),
-  updateSubject:      (id, d)     => api.put(`/curriculum/subjects/${id}`, d),
-  deleteSubject:      (id)        => api.delete(`/curriculum/subjects/${id}`),
+  createSubject:      (data, params) => api.post('/curriculum/subjects', data, { params }),
+  updateSubject:      (id, d, params) => api.put(`/curriculum/subjects/${id}`, d, { params }),
+  deleteSubject:      (id, params) => api.delete(`/curriculum/subjects/${id}`, { params }),
   getSubjectUsage:    (id)        => api.get(`/curriculum/subjects/${id}/usage`),
   // Sections (sy_id filters by school year)
   getSections:        (params)    => api.get('/curriculum/sections', { params }),
   getSectionsGrouped: (sy_id)     => api.get('/curriculum/sections/grouped', { params: { sy_id } }),
-  createSection:      (data)      => api.post('/curriculum/sections', data),
-  updateSection:      (id, d)     => api.put(`/curriculum/sections/${id}`, d),
-  deleteSection:      (id)        => api.delete(`/curriculum/sections/${id}`),
+  createSection:      (data, params) => api.post('/curriculum/sections', data, { params }),
+  updateSection:      (id, d, params) => api.put(`/curriculum/sections/${id}`, d, { params }),
+  deleteSection:      (id, params) => api.delete(`/curriculum/sections/${id}`, { params }),
   getSectionUsage:    (id)        => api.get(`/curriculum/sections/${id}/usage`),
   // Class adviser — the teacher responsible for a section as a whole, as
   // opposed to the per-subject rows in teacher_assignments. `teacher_id: null`
   // clears it.
   adviserCandidates:  (id)        => api.get(`/curriculum/sections/${id}/adviser-candidates`),
-  setSectionAdviser:  (id, d)     => api.put(`/curriculum/sections/${id}/adviser`, d),
+  setSectionAdviser:  (id, d, params) => api.put(`/curriculum/sections/${id}/adviser`, d, { params }),
   // Grading Structure (per subject)
   getGrading:         (subjectId) => api.get(`/curriculum/subjects/${subjectId}/grading`),
-  saveGrading:        (subjectId, data) => api.put(`/curriculum/subjects/${subjectId}/grading`, data),
-  clearGrading:       (subjectId) => api.delete(`/curriculum/subjects/${subjectId}/grading`),
+  saveGrading:        (subjectId, data, params) => api.put(`/curriculum/subjects/${subjectId}/grading`, data, { params }),
+  clearGrading:       (subjectId, params) => api.delete(`/curriculum/subjects/${subjectId}/grading`, { params }),
   checkGradingScores: (subjectId) => api.get(`/curriculum/subjects/${subjectId}/grading/scores-check`),
   // Assessment mode per (school year, grade level) — numeric vs descriptive
   // and which rating scale a descriptive level uses.
   getAssessmentConfig:  (params) => api.get('/curriculum/assessment-config', { params }),
-  saveAssessmentConfig: (data)   => api.put('/curriculum/assessment-config', data),
+  saveAssessmentConfig: (data, params) => api.put('/curriculum/assessment-config', data, { params }),
   resetAssessmentConfig: (gradeLevel, params) =>
     api.delete(`/curriculum/assessment-config/${encodeURIComponent(gradeLevel)}`, { params }),
 }

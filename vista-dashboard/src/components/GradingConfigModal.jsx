@@ -8,7 +8,10 @@ import clsx from 'clsx'
 const emptyComponent = () => ({ name: '', weight: '', sort_order: 0 })
 const emptyCategory  = () => ({ name: '', weight: '', sort_order: 0, components: [], expanded: true })
 
-export default function GradingConfigModal({ open, onClose, subject, onSaved }) {
+// `readOnly` shows the structure without any way to change it — an archived
+// school year whose curriculum has not been unlocked. `writeParams` carries
+// `{ allow_archived: true }` once a super admin has unlocked one.
+export default function GradingConfigModal({ open, onClose, subject, onSaved, readOnly = false, writeParams }) {
   const [categories, setCategories] = useState([])
   const [loading, setLoading]       = useState(false)
   const [saving, setSaving]         = useState(false)
@@ -193,7 +196,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
           })),
         }))
       }
-      await curriculumApi.saveGrading(target.id, payload)
+      await curriculumApi.saveGrading(target.id, payload, writeParams)
       toast.success('Grading structure saved.')
       onSaved?.()
       // An area saved sends you back to the picker rather than closing, because
@@ -218,7 +221,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
     if (!window.confirm('Remove all grading structure for this subject?')) return
     setSaving(true)
     try {
-      await curriculumApi.clearGrading(target.id)
+      await curriculumApi.clearGrading(target.id, writeParams)
       toast.success('Grading structure cleared.')
       setCategories([])
       if (isComposite) setAreaConfigured(prev => ({ ...prev, [target.id]: false }))
@@ -280,7 +283,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
       {isComposite && !activeArea ? (
         <div className="space-y-4">
           <p className="text-sm text-slate-500">
-            Pick the area to configure.
+            {readOnly ? 'Pick an area to view its structure.' : 'Pick the area to configure.'}
           </p>
           <div className="space-y-2">
             {areas.map(a => (
@@ -318,6 +321,11 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
               className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-brand-600 transition-colors">
               <ArrowLeft size={14} /> All {subject.name} areas
             </button>
+          )}
+          {readOnly && (
+            <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+              This school year is archived, so its grading structure is shown read-only.
+            </p>
           )}
           {/* Validation summary */}
           <div className={clsx(
@@ -379,7 +387,9 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
             <div className="text-center py-8">
               <SlidersHorizontal size={28} className="mx-auto text-slate-300 mb-3" />
               <p className="text-sm text-slate-500 font-medium">No grading structure configured</p>
-              <p className="text-xs text-slate-400 mt-1">Add categories to define how grades are weighted.</p>
+              <p className="text-xs text-slate-400 mt-1">
+                {readOnly ? 'This school year is archived, so nothing can be added.' : 'Add categories to define how grades are weighted.'}
+              </p>
             </div>
           )}
 
@@ -404,11 +414,13 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                   )}>
                   {/* Category header */}
                   <div className="flex items-center gap-2 px-3 py-2.5 bg-slate-50">
-                    <div className="cursor-grab active:cursor-grabbing p-0.5 text-slate-300 hover:text-slate-500 flex-shrink-0 select-none"
-                      onMouseDown={() => setGripHeld(true)}
-                      onMouseUp={() => setGripHeld(false)}>
-                      <GripVertical size={14} />
-                    </div>
+                    {!readOnly && (
+                      <div className="cursor-grab active:cursor-grabbing p-0.5 text-slate-300 hover:text-slate-500 flex-shrink-0 select-none"
+                        onMouseDown={() => setGripHeld(true)}
+                        onMouseUp={() => setGripHeld(false)}>
+                        <GripVertical size={14} />
+                      </div>
+                    )}
                     <button type="button" onClick={() => toggleCategory(catIdx)}
                       className="p-0.5 text-slate-400 hover:text-slate-600">
                       {cat.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -419,6 +431,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                       value={cat.name}
                       onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
                       onChange={e => updateCategory(catIdx, 'name', e.target.value)}
+                      readOnly={readOnly}
                     />
                     <div className="flex items-center gap-1 flex-shrink-0">
                       <input
@@ -430,14 +443,15 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                         value={cat.weight}
                         onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
                         onChange={e => updateCategory(catIdx, 'weight', e.target.value)}
+                        readOnly={readOnly}
                       />
                       <span className="text-xs text-slate-400 font-medium">%</span>
                     </div>
-                    <button type="button" onClick={() => removeCategory(catIdx)}
+                    {!readOnly && <button type="button" onClick={() => removeCategory(catIdx)}
                       className={clsx('p-1.5 rounded-lg transition-colors', categoryHasScores(cat) ? 'text-slate-200 cursor-not-allowed' : 'text-slate-300 hover:text-red-500 hover:bg-red-50')}
                       title={categoryHasScores(cat) ? 'Has recorded scores' : 'Remove category'}>
                       <Trash2 size={13} />
-                    </button>
+                    </button>}
                   </div>
 
                   {/* Components list */}
@@ -463,6 +477,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                             value={comp.name}
                             onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
                             onChange={e => updateComponent(catIdx, compIdx, 'name', e.target.value)}
+                            readOnly={readOnly}
                           />
                           <div className="flex items-center gap-1 flex-shrink-0">
                             <input
@@ -474,21 +489,22 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                               value={comp.weight}
                               onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
                               onChange={e => updateComponent(catIdx, compIdx, 'weight', e.target.value)}
+                              readOnly={readOnly}
                             />
                             <span className="text-xs text-slate-400 font-medium">%</span>
                           </div>
-                          <button type="button" onClick={() => removeComponent(catIdx, compIdx)}
+                          {!readOnly && <button type="button" onClick={() => removeComponent(catIdx, compIdx)}
                             className={clsx('p-1 rounded transition-colors', comp.id && compHasScores(comp.id) ? 'text-slate-200 cursor-not-allowed' : 'text-slate-300 hover:text-red-500 hover:bg-red-50')}
                             title={comp.id && compHasScores(comp.id) ? 'Has recorded scores' : 'Remove component'}>
                             <Trash2 size={12} />
-                          </button>
+                          </button>}
                         </div>
                       ))}
 
-                      <button type="button" onClick={() => addComponent(catIdx)}
+                      {!readOnly && <button type="button" onClick={() => addComponent(catIdx)}
                         className="flex items-center gap-1.5 text-xs font-medium text-brand-600 hover:text-brand-700 pl-5 py-1.5 hover:bg-brand-50 rounded transition-colors">
                         <Plus size={12} /> Add Component
-                      </button>
+                      </button>}
                     </div>
                   )}
                 </div>
@@ -497,7 +513,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
           </div>
 
           {/* Add Category + Copy from buttons */}
-          <div className="flex gap-2">
+          {!readOnly && <div className="flex gap-2">
             <button type="button" onClick={addCategory}
               className="flex items-center gap-2 flex-1 justify-center py-2.5 border-2 border-dashed border-slate-200 rounded-xl text-sm font-medium text-slate-500 hover:text-brand-600 hover:border-brand-300 transition-colors">
               <Plus size={15} /> Add Category
@@ -508,11 +524,11 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
                 <Copy size={15} /> Copy from
               </button>
             )}
-          </div>
+          </div>}
 
           {/* Action buttons */}
           <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
-            {categories.length > 0 && (
+            {categories.length > 0 && !readOnly && (
               <button type="button" onClick={handleClear} disabled={saving}
                 className={clsx('text-xs font-medium px-3 py-2 rounded-lg border transition-colors',
                   compsWithScores.size > 0
@@ -525,12 +541,14 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved }) 
             )}
             <div className="flex gap-2 ml-auto">
               <button type="button" onClick={onClose}
-                className="btn-secondary px-4 py-2 text-sm">Cancel</button>
-              <button type="button" onClick={handleSave}
-                disabled={saving || !canSave}
-                className="btn-primary px-4 py-2 text-sm justify-center disabled:opacity-50">
-                {saving ? 'Saving...' : 'Save Structure'}
-              </button>
+                className="btn-secondary px-4 py-2 text-sm">{readOnly ? 'Close' : 'Cancel'}</button>
+              {!readOnly && (
+                <button type="button" onClick={handleSave}
+                  disabled={saving || !canSave}
+                  className="btn-primary px-4 py-2 text-sm justify-center disabled:opacity-50">
+                  {saving ? 'Saving...' : 'Save Structure'}
+                </button>
+              )}
             </div>
           </div>
         </div>

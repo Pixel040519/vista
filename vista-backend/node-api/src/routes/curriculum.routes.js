@@ -6,6 +6,7 @@ const { authenticate, authorizeAnyAdmin, authorizeSuperAdmin, enforceGradeScope 
 const { AppError } = require('../middleware/error.middleware')
 const { loadSection, sectionUsage, describeUsage, renameSectionEverywhere } = require('../utils/sections')
 const { gradeScopeForRole, canManageGrade, isScopedAdmin, isSuperAdmin } = require('../utils/roles')
+const { assertArchivedWritable } = require('../utils/schoolYear')
 const { RATING_SCALES, resolveAssessment } = require('../utils/grading')
 const { loadAssessmentRows } = require('../utils/assessmentConfig')
 const { areasOf, assertGradeable, ensureMapehAreas, isMapeh } = require('../utils/subjectAreas')
@@ -65,6 +66,33 @@ const resolveSYId = async (sy_id) => {
   return res.rows[0].id
 }
 
+// ── Helper: an archived year's curriculum is read-only ────────
+//
+// Every write this router makes to a year's content — subjects, sections,
+// advisers, grading structures, assessment configuration — lands in one school
+// year, and an archived one is the record of how that year was actually taught
+// and graded. So it is refused unless a super admin has unlocked the year on the
+// Curriculum page, which then sends `?allow_archived=true`. Same gate as the
+// Enrollment page (`assertArchivedWritable`), carried as a query parameter so it
+// reaches DELETEs and leaves every body schema alone. School-year writes
+// themselves are not gated: changing a year's status is how it is reopened.
+const assertCurriculumYearWritable = async (req, syId) => {
+  const r = await query(
+    'SELECT id, label, is_active, is_upcoming FROM school_years WHERE id=$1', [syId])
+  if (!r.rows.length) throw new AppError('School year not found.', 404)
+  const sy = r.rows[0]
+  assertArchivedWritable(req, sy, req.query.allow_archived === 'true',
+    `SY ${sy.label} is archived, so its curriculum is read-only. ` +
+    'Unlock it on the Curriculum page to correct it.')
+}
+
+/** The school year a subject or section row belongs to. */
+const yearOfRow = async (table, id) => {
+  const r = await query(`SELECT school_year_id FROM ${table} WHERE id=$1`, [id])
+  if (!r.rows.length) throw new AppError(`${table === 'subjects' ? 'Subject' : 'Section'} not found.`, 404)
+  return r.rows[0].school_year_id
+}
+
 // ════════════════════════════════════════════════════════════
 // ASSESSMENT CONFIGURATION (per school year x grade level)
 // ════════════════════════════════════════════════════════════
@@ -117,6 +145,7 @@ router.put('/assessment-config', authorizeAnyAdmin, async (req, res, next) => {
     if (error) throw new AppError(error.details[0].message, 422)
 
     const syId = await resolveSYId(value.sy_id)
+    await assertCurriculumYearWritable(req, syId)
 
     for (const e of value.entries) {
       enforceGradeScope(req, e.grade_level)
@@ -181,6 +210,7 @@ router.delete('/assessment-config/:grade_level', authorizeAnyAdmin, async (req, 
     if (!GRADE_LEVELS.includes(gradeLevel)) throw new AppError('Unknown grade level.', 422)
     enforceGradeScope(req, gradeLevel)
     const syId = await resolveSYId(req.query.sy_id)
+    await assertCurriculumYearWritable(req, syId)
     await query(
       'DELETE FROM grade_level_assessment WHERE school_year_id=$1 AND grade_level=$2',
       [syId, gradeLevel]
@@ -1099,6 +1129,7 @@ router.post('/subjects', authorizeAnyAdmin, async (req, res, next) => {
     enforceGradeScope(req, value.grade_level)
 
     const sy_id = await resolveSYId(value.sy_id)
+    await assertCurriculumYearWritable(req, sy_id)
     value.name = normalizeName(value.name)
     await assertSubjectNameFree({ sy_id, grade_level: value.grade_level, name: value.name })
 
@@ -1134,6 +1165,7 @@ router.put('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
     if (error) throw new AppError(error.details[0].message, 422)
 
     await assertCurriculumRowInScope(req, 'subjects', req.params.id)
+    await assertCurriculumYearWritable(req, await yearOfRow('subjects', req.params.id))
     if (value.grade_level) enforceGradeScope(req, value.grade_level)
 
     const existing = await query(
@@ -1289,6 +1321,7 @@ router.get('/subjects/:id/usage', authorizeAnyAdmin, async (req, res, next) => {
 router.delete('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { row, areas, family } = await loadSubjectForDelete(req)
+    await assertCurriculumYearWritable(req, row.school_year_id)
 
     // An area is structural, not something an admin assembled: MAPEH is graded
     // through exactly its four wherever it exists. Removing one on its own would
@@ -1462,6 +1495,7 @@ router.post('/sections', authorizeAnyAdmin, async (req, res, next) => {
     enforceGradeScope(req, value.grade_level)
 
     const sy_id = await resolveSYId(value.sy_id)
+    await assertCurriculumYearWritable(req, sy_id)
     value.name = normalizeName(value.name)
     await assertSectionNameFree({ sy_id, grade_level: value.grade_level, name: value.name })
 
@@ -1493,6 +1527,7 @@ router.put('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
     if (error) throw new AppError(error.details[0].message, 422)
 
     await assertCurriculumRowInScope(req, 'sections', req.params.id)
+    await assertCurriculumYearWritable(req, await yearOfRow('sections', req.params.id))
     if (value.grade_level) enforceGradeScope(req, value.grade_level)
 
     const sec = await loadSection(req.params.id)
@@ -1576,6 +1611,7 @@ router.get('/sections/:id/usage', authorizeAnyAdmin, async (req, res, next) => {
 router.delete('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const sec = await loadSectionForDelete(req)
+    await assertCurriculumYearWritable(req, sec.school_year_id)
 
     // Scoped by grade level AND school year (see `sectionUsage`). The adviser is
     // deliberately not part of it. That guard counts what a delete would
@@ -1717,6 +1753,7 @@ router.put('/sections/:id/adviser', authorizeAnyAdmin, async (req, res, next) =>
     if (error) throw new AppError(error.details[0].message, 422)
 
     const sec = await loadAdvisableSection(req)
+    await assertCurriculumYearWritable(req, sec.school_year_id)
     let teacher = null
 
     if (value.teacher_id) {
@@ -1809,6 +1846,7 @@ router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) =>
     // Validate subject exists
     const sub = await query('SELECT id, grade_level FROM subjects WHERE id=$1 AND is_active=TRUE', [req.params.id])
     if (!sub.rows.length) throw new AppError('Subject not found.', 404)
+    await assertCurriculumYearWritable(req, await yearOfRow('subjects', req.params.id))
     if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, sub.rows[0].grade_level)) {
       throw new AppError('Subject is outside your grade scope.', 403)
     }
@@ -1965,6 +2003,7 @@ router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) =>
 router.delete('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) => {
   try {
     await assertCurriculumRowInScope(req, 'subjects', req.params.id)
+    await assertCurriculumYearWritable(req, await yearOfRow('subjects', req.params.id))
     // Block if any component has recorded scores
     const withScores = await query(
       `SELECT DISTINCT gs.name

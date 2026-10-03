@@ -395,6 +395,20 @@ the height of the tallest card in that row, each row measured on its own. `Grade
 is therefore `bg-white flex flex-col` with a `flex-1` body, so a collapsed card fills
 its stretched cell as an empty white card instead of leaving a hole inside its border.
 
+**An archived year opens read-only** (`locked = isArchivedYear(selectedSY) && !unlocked`),
+mirroring the Enrollment page. A banner says why. For a super admin it carries **Edit
+historical records**, which becomes **Lock again** once pressed, and everyone else is told
+who can unlock. While locked:
+- `GradeCard` hides Add, and `EditableItem` hides edit, delete and the adviser button.
+- The editing hint is hidden.
+- `AssessmentCard` disables its mode and scale controls and hides Save and Reset.
+- `GradingConfigModal` still opens, with `readOnly`: fields are read-only, and add,
+  remove, copy, clear and save are hidden.
+
+Once unlocked, every write passes `writeParams` (`{ allow_archived: true }`), which the
+curriculum API client takes as an optional last argument. `unlocked` resets whenever
+another year is selected.
+
 **A subject or section name that is already taken in the grade card is flagged as it is
 typed.** `nameClash(type, …)` compares the add or rename against the card's own items (and,
 for subjects, their areas), ignoring case and spacing (the API's rule). For subjects it also
@@ -1755,3 +1769,7 @@ Scoped admins (`admin_ece`, `admin_elem`) see **all** teachers in the list (both
 
 ### Grading config modal (`GradingConfigModal.jsx`)
 Category weight fields turn red when total > 100%; component weight fields turn red when their total exceeds the parent category's weight. Negative percentage values are clamped to 0. Delete buttons gray out for categories/components with recorded student scores.
+
+Two props come from the Curriculum page's archived-year lock:
+- `readOnly` shows the structure with no way to change it. Fields are read-only, there is no reordering grip, and add, remove, Copy from, Clear All and Save are hidden. Cancel reads Close, and a note says the year is archived. The MAPEH area picker still works, so each area's weights can be viewed.
+- `writeParams` (`{ allow_archived: true }` once a super admin has unlocked the year) is passed to `saveGrading` and `clearGrading`.

@@ -305,10 +305,10 @@ decision each year about who is responsible for a cohort — and copying one for
 carry a stale adviser into an unreviewed year, where the uniqueness index would then
 block the correct assignment until someone found and cleared the copy.
 
-**It grants reads, never writes.** See "The adviser's reach" below. Archived school years
-are **not** gated: renaming and deleting a section on a closed year are already ungated,
-unlike enrolment writes and the grading model freeze, so the adviser follows the surface
-it lives on.
+**It grants reads, never writes.** See "The adviser's reach" below. On an **archived**
+school year the adviser follows the surface it lives on: like everything else on the
+Curriculum page, it is read-only until a super admin unlocks that year (see "An archived
+year's curriculum is read-only" below).
 
 Teachers see their own advisory through `advisory` on the `/login` and `/me` payloads —
 scoped server-side to the **active** year, unlike `assignments`, which returns every year
@@ -635,10 +635,24 @@ other, so an unmarked write there is far more likely to be a mis-picked year tha
 an intended correction. The override exists because a year archives the instant
 the next is activated — exactly when year-end corrections are still arriving — so
 unlike the grading-model freeze this cannot be absolute. `isArchivedYear` lives in
-`utils/schoolYear.js`, mirrored in `components/SchoolYearPicker.jsx`; the three
-writers that can reach a closed year share one helper, `assertArchivedWritable()`.
-The wizard is **not** subject to *this* gate on its closing year: it writes
-`outcome`, not status, and has its own gate on the year learners move into.
+`utils/schoolYear.js`, mirrored in `components/SchoolYearPicker.jsx`. Every
+writer that can reach a closed year shares one helper there,
+`assertArchivedWritable()`: the Enrollment page, the promotion wizard's target, and
+the Curriculum page (below). The wizard is **not** subject to *this* gate on its
+closing year: it writes `outcome`, not status, and has its own gate on the year
+learners move into.
+
+**An archived year's curriculum is read-only.** Its subjects, sections, advisers,
+grading structures and assessment settings are the record of how that year was
+taught and graded, so the Curriculum page opens them locked, for every role. A super
+admin can press **Edit historical records** in the banner (the Enrollment page's
+idiom, with **Lock again** beside it), which sends `?allow_archived=true` on each
+write. The unlock resets when another year is selected. The API enforces the same
+gate on all eleven writers: 403 for a scoped admin, 409 for a super admin without the
+flag. The grading modal still opens on a locked year, read-only, because looking up a
+past year's weights is legitimate. The school year record itself (label, dates,
+status) is not gated: changing its status is how a year is reopened, and that is
+`super_admin`-only already.
 
 A learner who has **left** drops out of later years' rosters entirely, or every
 future year would accumulate every ex-student the school ever had. Three ways to
@@ -1178,7 +1192,7 @@ Detailed per-feature role behavior lives in the backend/frontend nested `CLAUDE.
 
 Roles stored in `users.role` (enum constraint: `super_admin`, `admin_ece`, `admin_elem`, `teacher`, `parent`). Grade scope is derived from role via `utils/roles.js` on both backend and frontend (`gradeScopeForRole`, `isAnyAdmin`, `isSuperAdmin`, `isScopedAdmin`, `canManageGrade`). No `grade_scope` column on `users` — the JWT carries only the role, and the auth payload (`/login`, `/me`) exposes a computed `grade_scope` array for convenience.
 
-- **super_admin** — school-wide. Full access except Attendance and Score Entry (teacher-only). Manages other admins (including inviting another Super Admin, behind a re-entered password), school years, all curriculum, all students. ECE Competency is read-only. Only role that can hit `/api/accounts/admins` CRUD, `POST/PUT/DELETE /api/curriculum/school-years`, and the enrolment actions that rewrite history or run across the whole school (setting a learner's enrolment status, record removal, and the archived-year unlock). The Year-End Promotion wizard is open to all three admin tiers, bounded by grade scope.
+- **super_admin** — school-wide. Full access except Attendance and Score Entry (teacher-only). Manages other admins (including inviting another Super Admin, behind a re-entered password), school years, all curriculum, all students. ECE Competency is read-only. Only role that can hit `/api/accounts/admins` CRUD, `POST/PUT/DELETE /api/curriculum/school-years`, and the enrolment actions that rewrite history or run across the whole school (setting a learner's enrolment status, record removal, and the archived-year unlock). The same archived-year unlock gates the Curriculum page: an archived year's subjects, sections, advisers, grading structures and assessment settings are read-only for every role until a super admin unlocks that year. The Year-End Promotion wizard is open to all three admin tiers, bounded by grade scope.
 - **admin_ece** — scoped to Kinder (the only remaining early-childhood level). Can manage teachers, students, subjects, sections, and grading structure for Kinder. Cannot manage school years, cannot manage other admins. Can open ECE Competency (read-only). Elementary routes and data are invisible. Grade routes (`/api/grades/*`, Grades page) are rejected — ECE grade levels track learning via the ECE Competency tool, not the grades table.
 - **admin_elem** — scoped to Grade 1 – Grade 6. Mirror of `admin_ece` for elementary. ECE routes (`/api/ece/*`, `/api/ai/ece-class-health`, ECE Competency page) are rejected.
 - **teacher** — scoped to `activeAssignments` (from `/api/auth/me`, filtered to the active SY). Teacher-facing pages (Students, Attendance, Score Entry, Behavior, ECE Competency) use a "Class" dropdown filtered to assigned sections. Risk Overview, the "In Your Class" card on Student Detail, and TeacherDashboard all draw teacher-scoped numbers from `/api/ai/class-health/all` — a single source of truth for teacher-scoped band numbers.

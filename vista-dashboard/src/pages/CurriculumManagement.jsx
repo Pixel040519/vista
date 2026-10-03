@@ -4,7 +4,7 @@ import {
   Plus, Pencil, Trash2, BookOpen, LayoutGrid,
   ChevronDown, ChevronRight, X, Check, CalendarDays,
   ChevronDown as ChevDown, Copy, SlidersHorizontal, ClipboardList, Lock, Users,
-  GraduationCap, Search
+  GraduationCap, Search, Unlock
 } from 'lucide-react'
 import { curriculumApi } from '../api/client'
 import { LoadingSpinner, Modal } from '../components/UI'
@@ -12,7 +12,7 @@ import GradingConfigModal from '../components/GradingConfigModal'
 import toast from 'react-hot-toast'
 import { PERIOD_MODEL_OPTIONS, GRADING_POLICY_OPTIONS } from '../utils/grading'
 import clsx from 'clsx'
-import SchoolYearPicker from '../components/SchoolYearPicker'
+import SchoolYearPicker, { isArchivedYear } from '../components/SchoolYearPicker'
 import { useAuth } from '../context/AuthContext'
 
 // ── School year validation helper ────────────────────────────
@@ -210,7 +210,7 @@ function DeleteItemModal({ item, type, gradeLevel, syLabel, onClose, onDelete })
 }
 
 // ── Inline editable item ──────────────────────────────────────
-function EditableItem({ item, siblings, gradeLevel, syLabel, onSave, onDelete, type, onGradingConfig, onAdviser }) {
+function EditableItem({ item, siblings, gradeLevel, syLabel, onSave, onDelete, type, onGradingConfig, onAdviser, readOnly = false }) {
   const [editing, setEditing]   = useState(false)
   const [name, setName]         = useState(item.name)
   const [saving, setSaving]     = useState(false)
@@ -314,22 +314,22 @@ function EditableItem({ item, siblings, gradeLevel, syLabel, onSave, onDelete, t
         )}
         {/* Same slot the subjects' grading button occupies — the two types are
             mutually exclusive, so the row keeps one shape. */}
-        {type === 'section' && onAdviser && (
+        {type === 'section' && onAdviser && !readOnly && (
           <button onClick={() => onAdviser(item)}
             className="p-1.5 rounded-lg text-slate-400 hover:text-brand-500 hover:bg-brand-50 transition-colors"
             title={item.adviser ? 'Change class adviser' : 'Assign a class adviser'}>
             <GraduationCap size={12}/>
           </button>
         )}
-        <button onClick={() => setEditing(true)}
+        {!readOnly && <button onClick={() => setEditing(true)}
           className="p-1.5 rounded-lg text-slate-400 hover:text-amber-500 hover:bg-amber-50 transition-colors">
           <Pencil size={12}/>
-        </button>
-        <button onClick={() => setConfirmDelete(true)}
+        </button>}
+        {!readOnly && <button onClick={() => setConfirmDelete(true)}
           className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
           title={`Delete ${type}`}>
           <Trash2 size={12}/>
-        </button>
+        </button>}
       </div>
       {confirmDelete && (
         <DeleteItemModal item={item} type={type} gradeLevel={gradeLevel} syLabel={syLabel}
@@ -381,7 +381,7 @@ function AddItemForm({ gradeLevel, type, syId, siblings, onAdd, onClose }) {
 }
 
 // ── Grade Level Card ──────────────────────────────────────────
-function GradeCard({ grade, items, type, syId, syLabel, onAdd, onSave, onDelete, onGradingConfig, onAdviser }) {
+function GradeCard({ grade, items, type, syId, syLabel, onAdd, onSave, onDelete, onGradingConfig, onAdviser, readOnly = false }) {
   const [open, setOpen]     = useState(true)
   const [adding, setAdding] = useState(false)
   const colors = GRADE_COLORS[grade] || GRADE_COLORS['Grade 1']
@@ -398,10 +398,10 @@ function GradeCard({ grade, items, type, syId, syLabel, onAdd, onSave, onDelete,
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={e => { e.stopPropagation(); setAdding(true); setOpen(true) }}
+          {!readOnly && <button onClick={e => { e.stopPropagation(); setAdding(true); setOpen(true) }}
             className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-brand-600 px-2 py-1 rounded-lg hover:bg-white/60 transition-colors">
             <Plus size={13}/> Add
-          </button>
+          </button>}
           {open ? <ChevronDown size={15} className="text-slate-400"/> : <ChevronRight size={15} className="text-slate-400"/>}
         </div>
       </div>
@@ -409,15 +409,15 @@ function GradeCard({ grade, items, type, syId, syLabel, onAdd, onSave, onDelete,
         <div className="p-3 space-y-1 bg-white flex-1">
           {items.length === 0 && !adding && (
             <p className="text-xs text-slate-400 text-center py-3">
-              No {type === 'subject' ? 'subjects' : 'sections'} yet.{' '}
-              <button onClick={() => setAdding(true)} className="text-brand-600 font-medium hover:text-brand-700">Add one</button>
+              No {type === 'subject' ? 'subjects' : 'sections'}{readOnly ? '.' : ' yet.'}{' '}
+              {!readOnly && <button onClick={() => setAdding(true)} className="text-brand-600 font-medium hover:text-brand-700">Add one</button>}
             </p>
           )}
           {items.map(item => (
-            <EditableItem key={item.id} item={item} siblings={items} gradeLevel={grade} syLabel={syLabel} type={type} onSave={onSave} onDelete={onDelete}
+            <EditableItem key={item.id} item={item} siblings={items} gradeLevel={grade} syLabel={syLabel} type={type} readOnly={readOnly} onSave={onSave} onDelete={onDelete}
               onGradingConfig={onGradingConfig} onAdviser={onAdviser}/>
           ))}
-          {adding && (
+          {adding && !readOnly && (
             <AddItemForm gradeLevel={grade} type={type} syId={syId} siblings={items}
               onAdd={onAdd} onClose={() => setAdding(false)}/>
           )}
@@ -970,7 +970,7 @@ function EditSYModal({ sy, onClose, onSave, onDelete }) {
 // DO 015, s. 2026 moves KS1 off numeric grading one grade level per year. The
 // schedule is configuration rather than code: NRYS is private (DO 015 only
 // "encourages" adoption), so the school sets its own pace.
-function AssessmentCard({ entry, scales, onSave, onReset }) {
+function AssessmentCard({ entry, scales, onSave, onReset, readOnly = false }) {
   const [mode, setMode]   = useState(entry.assessment_mode)
   const [scale, setScale] = useState(entry.rating_scale || 'EGFNA')
   const [saving, setSaving] = useState(false)
@@ -1002,9 +1002,10 @@ function AssessmentCard({ entry, scales, onSave, onReset }) {
 
       <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
         {[['numeric', 'Numeric'], ['descriptive', 'Descriptive']].map(([v, label]) => (
-          <button key={v} type="button" onClick={() => setMode(v)}
+          <button key={v} type="button" onClick={() => setMode(v)} disabled={readOnly}
             className={clsx('flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
-              mode === v ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+              mode === v ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700',
+              readOnly && mode !== v && 'opacity-50 cursor-not-allowed hover:text-slate-500')}>
             {label}
           </button>
         ))}
@@ -1013,7 +1014,7 @@ function AssessmentCard({ entry, scales, onSave, onReset }) {
       {mode === 'descriptive' ? (
         <div className="space-y-2">
           <label className="block text-xs font-medium text-slate-600">Rating scale</label>
-          <select className="input" value={scale} onChange={e => setScale(e.target.value)}>
+          <select className="input" value={scale} onChange={e => setScale(e.target.value)} disabled={readOnly}>
             {scales.map(s => <option key={s.id} value={s.id}>{s.short}</option>)}
           </select>
           {activeScale && (
@@ -1037,7 +1038,7 @@ function AssessmentCard({ entry, scales, onSave, onReset }) {
         </p>
       )}
 
-      <div className="flex items-center gap-2 pt-1">
+      {!readOnly && <div className="flex items-center gap-2 pt-1">
         <button type="button" onClick={submit} disabled={!dirty || saving}
           className={clsx('btn-primary text-xs px-3 py-1.5', (!dirty || saving) && 'opacity-50 cursor-not-allowed')}>
           {saving ? 'Saving…' : 'Save'}
@@ -1048,7 +1049,7 @@ function AssessmentCard({ entry, scales, onSave, onReset }) {
             Reset to default
           </button>
         )}
-      </div>
+      </div>}
     </div>
   )
 }
@@ -1072,6 +1073,16 @@ export default function CurriculumManagement() {
   // the card it was opened on.
   const [adviserFor, setAdviserFor] = useState(null)
   const [assessment, setAssessment] = useState({ config: [], scales: [] })
+
+  // An archived year's curriculum is the record of how that year was taught and
+  // graded, so it opens read-only. A super admin can unlock it to correct a
+  // mistake — the Enrollment page's "Edit historical records", with the same API
+  // gate behind it (`allow_archived`). The unlock never carries to another year.
+  const [unlocked, setUnlocked] = useState(false)
+  useEffect(() => { setUnlocked(false) }, [selectedSY?.id])
+  const archived    = isArchivedYear(selectedSY)
+  const locked      = archived && !unlocked
+  const writeParams = archived && unlocked ? { allow_archived: true } : undefined
 
   // ── Load school years ──────────────────────────────────────
   const fetchSchoolYears = useCallback(async () => {
@@ -1110,7 +1121,7 @@ export default function CurriculumManagement() {
       await curriculumApi.saveAssessmentConfig({
         sy_id: selectedSY.id,
         entries: [{ grade_level, assessment_mode, rating_scale }],
-      })
+      }, writeParams)
       toast.success(`${grade_level} set to ${assessment_mode} assessment.`)
       await loadAssessment(selectedSY.id)
     } catch (e) {
@@ -1120,7 +1131,7 @@ export default function CurriculumManagement() {
 
   const handleResetAssessment = async (grade_level) => {
     try {
-      await curriculumApi.resetAssessmentConfig(grade_level, { sy_id: selectedSY.id })
+      await curriculumApi.resetAssessmentConfig(grade_level, { sy_id: selectedSY.id, ...writeParams })
       toast.success(`${grade_level} reverted to the default.`)
       await loadAssessment(selectedSY.id)
     } catch (e) {
@@ -1157,7 +1168,7 @@ export default function CurriculumManagement() {
   // is gradeable at all), so those two refetch rather than patching in place.
   // A rename changes nothing structural, so it stays optimistic.
   const handleAddSubject = async (payload) => {
-    const res = await curriculumApi.createSubject(payload)
+    const res = await curriculumApi.createSubject(payload, writeParams)
     // A new MAPEH comes back already graded through its four areas, and the
     // append below cannot invent them — refetch so the tree is right.
     if (res.data.subject?.area_count) { await fetchContent(); return }
@@ -1168,7 +1179,7 @@ export default function CurriculumManagement() {
   }
 
   const handleUpdateSubject = async (id, payload) => {
-    const res = await curriculumApi.updateSubject(id, payload)
+    const res = await curriculumApi.updateSubject(id, payload, writeParams)
     const updated = res.data.subject
     // Renaming a subject to MAPEH gives it its four areas server-side, so the
     // in-place map below would leave a learning area with nothing under it.
@@ -1185,14 +1196,14 @@ export default function CurriculumManagement() {
   }
 
   const handleDeleteSubject = async (id) => {
-    const res = await curriculumApi.deleteSubject(id)
+    const res = await curriculumApi.deleteSubject(id, writeParams)
     toast.success(res.data.message)
     await fetchContent()
   }
 
   // ── Section handlers ───────────────────────────────────────
   const handleAddSection = async (payload) => {
-    const res = await curriculumApi.createSection(payload)
+    const res = await curriculumApi.createSection(payload, writeParams)
     setSections(prev => ({
       ...prev,
       [payload.grade_level]: [...(prev[payload.grade_level] || []), res.data.section]
@@ -1200,7 +1211,7 @@ export default function CurriculumManagement() {
   }
 
   const handleUpdateSection = async (id, payload) => {
-    const res = await curriculumApi.updateSection(id, payload)
+    const res = await curriculumApi.updateSection(id, payload, writeParams)
     const updated = res.data.section
     setSections(prev => {
       const next = { ...prev }
@@ -1212,7 +1223,7 @@ export default function CurriculumManagement() {
   // `teacherId` of null clears the adviser. The API returns the section in the
   // same shape a read gives, so this merges exactly like handleUpdateSection.
   const handleSetAdviser = async (id, teacherId) => {
-    const res = await curriculumApi.setSectionAdviser(id, { teacher_id: teacherId })
+    const res = await curriculumApi.setSectionAdviser(id, { teacher_id: teacherId }, writeParams)
     const updated = res.data.section
     toast.success(res.data.message)
     setSections(prev => {
@@ -1223,7 +1234,7 @@ export default function CurriculumManagement() {
   }
 
   const handleDeleteSection = async (id) => {
-    const res = await curriculumApi.deleteSection(id)
+    const res = await curriculumApi.deleteSection(id, writeParams)
     toast.success(res.data.message)
     setSections(prev => {
       const next = { ...prev }
@@ -1369,7 +1380,31 @@ export default function CurriculumManagement() {
           grading structure on Subjects and the class adviser on Sections, and
           Assessment has no per-row buttons at all. The icons are drawn rather
           than named so the sentence matches what the row actually shows. */}
-      {tab !== 'assessment' && (
+      {selectedSY && archived && (
+        <div className={clsx(
+          'flex items-start gap-2 text-xs rounded-xl px-3 py-2.5 border',
+          unlocked ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-slate-50 border-slate-200 text-slate-600'
+        )}>
+          {unlocked
+            ? <Unlock size={14} className="shrink-0 mt-0.5"/>
+            : <Lock size={14} className="shrink-0 mt-0.5"/>}
+          <p className="flex-1">
+            {unlocked
+              ? <>SY {selectedSY.label} is <strong>archived</strong> and you are editing its curriculum. Saving rewrites the record of how that year was taught and graded &mdash; it changes nothing about the current one.</>
+              : isSuperAdmin
+                ? <>SY {selectedSY.label} is <strong>archived</strong>. Its subjects, sections, advisers, grading structures and assessment settings are the record of that year, so they are read-only. Unlock only to correct something that is wrong.</>
+                : <>SY {selectedSY.label} is <strong>archived</strong>. Its subjects, sections, advisers, grading structures and assessment settings are the record of that year, so they are read-only. Correcting a closed school year is restricted to a super admin.</>}
+          </p>
+          {isSuperAdmin && (
+            <button onClick={() => setUnlocked(v => !v)}
+              className="shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-slate-600 font-medium hover:border-slate-400 transition-colors">
+              {unlocked ? <><Lock size={12}/> Lock again</> : <><Unlock size={12}/> Edit historical records</>}
+            </button>
+          )}
+        </div>
+      )}
+
+      {tab !== 'assessment' && !locked && (
         <p className="flex flex-wrap items-center gap-x-1 gap-y-0.5 text-xs text-slate-400">
           Click the <Pencil size={11} className="text-slate-500"/> icon to edit an item inline, the
           {tab === 'sections'
@@ -1400,7 +1435,8 @@ export default function CurriculumManagement() {
                 <GradeCard key={grade} grade={grade}
                   items={subjects[grade] || []} type="subject" syId={selectedSY.id} syLabel={selectedSY.label}
                   onAdd={handleAddSubject} onSave={handleUpdateSubject} onDelete={handleDeleteSubject}
-                  onGradingConfig={descriptiveGrades.has(grade) ? undefined : setGradingSubject}/>
+                  onGradingConfig={descriptiveGrades.has(grade) ? undefined : setGradingSubject}
+                  readOnly={locked}/>
               ))}
             </div>
           )}
@@ -1418,7 +1454,7 @@ export default function CurriculumManagement() {
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {assessment.config.map(entry => (
                   <AssessmentCard key={entry.grade_level} entry={entry} scales={assessment.scales}
-                    onSave={handleSaveAssessment} onReset={handleResetAssessment}/>
+                    onSave={handleSaveAssessment} onReset={handleResetAssessment} readOnly={locked}/>
                 ))}
               </div>
             </div>
@@ -1433,7 +1469,8 @@ export default function CurriculumManagement() {
                 <GradeCard key={grade} grade={grade}
                   items={sections[grade] || []} type="section" syId={selectedSY.id} syLabel={selectedSY.label}
                   onAdd={handleAddSection} onSave={handleUpdateSection} onDelete={handleDeleteSection}
-                  onAdviser={sec => setAdviserFor({ section: sec, gradeLevel: grade })}/>
+                  onAdviser={sec => setAdviserFor({ section: sec, gradeLevel: grade })}
+                  readOnly={locked}/>
               ))}
             </div>
           )}
@@ -1480,6 +1517,8 @@ export default function CurriculumManagement() {
         onClose={() => setGradingSubject(null)}
         subject={gradingSubject}
         onSaved={fetchContent}
+        readOnly={locked}
+        writeParams={writeParams}
       />
     </div>
   )

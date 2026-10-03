@@ -18,7 +18,8 @@ const { authenticate, authorizeAnyAdmin, authorizeSuperAdmin, enforceGradeScope 
 const { AppError } = require('../middleware/error.middleware')
 const { gradeScopeForRole, isScopedAdmin, isSuperAdmin, canManageGrade } = require('../utils/roles')
 const { assertSectionsExist } = require('../utils/sections')
-const { syStatus, isArchivedYear } = require('../utils/schoolYear')
+// `assertArchivedWritable` is the archived-year gate the Curriculum page shares.
+const { syStatus, isArchivedYear, assertArchivedWritable } = require('../utils/schoolYear')
 // One definition of "was this learner part of this school year", shared with the
 // activation in `curriculum.routes.js` so the roster and the roll cannot disagree.
 const { PREV_JOIN, LEFT_SQL, COMPLETED_SQL, NOT_LEFT, NOT_COMPLETED, HAS_JOINED } = require('../utils/rosterSql')
@@ -257,29 +258,6 @@ const assertNoOutcome = async (syId, studentIds) => {
     'so deleting the record would lose it for good.',
     409
   )
-}
-
-/**
- * The archived-year gate, shared by the three writers that can reach a closed
- * year (`PUT /`, `DELETE /`, and the promotion commit's target).
- *
- * Two refusals, because there are two different callers. Unlocking a closed year
- * is a super_admin capability: a scoped admin told to "unlock the school year"
- * would be pointed at an affordance their page does not offer, so they get a 403
- * naming who can instead. The 409 stays for the caller who simply did not send
- * the flag -- a mis-picked year from a dropdown that lists closed years like any
- * other, which is the risk this gate has always been about.
- */
-const assertArchivedWritable = (req, sy, allowArchived, conflictMessage) => {
-  if (!isArchivedYear(sy)) return
-  if (!isSuperAdmin(req.user.role)) {
-    throw new AppError(
-      `SY ${sy.label} is archived. Correcting the records of a closed school year is ` +
-      'restricted to a super admin.',
-      403
-    )
-  }
-  if (!allowArchived) throw new AppError(conflictMessage, 409)
 }
 
 const resolveSYId = async (sy_id) => {

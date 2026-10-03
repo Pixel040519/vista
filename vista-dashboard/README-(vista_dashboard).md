@@ -38,7 +38,7 @@ npm run dev
 | `/announcements` | Announcements — a **VISTA Portal** tab (staff, parents in the app) and a **Public Website** tab | All (post: admin; website: super admin, read-only for scoped admins) |
 | `/facilities` | Facility Gallery — the photos the website shows | Super admin |
 | `/accounts` | Teacher, admin and parent accounts — invited by email; no admin ever sets a password | Admin (Admins tab: super admin) |
-| `/curriculum` | School years, subjects, sections, advisers, assessment mode | Admin |
+| `/curriculum` | School years, subjects, sections, advisers, assessment mode. An archived year is read-only until a super admin unlocks it | Admin |
 | `/enrollment` | One school year's roster | Admin |
 | `/enrollment/promotion` | Year-End Promotion wizard | Admin |
 | `/profile` | Own profile + password change | All roles |

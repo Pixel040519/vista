@@ -175,6 +175,11 @@ grades, attendance, competency ratings or score items. For a section it means le
 enrolment records, teacher assignments or score items. A subject's grading structure and
 competency skills are deleted with it. A MAPEH's four areas go with it too.
 
+An **archived** school year's curriculum is read-only. Every write below, plus grading
+structure and assessment config, is refused for a scoped admin (403) and for a super admin
+who did not pass `?allow_archived=true` (409). The Curriculum page sends that only after a
+super admin presses "Edit historical records".
+
 | Method | Endpoint | Description | Role |
 |--------|----------|-------------|------|
 | GET | /api/curriculum/subjects/grouped?sy_id= | Subjects per grade level, MAPEH with its areas | All |

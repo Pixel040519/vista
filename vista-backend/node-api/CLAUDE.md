@@ -443,15 +443,18 @@ no subject to derive one from), but that is for reading a learner's history by y
 still does not make an observation into work that blocks removing an enrolment record.
 
 **Archived years are read-only unless the caller says otherwise.** `assertArchivedWritable()`
-is the one gate, shared by `PUT /`, `DELETE /` and the promotion commit, and it has **two**
+in `utils/schoolYear.js` is the one gate, shared by `PUT /`, `DELETE /`, the promotion
+commit and every curriculum writer (see the Curriculum section), and it has **two**
 refusals because it has two kinds of caller. A scoped admin gets **403** — the unlock is a
 `super_admin` capability, and telling them to "unlock the school year" would name a button
 their page does not render. A super_admin who did not send `allow_archived: true` gets the
 old **409**, which is still the real guard: the risk is a mis-picked year from a dropdown
 that lists closed years like any other. `isArchivedYear` lives in `utils/schoolYear.js`,
-mirrored in the dashboard's `components/SchoolYearPicker.jsx`; the flag is sent only by the
-Enrollment page and the wizard after an admin has explicitly unlocked that year. What lives
-in a closed year is the record of who actually attended, which is why both refusals exist.
+mirrored in the dashboard's `components/SchoolYearPicker.jsx`. The flag is sent only after a
+super admin has explicitly unlocked that year: by the Enrollment page and the wizard in the
+body (`allow_archived: true`), and by the Curriculum page as `?allow_archived=true`. What
+lives in a closed year is the record of who actually attended, which is why both refusals
+exist.
 
 This is deliberately **weaker** than the grading-model freeze in
 `curriculum.routes.js`, which has no override: that one protects the
@@ -785,9 +788,10 @@ Three things that do **not** change, each of which looks like an omission:
   section's id, not its name. `PUT /sections/:id` does re-read through
   `loadSectionRow()` so the response still carries it, because the Sections tab
   replaces its cached row wholesale.
-- **Archived school years are not gated.** Renaming and deleting a section on a
-  closed year are already ungated, unlike enrolment writes and the grading-model
-  freeze, so the adviser follows the surface it lives on.
+- **On an archived school year the adviser follows the surface it lives on.**
+  `PUT /sections/:id/adviser` goes through `assertCurriculumYearWritable()` like
+  every other curriculum writer, so it is refused unless a super admin has
+  unlocked that year.
 
 `POST /school-years` with `copy_from_id` copies sections **without** the adviser,
 which is where this departs from the teacher-assignment copy alongside it. A
@@ -933,6 +937,16 @@ rows and their competency skills `FOR UPDATE`, re-counts usage, deletes
 subjects. The FKs cascade the areas, grading structure, score items and their scores, and
 competency skills. The lock means a grade or rating written concurrently either counts
 or fails, so it is never cascaded away.
+
+**An archived year's curriculum is read-only.** `assertCurriculumYearWritable(req, syId)`
+in `curriculum.routes.js` guards all eleven curriculum writers: subjects (POST, PUT,
+DELETE), sections (POST, PUT, DELETE, adviser), grading structure (PUT, DELETE) and
+assessment config (PUT, DELETE). It looks up the year the write lands in, using
+`yearOfRow()` for id-keyed routes, and calls the shared `assertArchivedWritable()`. A
+scoped admin gets 403 and a super admin without the flag gets 409. The flag travels as
+`?allow_archived=true` rather than in the body, so it reaches DELETEs and leaves every Joi
+body schema alone (`POST /sections` validates without `stripUnknown`). The school-year
+routes are not gated, because changing a year's status is how it is reopened.
 
 Sections mirror this. `GET /sections/:id/usage` and `DELETE /sections/:id` both build their
 verdict from `sectionUsage()` through `sectionDeleteBlocker()`, which uses the same sentence
