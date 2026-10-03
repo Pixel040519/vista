@@ -1497,7 +1497,7 @@ facility, which replaces the cached one. Until any facility exists the website k
 showing the photos it was built with.
 
 ### Profile (`pages/Profile.jsx`)
-Any authenticated role at `/profile`. Account summary card (avatar, full_name, role pill, email, phone, "Member since"). Editable **Personal Information** form (surname/first_name/middle_name/phone; email is disabled with helper text). **Change Password** form (current + new + confirm with individual show/hide toggles, and the shared `PasswordChecklist` beneath them, two columns); 401 surfaces inline as "Current password is incorrect" rather than a toast. Teacher-only **My Teaching Assignments** read-only card rendered from `activeAssignments`. Calls `updateUser(patch)` from AuthContext after save so the sidebar updates immediately.
+Any authenticated role at `/profile`. Account summary card (avatar, full_name, role pill, email, phone, "Member since"). Editable **Personal Information** form (surname/first_name/middle_name/phone; email is disabled, with helper text saying it is the sign-in email and can't be changed once the account is activated — it used to say "Contact an administrator", but anyone on this page has activated, and the API refuses an admin's email change from that point on). **Change Password** form (current + new + confirm with individual show/hide toggles, and the shared `PasswordChecklist` beneath them, two columns); 401 surfaces inline as "Current password is incorrect" rather than a toast. Teacher-only **My Teaching Assignments** read-only card rendered from `activeAssignments`. Calls `updateUser(patch)` from AuthContext after save so the sidebar updates immediately.
 
 ### Sign-in: activation and password reset (`pages/AccountAccess.jsx`)
 

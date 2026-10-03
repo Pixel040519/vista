@@ -140,7 +140,7 @@ function PersonalInfoForm({ user, onSaved }) {
               disabled
             />
             <p className="text-xs text-slate-400 mt-1">
-              Contact an administrator to change your email.
+              This is the email you sign in with. It can't be changed once your account is activated.
             </p>
           </div>
           <div className="sm:col-span-2">
