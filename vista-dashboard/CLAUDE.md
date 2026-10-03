@@ -7,7 +7,7 @@ Vite + React on port 5173. Dev server proxies `/api/*` to `http://localhost:5000
 - `main.jsx` — Router setup, AuthContext provider.
 - `api/client.js` — Axios instance with JWT interceptors. Exports `aiApi` (`teacherDashboard`, `classHealth`, `classHealthAll`, `eceClassHealth`), `studentApi`, `behaviorApi` (`get`, `summary`, `classRoster`, `log`, `update`, `delete`), `curriculumApi`, `scoreApi`, `eceApi` (skill CRUD, record flows, `getSummary`), `profileApi` (`updateMe`, `changePassword`).
 - `pages/` — one component per route. `Dashboard.jsx` is a thin role router (~10 lines) that branches on `user.role` and renders `pages/dashboard/AdminDashboard.jsx` or `pages/dashboard/TeacherDashboard.jsx`.
-- `components/` — shared UI (`GradingConfigModal.jsx` for per-subject grading structure, `AttendanceDetailModal.jsx` for dashboard drill-down, `GradeMarks.jsx` for how a numeric grade is shown — `GradeNumber`, `DescriptorLabel`, `RemarksPill` — used by the Grades page and Student Detail, etc.).
+- `components/` — shared UI (`GradingConfigModal.jsx` for per-subject grading structure, `AttendanceDetailModal.jsx` for dashboard drill-down, `GradeMarks.jsx` for how a numeric grade is shown — `GradeNumber`, `DescriptorLabel`, `RemarksPill` — used by the Grades page and Student Detail; `LearnerSidePanel.jsx`, the Grades page's right-hand learner drawer, and `CategoryScoresPanel.jsx`, the Grade Summary's per-category score items, built on it; etc.).
 - Routes: `/login`, `/` (dashboard), `/students`, `/students/:id`, `/attendance`, `/grades`, `/score-entry`, `/behavior`, `/risk`, `/announcements`, `/profile`, `/ece-competency`.
 
 The `BrowserRouter` in both `App.jsx` and `main.jsx` has `v7_startTransition` and `v7_relativeSplatPath` future flags enabled.
@@ -1134,6 +1134,7 @@ learning area × period with final, descriptor and remarks, MAPEH's areas expand
 Detail. Previous/Next walk the table's own order — gender groups flattened, search applied —
 and stop at either end. Its "X of N" counter runs across the whole class, while the table's
 `#` restarts per gender group, so the two numbers differ for everyone after the first group.
+The drawer is `components/LearnerSidePanel.jsx`; `LearnerRecord` supplies only its body.
 
 **Deliberately absent**, each removed at the school's request after a first cut had them:
 a class average (on either view), a "latest period graded" count, and "1st–2nd term graded
@@ -1161,6 +1162,27 @@ change with the policy, and that is enough.
 By subject has two tabs over one filter set (school year, class, subject): **Grading Sheet** (period
 grades + final grade from `gradesApi.getBySubject`) and **Grade Summary** (weighted category
 breakdown for one period from `scoreApi.getBreakdown`).
+
+**Every category cell on Grade Summary is a button** that opens `CategoryScoresPanel`, a
+right-hand panel showing what that weighted score is made of. It covers one learner and one
+period, starts on the clicked category, and has chips to switch to the others. Each component
+gets an **Item · Score · HPS · %** table with a **Total · PS · WS** footer. The items come from
+`scoreApi.getItems` + `scoreApi.getScores`. Both are loaded on the first click and cached in
+`itemScores` under a `subject|period|grade|section` key, so Previous/Next makes no further
+requests, and a load for an old key is dropped.
+
+The totals are **taken from the learner's `/breakdown` entry, never recomputed**, so the panel
+cannot disagree with the cell that opened it. A blank score shows as "—" with a note that it
+counts as 0, because that is what `POST /api/scores` and `/breakdown` do with it. The MAPEH
+roll-up's area table is not clickable: it has no categories. Each area tab is an ordinary
+subject and gets the panel.
+
+The drawer itself (portal, backdrop, Escape, learner header, Previous/Next, Open student
+profile) is `components/LearnerSidePanel.jsx`, shared with the All subjects `LearnerRecord`.
+Change both panels' behaviour there. Previous/Next is kept on purpose. Checking one category
+across a class is the usual task ("whose Written Work is low?"), and walking learners with
+the category held avoids closing the panel and clicking the next row each time. It walks
+`breakdownOrdered`, the table as shown.
 
 Both tables group learners with `groupByGender()`: **Male**, then **Female**, then **No gender recorded**. The third group is for learners whose `gender` is NULL, which the column allows. It used to be a group called "Other", which is not a valid value anymore. A plain Male/Female filter would drop those learners from the sheet without a trace, and Score Entry's gender groups still do.
 

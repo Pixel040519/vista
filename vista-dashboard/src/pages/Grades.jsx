@@ -1,10 +1,7 @@
-import { useState, useEffect, useMemo, Fragment } from 'react'
-import { createPortal } from 'react-dom'
-import { Link } from 'react-router-dom'
+import { useState, useEffect, useMemo, useCallback, Fragment } from 'react'
 import clsx from 'clsx'
 import {
-  BookOpen, Layers, Search, List, LayoutGrid, Info, X,
-  ChevronLeft, ChevronRight, ChevronDown, ArrowUpRight, AlertTriangle,
+  BookOpen, Layers, Search, List, LayoutGrid, Info, ChevronDown, AlertTriangle, MousePointerClick,
 } from 'lucide-react'
 import { curriculumApi, gradesApi, scoreApi } from '../api/client'
 import { LoadingSpinner, EmptyState } from '../components/UI'
@@ -12,6 +9,8 @@ import { useAuth } from '../context/AuthContext'
 import { formatName } from '../utils/nameHelper'
 import { resolveGradingPolicy, finalGradeFrom } from '../utils/grading'
 import { GradeNumber, RemarksPill, DescriptorLabel } from '../components/GradeMarks'
+import LearnerSidePanel from '../components/LearnerSidePanel'
+import CategoryScoresPanel from '../components/CategoryScoresPanel'
 
 // ============================================================
 // GRADES PAGE
@@ -162,6 +161,15 @@ export default function Grades() {
   const [breakdownData, setBreakdownData]   = useState(null)
   const [breakdownLoading, setBreakdownLoading] = useState(false)
 
+  // ── Category scores panel ─────────────────────────────────
+  // A Grade Summary category cell opens the score items behind it. `openScores`
+  // is which learner and category; `itemScores` is the class's items and raw
+  // scores for one (subject, period, class), loaded on the first click and kept
+  // while the panel walks from learner to learner. Its `key` is what stops a
+  // stale load from being shown once the filters move on.
+  const [openScores, setOpenScores]         = useState(null)
+  const [itemScores, setItemScores]         = useState(null)
+
   // Derived from selectedClass for admin ("gradeLevel|||section") or teacher same pattern
   const [gradeLevel, section] = selectedClass ? selectedClass.split('|||') : ['', '']
 
@@ -308,6 +316,36 @@ export default function Grades() {
       .finally(() => setBreakdownLoading(false))
   }, [activeView, activeTab, classQuarter, activeSubjectId, gradeLevel, section, viewingRollup])
 
+  // The panel describes one subject, period and class — close it when any moves.
+  const itemScoresKey = `${activeSubjectId}|${classQuarter}|${gradeLevel}|${section}`
+  useEffect(() => { setOpenScores(null) }, [itemScoresKey, activeView, activeTab])
+
+  const closeCategoryScores = useCallback(() => setOpenScores(null), [])
+  const openCategoryScores = useCallback((studentId, categoryId) => {
+    setOpenScores({ studentId, categoryId })
+    if (itemScores?.key === itemScoresKey && !itemScores.error) return
+    const key = itemScoresKey
+    setItemScores({ key, loading: true })
+    const params = { subject_id: activeSubjectId, quarter: classQuarter, grade_level: gradeLevel, section }
+    Promise.all([scoreApi.getItems(params), scoreApi.getScores(params)])
+      .then(([itemsRes, scoresRes]) => {
+        // student_id -> score_item_id -> score
+        const scoreMap = new Map()
+        for (const row of scoresRes.data.scores || []) {
+          if (!scoreMap.has(row.student_id)) scoreMap.set(row.student_id, new Map())
+          scoreMap.get(row.student_id).set(row.score_item_id, row.score)
+        }
+        setItemScores(prev => (prev?.key === key
+          ? { key, structure: itemsRes.data.categories || [], scoreMap }
+          : prev))
+      })
+      .catch(err => {
+        setItemScores(prev => (prev?.key === key
+          ? { key, error: err.response?.data?.error || 'Could not load the scores for this category.' }
+          : prev))
+      })
+  }, [itemScores, itemScoresKey, activeSubjectId, classQuarter, gradeLevel, section])
+
   // ── Grading sheet rows ────────────────────────────────────
   const sheetRows = useMemo(() => (data?.students || []).map(student => {
     const sg = data.grades[student.id] || {}
@@ -325,6 +363,12 @@ export default function Grades() {
     () => groupByGender((breakdownData?.breakdown || []).filter(b => matchesSearch(b.student, search)), b => b.student.gender),
     [breakdownData, search]
   )
+  // Previous/Next in the panel walks the table as shown: gender groups in
+  // order, search applied.
+  const breakdownOrdered = useMemo(() => breakdownGroups.flatMap(g => g.students), [breakdownGroups])
+  const openEntry = openScores
+    ? (breakdownData?.breakdown || []).find(b => b.student.id === openScores.studentId) || null
+    : null
   const rollupGroups = useMemo(
     () => groupByGender((data?.students || []).filter(s => matchesSearch(s, search)), s => s.gender),
     [data, search]
@@ -529,7 +573,15 @@ export default function Grades() {
                     </div>
                   )}
                 </div>
-                {data.students.length > 0 && <SearchBox value={search} onChange={setSearch} />}
+                <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                  {activeTab === 'class' && !viewingRollup && breakdownCategories.length > 0 && (
+                    <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <MousePointerClick size={14} className="text-slate-400 flex-shrink-0" />
+                      Select a category score to see the items behind it.
+                    </p>
+                  )}
+                  {data.students.length > 0 && <SearchBox value={search} onChange={setSearch} />}
+                </div>
               </div>
 
               {data.students.length === 0 ? (
@@ -649,15 +701,33 @@ export default function Grades() {
                           <GroupRow label={group.label} colSpan={breakdownCategories.length + (showDescriptor ? 6 : 5)} />
                           {group.students.map((entry, idx) => {
                             const fg = toGrade(entry.final_grade)
+                            const isOpen = openScores?.studentId === entry.student.id
                             return (
-                              <tr key={entry.student.id}>
+                              <tr key={entry.student.id} className={clsx(isOpen && '!bg-brand-50')}>
                                 <td className="text-xs text-slate-400 text-center">{idx + 1}</td>
-                                <td className="font-medium text-sm text-slate-800 whitespace-nowrap">{formatName(entry.student)}</td>
-                                {entry.categories.map(cat => (
-                                  <td key={cat.id} className={clsx('text-center font-mono text-sm', cat.ws > 0 ? 'text-slate-700' : 'text-slate-300')}>
-                                    {cat.ws != null ? Number(cat.ws).toFixed(2) : '—'}
-                                  </td>
-                                ))}
+                                <td className={clsx('font-medium text-sm whitespace-nowrap', isOpen ? 'text-brand-600' : 'text-slate-800')}>{formatName(entry.student)}</td>
+                                {entry.categories.map(cat => {
+                                  const selected = isOpen && openScores.categoryId === cat.id
+                                  return (
+                                    <td key={cat.id} className="text-center !py-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => openCategoryScores(entry.student.id, cat.id)}
+                                        title={`See ${cat.name} scores`}
+                                        className={clsx(
+                                          'min-w-[4.5rem] px-2.5 py-1 rounded-lg font-mono text-sm transition-colors',
+                                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-300',
+                                          selected
+                                            ? 'bg-brand-500 text-white'
+                                            : clsx('underline decoration-dotted decoration-slate-300 underline-offset-4 hover:bg-brand-100 hover:text-brand-700',
+                                                cat.ws > 0 ? 'text-slate-700' : 'text-slate-300')
+                                        )}
+                                      >
+                                        {cat.ws != null ? Number(cat.ws).toFixed(2) : '—'}
+                                      </button>
+                                    </td>
+                                  )
+                                })}
                                 <td className={clsx('text-center font-mono text-sm', entry.initial_grade > 0 ? 'text-slate-700' : 'text-slate-300')}>
                                   {entry.initial_grade != null ? Number(entry.initial_grade).toFixed(2) : '—'}
                                 </td>
@@ -676,6 +746,27 @@ export default function Grades() {
                 <div className="py-8">
                   <EmptyState icon={BookOpen} title="No scores recorded" description={`No score data found for this ${grading.periodNoun.toLowerCase()}.`} />
                 </div>
+              )}
+
+              {openEntry && (
+                <CategoryScoresPanel
+                  entry={openEntry}
+                  structure={itemScores?.key === itemScoresKey ? itemScores.structure : null}
+                  studentScores={itemScores?.key === itemScoresKey ? itemScores.scoreMap?.get(openEntry.student.id) : null}
+                  loading={itemScores?.key !== itemScoresKey || !!itemScores?.loading}
+                  error={itemScores?.key === itemScoresKey ? itemScores.error : null}
+                  categoryId={openScores.categoryId}
+                  onCategoryChange={categoryId => setOpenScores(o => ({ ...o, categoryId }))}
+                  ordered={breakdownOrdered}
+                  onNavigate={studentId => setOpenScores(o => ({ ...o, studentId }))}
+                  onClose={closeCategoryScores}
+                  subjectLabel={data.parent_name ? `${data.parent_name} — ${data.subject_name}` : data.subject_name}
+                  grading={grading}
+                  period={classQuarter}
+                  gradeLevel={gradeLevel}
+                  section={section}
+                  syLabel={syLabel}
+                />
               )}
             </div>
           ) : (
@@ -889,16 +980,7 @@ function LearnerRecord({ row, ordered, onNavigate, onClose, grading, gradeLevel,
   const passing = grading.passingGrade
   const showDescriptor = !!grading.descriptorFor
   const { student } = row
-  const position = ordered.findIndex(r => r.student.id === student.id)
-  const prev = position > 0 ? ordered[position - 1] : null
-  const next = position >= 0 && position < ordered.length - 1 ? ordered[position + 1] : null
   const hasComposite = row.cells.some(c => c.areas.length > 0)
-
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   const toggle = (id) => setCollapsed(prevSet => {
     const nextSet = new Set(prevSet)
@@ -906,137 +988,100 @@ function LearnerRecord({ row, ordered, onNavigate, onClose, grading, gradeLevel,
     return nextSet
   })
 
-  const initials = `${student.first_name?.[0] || ''}${student.surname?.[0] || ''}`.toUpperCase() || '?'
-
-  return createPortal(
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-slate-900/30 animate-fade-in" onClick={onClose} />
-      <aside
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Grades of ${formatName(student)}`}
-        className="relative w-full max-w-3xl h-full bg-white shadow-2xl flex flex-col"
-      >
-        <div className="px-4 sm:px-6 py-5 border-b border-slate-100 flex items-start gap-3.5">
-          <div className="w-11 h-11 rounded-full bg-brand-100 text-brand-600 font-semibold text-[15px] flex items-center justify-center flex-shrink-0">
-            {initials}
-          </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="text-lg font-semibold text-slate-900 truncate">{formatName(student)}</h3>
-            <p className="text-[13px] text-slate-500 mt-0.5">
-              {student.lrn ? `LRN ${student.lrn} · ` : ''}{gradeLevel} – {section} · SY {syLabel}
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100" aria-label="Close">
-            <X size={18} />
-          </button>
+  return (
+    <LearnerSidePanel
+      student={student}
+      subtitle={`${student.lrn ? `LRN ${student.lrn} · ` : ''}${gradeLevel} – ${section} · SY ${syLabel}`}
+      ariaLabel={`Grades of ${formatName(student)}`}
+      ordered={ordered}
+      getId={r => r.student.id}
+      onNavigate={onNavigate}
+      onClose={onClose}
+    >
+      <div className="flex items-center gap-4 p-4 rounded-xl bg-slate-50">
+        <div className={clsx(
+          'w-16 h-16 rounded-2xl bg-white border border-slate-200 flex items-center justify-center font-mono text-2xl font-bold flex-shrink-0',
+          row.generalAverage !== null && row.generalAverage < passing ? 'text-red-500' : 'text-brand-600'
+        )}>
+          {row.generalAverage ?? '—'}
         </div>
-
-        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4">
-          <div className="flex items-center gap-4 p-4 rounded-xl bg-slate-50">
-            <div className={clsx(
-              'w-16 h-16 rounded-2xl bg-white border border-slate-200 flex items-center justify-center font-mono text-2xl font-bold flex-shrink-0',
-              row.generalAverage !== null && row.generalAverage < passing ? 'text-red-500' : 'text-brand-600'
-            )}>
-              {row.generalAverage ?? '—'}
+        <div className="min-w-0 space-y-1.5">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">General average</p>
+          {row.generalAverage !== null && (
+            <div className="flex flex-wrap items-center gap-3">
+              {showDescriptor && <DescriptorLabel grade={row.generalAverage} grading={grading} />}
+              <RemarksPill grade={row.generalAverage} passing={passing} />
             </div>
-            <div className="min-w-0 space-y-1.5">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">General average</p>
-              {row.generalAverage !== null && (
-                <div className="flex flex-wrap items-center gap-3">
-                  {showDescriptor && <DescriptorLabel grade={row.generalAverage} grading={grading} />}
-                  <RemarksPill grade={row.generalAverage} passing={passing} />
-                </div>
-              )}
-              <p className="text-xs text-slate-400">
-                {row.cells.length} learning area{row.cells.length !== 1 ? 's' : ''}
-              </p>
-            </div>
-          </div>
-
-          <div className="border border-slate-200 rounded-xl overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                  <th className="px-3 py-2.5 text-left whitespace-nowrap">Learning area</th>
-                  {grading.ordinals.map(o => <th key={o} className="px-1.5 py-2.5 text-center whitespace-nowrap">{o}</th>)}
-                  <th className="px-3 py-2.5 text-center whitespace-nowrap border-l border-slate-200">Final</th>
-                  {showDescriptor && <th className="px-3 py-2.5 text-center whitespace-nowrap">Descriptor</th>}
-                  <th className="px-3 py-2.5 text-center whitespace-nowrap">Remarks</th>
-                </tr>
-              </thead>
-              <tbody>
-                {row.cells.map(cell => {
-                  const composite = cell.areas.length > 0
-                  const isOpen = composite && !collapsed.has(cell.subject.id)
-                  return (
-                    <Fragment key={cell.subject.id}>
-                      <tr className="border-b border-slate-100">
-                        <td className="px-3 py-2.5 font-medium text-slate-800">
-                          {composite ? (
-                            <button type="button" onClick={() => toggle(cell.subject.id)} className="flex items-center gap-1.5 text-left">
-                              <ChevronDown size={14} className={clsx('text-slate-400 transition-transform', !isOpen && '-rotate-90')} />
-                              <span className="whitespace-nowrap">{cell.subject.name}</span>
-                              <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap">avg. of {cell.areas.length}</span>
-                            </button>
-                          ) : (
-                            <span className="whitespace-nowrap">
-                              {cell.subject.name}
-                              {cell.subject.off_level && <span className="ml-1 text-amber-500" title={`${cell.subject.grade_level} subject`}>*</span>}
-                            </span>
-                          )}
-                        </td>
-                        {cell.periods.map((g, i) => (
-                          <td key={i} className="px-1.5 py-2.5 text-center"><GradeNumber grade={g} passing={passing} small /></td>
-                        ))}
-                        <td className="px-3 py-2.5 text-center border-l border-slate-100"><GradeNumber grade={cell.final} passing={passing} tone="final" /></td>
-                        {showDescriptor && <td className="px-3 py-2.5 text-center"><DescriptorLabel grade={cell.final} grading={grading} /></td>}
-                        <td className="px-3 py-2.5 text-center"><RemarksPill grade={cell.final} passing={passing} /></td>
-                      </tr>
-                      {isOpen && cell.areas.map(area => (
-                        <tr key={area.id} className="border-b border-slate-100 bg-slate-50/50">
-                          <td className="pl-9 pr-3 py-2 text-[13px] text-slate-500 whitespace-nowrap">{area.name}</td>
-                          {area.periods.map((g, i) => (
-                            <td key={i} className="px-1.5 py-2 text-center"><GradeNumber grade={g} passing={passing} tone="muted" small /></td>
-                          ))}
-                          <td className="px-3 py-2 text-center border-l border-slate-100"><GradeNumber grade={area.final} passing={passing} tone="muted" small /></td>
-                          {showDescriptor && <td />}
-                          <td />
-                        </tr>
-                      ))}
-                    </Fragment>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {hasComposite && (
-            <p className="flex items-start gap-2 text-xs text-slate-500 leading-relaxed">
-              <Info size={14} className="text-slate-400 flex-shrink-0 mt-0.5" />
-              MAPEH’s areas are shown beneath it.
-            </p>
           )}
+          <p className="text-xs text-slate-400">
+            {row.cells.length} learning area{row.cells.length !== 1 ? 's' : ''}
+          </p>
         </div>
+      </div>
 
-        <div className="px-4 sm:px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <button type="button" disabled={!prev} onClick={() => prev && onNavigate(prev.student.id)}
-              className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed" aria-label="Previous learner">
-              <ChevronLeft size={16} />
-            </button>
-            <button type="button" disabled={!next} onClick={() => next && onNavigate(next.student.id)}
-              className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed" aria-label="Next learner">
-              <ChevronRight size={16} />
-            </button>
-            {position >= 0 && <span className="text-xs text-slate-400">{position + 1} of {ordered.length}</span>}
-          </div>
-          <Link to={`/students/${student.id}`} className="btn-primary">
-            Open student profile <ArrowUpRight size={15} />
-          </Link>
-        </div>
-      </aside>
-    </div>,
-    document.body
+      <div className="border border-slate-200 rounded-xl overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              <th className="px-3 py-2.5 text-left whitespace-nowrap">Learning area</th>
+              {grading.ordinals.map(o => <th key={o} className="px-1.5 py-2.5 text-center whitespace-nowrap">{o}</th>)}
+              <th className="px-3 py-2.5 text-center whitespace-nowrap border-l border-slate-200">Final</th>
+              {showDescriptor && <th className="px-3 py-2.5 text-center whitespace-nowrap">Descriptor</th>}
+              <th className="px-3 py-2.5 text-center whitespace-nowrap">Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            {row.cells.map(cell => {
+              const composite = cell.areas.length > 0
+              const isOpen = composite && !collapsed.has(cell.subject.id)
+              return (
+                <Fragment key={cell.subject.id}>
+                  <tr className="border-b border-slate-100">
+                    <td className="px-3 py-2.5 font-medium text-slate-800">
+                      {composite ? (
+                        <button type="button" onClick={() => toggle(cell.subject.id)} className="flex items-center gap-1.5 text-left">
+                          <ChevronDown size={14} className={clsx('text-slate-400 transition-transform', !isOpen && '-rotate-90')} />
+                          <span className="whitespace-nowrap">{cell.subject.name}</span>
+                          <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap">avg. of {cell.areas.length}</span>
+                        </button>
+                      ) : (
+                        <span className="whitespace-nowrap">
+                          {cell.subject.name}
+                          {cell.subject.off_level && <span className="ml-1 text-amber-500" title={`${cell.subject.grade_level} subject`}>*</span>}
+                        </span>
+                      )}
+                    </td>
+                    {cell.periods.map((g, i) => (
+                      <td key={i} className="px-1.5 py-2.5 text-center"><GradeNumber grade={g} passing={passing} small /></td>
+                    ))}
+                    <td className="px-3 py-2.5 text-center border-l border-slate-100"><GradeNumber grade={cell.final} passing={passing} tone="final" /></td>
+                    {showDescriptor && <td className="px-3 py-2.5 text-center"><DescriptorLabel grade={cell.final} grading={grading} /></td>}
+                    <td className="px-3 py-2.5 text-center"><RemarksPill grade={cell.final} passing={passing} /></td>
+                  </tr>
+                  {isOpen && cell.areas.map(area => (
+                    <tr key={area.id} className="border-b border-slate-100 bg-slate-50/50">
+                      <td className="pl-9 pr-3 py-2 text-[13px] text-slate-500 whitespace-nowrap">{area.name}</td>
+                      {area.periods.map((g, i) => (
+                        <td key={i} className="px-1.5 py-2 text-center"><GradeNumber grade={g} passing={passing} tone="muted" small /></td>
+                      ))}
+                      <td className="px-3 py-2 text-center border-l border-slate-100"><GradeNumber grade={area.final} passing={passing} tone="muted" small /></td>
+                      {showDescriptor && <td />}
+                      <td />
+                    </tr>
+                  ))}
+                </Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {hasComposite && (
+        <p className="flex items-start gap-2 text-xs text-slate-500 leading-relaxed">
+          <Info size={14} className="text-slate-400 flex-shrink-0 mt-0.5" />
+          MAPEH’s areas are shown beneath it.
+        </p>
+      )}
+    </LearnerSidePanel>
   )
 }

@@ -1007,6 +1007,13 @@ PL/pgSQL — a third copy of a policy that already lives in two hand-synced file
 
 `verifyTeacherAssignment()` enforces assignment ownership on all score endpoints: GET/POST `/api/scores`, GET `/api/scores/breakdown`, GET/POST `/api/scores/items`.
 
+Admins skip the assignment lookup but are still held to their grade scope there. That is
+what lets the Grades page's **Grade Summary** read a class's score items and raw scores
+(`GET /scores/items` + `GET /scores`) for its category scores panel, with no admin-specific
+endpoint. The panel's totals come from `GET /scores/breakdown`. `/breakdown` and `GET /`
+must therefore keep the **same roster query** and the same "a blank score counts as 0"
+rule, or the item list and the totals beside it will disagree.
+
 **One teacher handles a whole learning area**, so an assignment names MAPEH and
 never its areas. `verifyTeacherAssignment()` resolves `COALESCE(p.name, s.name)` —
 when the subject being gated is an area, it matches on its parent's name. Holding
