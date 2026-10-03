@@ -207,6 +207,19 @@ Two rules that are easy to break:
   Such a card says "Only the learning areas you teach are shown, so no general average is
   given." instead.
 
+**Overview tab layout.** On `lg:` the first row is three cards side by side — Student
+Information, Attendance Summary, Linked Parents / Guardians — followed by full-width **Home
+Address** and then **Enrolment History**. Below `lg:` the grid is one column and reads
+Student Information → Home Address → Attendance Summary → Guardians → Enrolment History, so
+the learner's own details stay together. Home Address achieves both with one element: it sits
+right after Student Information in the source and carries `lg:order-last lg:col-span-3`.
+
+Attendance Summary and Guardians take their height from Student Information through grid-row
+stretch, so their content is an absolutely positioned layer — **`lg:absolute lg:inset-0`, never
+a bare `absolute`**. Stacked in one column there is no neighbour to stretch to, and an absolute
+body leaves the card zero pixels tall; both cards vanished on small screens until this was
+scoped to `lg:`.
+
 Teacher-aware. Teachers do **not** see the Home Address card or per-guardian email/phone/home_address rows (guardian names, relationship and emergency chips stay so teachers still know whom to call). **Attendance and Behavior are grouped School Year → Month**, both collapsible, most
 recent first, with the latest year and its latest month open by default. The year comes from each
 record's own `school_year` (the API resolves it from `school_year_id`), never from the date:

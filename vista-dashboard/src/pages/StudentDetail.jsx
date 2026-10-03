@@ -810,9 +810,30 @@ export default function StudentDetail() {
             ))}
           </div>
 
-          {/* Attendance summary */}
+          {/* Home Address. Sits right after Student Information in the source so
+              the stacked single-column layout reads the learner's details
+              together; on lg: it moves behind the other two cards and spans the
+              full width as its own row. */}
+          {!isTeacher && (
+            <div className="card p-5 lg:order-last lg:col-span-3">
+              <h3 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                <MapPin size={15} className="text-brand-500" /> Home Address
+              </h3>
+              {student.home_address ? (
+                <p className="text-sm text-slate-700 leading-relaxed">{student.home_address}</p>
+              ) : (
+                <p className="text-sm text-slate-400 italic">No home address recorded.</p>
+              )}
+            </div>
+          )}
+
+          {/* Attendance summary. This card and Guardians take their height from
+              the Student Information card beside them, through the grid row, so
+              their content is absolutely positioned — but only on lg:. Stacked in
+              one column there is no neighbour to stretch to, and an absolute body
+              would leave each card zero pixels tall. */}
           <div className="card relative overflow-hidden">
-            <div className="absolute inset-0 p-5 flex flex-col overflow-y-auto">
+            <div className="lg:absolute lg:inset-0 p-5 flex flex-col overflow-y-auto">
             <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2 flex-shrink-0">
               <ClipboardCheck size={15} className="text-brand-500" /> Attendance Summary
               <span className="ml-auto text-xs font-medium text-slate-400">
@@ -838,7 +859,7 @@ export default function StudentDetail() {
 
           {/* Guardians */}
           <div className="card relative overflow-hidden">
-            <div className="absolute inset-0 p-5 flex flex-col overflow-hidden">
+            <div className="lg:absolute lg:inset-0 p-5 flex flex-col overflow-hidden">
             <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2 flex-shrink-0">
               <span>Linked Parents / Guardians</span>
               <span className="ml-auto text-xs font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
@@ -941,20 +962,6 @@ export default function StudentDetail() {
                   </tbody>
                 </table>
               </div>
-            )}
-          </div>
-        )}
-
-        {/* Home Address card — full width */}
-        {!isTeacher && (
-          <div className="card p-5">
-            <h3 className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
-              <MapPin size={15} className="text-brand-500" /> Home Address
-            </h3>
-            {student.home_address ? (
-              <p className="text-sm text-slate-700 leading-relaxed">{student.home_address}</p>
-            ) : (
-              <p className="text-sm text-slate-400 italic">No home address recorded.</p>
             )}
           </div>
         )}
