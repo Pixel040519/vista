@@ -57,6 +57,9 @@ Two migrations belong to the curriculum changes. Apply them in this order:
 - `2026_10_07_remove_orphaned_score_items.sql` removes score items left behind under a
   removed grading component. They were invisible in Score Entry but still blocked deleting
   the subject. It keeps any item that somehow has scores.
+- `2026_10_08_purge_removed_grading_rows.sql` deletes grading categories and components that
+  were removed but left in the table. Removing one now deletes it. It keeps any row that still
+  holds scores.
 
 ### 3. Start Node.js API
 ```bash

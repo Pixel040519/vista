@@ -886,6 +886,8 @@ now a routine state rather than an error.
 - Negative percentage values are clamped to 0.
 - Edits preserve existing UUIDs (update in place, not delete-and-recreate) so `score_items.component_id` FKs stay valid.
 - Categories/components with recorded student scores cannot be deleted — backend blocks, frontend grays out.
+- Removing a category or component **deletes the row** along with its empty score items, rather than setting `is_active = FALSE`. The exception is a row still holding scores under a hidden score item, which is kept hidden. See "Removed grading rows are deleted, not hidden" under the curriculum notes below (`retireStructureRows()`).
+- A save naming a row that is no longer live is refused with 409, because the modal is outdated. It no longer silently re-creates the row.
 - Grading structures are copied when creating a new SY with "copy from".
 
 ## Composite learning areas — MAPEH (`utils/subjectAreas.js`)
@@ -951,7 +953,28 @@ routes are not gated, because changing a year's status is how it is reopened.
 **Score items follow their grading component.** `deleteEmptyScoreItems()` in
 `curriculum.routes.js` runs wherever a component is removed: in `PUT /subjects/:id/grading`
 for every row missing from the payload (a component, or a category with its components),
-and in `DELETE /subjects/:id/grading`. Each runs in the same transaction as the soft-delete.
+and in `DELETE /subjects/:id/grading`. Each runs in the same transaction as the removal.
+
+**Removed grading rows are deleted, not hidden.** `retireStructureRows()` is the one place a
+category or component leaves, used by both the save and the clear. In order, it:
+1. deletes the empty score items under the rows;
+2. deletes the rows themselves, and the foreign keys take a category's components and any
+   remaining items and scores with it;
+3. hides (`is_active = FALSE`) only a row that still holds scores, under itself or, for a
+   category, under any of its components.
+
+That last case is a score item a teacher hid in Score Entry after scores were entered
+(`score.routes.js` hides rather than deletes those). The removal check only looks at live
+items, so without it the cascade would take those scores. In the save, the deletes run
+**after** the upsert loop, because deleting a category cascades to its components, and a
+component the payload moves to another category has to be moved first.
+
+**The save refuses a stale modal.** Every id in the payload must be a live row of the
+subject, locked `FOR UPDATE`; otherwise it returns 409 ("changed somewhere else after you
+opened it"). Before this, an id that was gone fell through to the insert branch and silently
+re-created the row. Under hard deletes that would quietly undo another tab's removal.
+`2026_10_08_purge_removed_grading_rows.sql` cleared the hidden rows left from before, keeping
+any that hold scores or still have a live component.
 It deletes only items with no `student_scores`. Removal is already refused while one has a
 score, so in practice that is every item under the component.
 

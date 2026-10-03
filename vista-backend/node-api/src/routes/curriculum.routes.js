@@ -1868,6 +1868,46 @@ const deleteEmptyScoreItems = async (client, componentIds) => {
   return r.rowCount
 }
 
+// ── Removing grading rows deletes them ────────────────────────
+//
+// Removed categories and components used to be soft-deleted (is_active =
+// FALSE) and left in the table. Nothing ever read them again — every reader,
+// the Copy-from and the school-year copy all filter is_active = TRUE, and there
+// is no restore — so they only piled up. They are now deleted outright, after
+// their empty score items (`deleteEmptyScoreItems`), and the FKs take the rest:
+// a category's components, and any remaining score items with their scores.
+//
+// The one exception is a row that still holds scores, under itself or, for a
+// category, under any of its components. Removal is refused while a *live*
+// score item has scores, but a teacher who removes an item in Score Entry
+// after scores were entered only hides it (`score.routes.js`), and those
+// scores are kept. Deleting the component would cascade them away, so such a
+// row is hidden instead, as before. Returns the counts.
+const retireStructureRows = async (client, ids) => {
+  if (!ids.length) return { removedItems: 0, deleted: 0, hidden: 0 }
+  const removedItems = await deleteEmptyScoreItems(client, ids)
+  const scored = await client.query(
+    `SELECT gs.id FROM grading_structure gs
+      WHERE gs.id = ANY($1::uuid[])
+        AND EXISTS (
+          SELECT 1 FROM score_items si
+            JOIN student_scores ss ON ss.score_item_id = si.id
+           WHERE si.component_id = gs.id
+              OR si.component_id IN (SELECT c.id FROM grading_structure c WHERE c.category_id = gs.id))`,
+    [ids])
+  const keep = new Set(scored.rows.map(r => r.id))
+  const toDelete = ids.filter(id => !keep.has(id))
+  const toHide = ids.filter(id => keep.has(id))
+  if (toDelete.length) {
+    await client.query('DELETE FROM grading_structure WHERE id = ANY($1::uuid[])', [toDelete])
+  }
+  if (toHide.length) {
+    await client.query(
+      'UPDATE grading_structure SET is_active=FALSE, updated_at=NOW() WHERE id = ANY($1::uuid[])', [toHide])
+  }
+  return { removedItems, deleted: toDelete.length, hidden: toHide.length }
+}
+
 router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) => {
   try {
     // Validate subject exists
@@ -1927,6 +1967,25 @@ router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) =>
         }
       }
 
+      // Every id the modal sends must still be a live row of this subject. One
+      // that is not means the structure changed elsewhere since the modal was
+      // opened — another tab saved or cleared it. Carrying on would quietly
+      // insert a copy of a row that was deleted on purpose, or bring a hidden one
+      // back, so the save is refused instead. Locked, so a concurrent save
+      // cannot slip between this check and the writes below.
+      if (keepIds.length) {
+        const live = await client.query(
+          `SELECT id FROM grading_structure
+            WHERE id = ANY($1::uuid[]) AND subject_id=$2 AND is_active=TRUE
+            FOR UPDATE`,
+          [keepIds, req.params.id])
+        if (live.rows.length !== new Set(keepIds).size) {
+          throw new AppError(
+            'This grading structure was changed somewhere else after you opened it. ' +
+            'Close it and open it again to see the current version, then make your change.', 409)
+        }
+      }
+
       // Find rows being removed
       const removedRes = keepIds.length > 0
         ? await client.query(
@@ -1957,17 +2016,10 @@ router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) =>
         }
       }
 
-      // Soft-delete rows that are no longer in the payload, and the empty score
-      // items set up under them (see `deleteEmptyScoreItems`).
-      if (removedRes.rows.length > 0) {
-        const removedIds = removedRes.rows.map(r => r.id)
-        await client.query(
-          `UPDATE grading_structure SET is_active=FALSE, updated_at=NOW()
-           WHERE id = ANY($1)`,
-          [removedIds]
-        )
-        removedItems = await deleteEmptyScoreItems(client, removedIds)
-      }
+      // The removed rows themselves are deleted after the loop below, not here:
+      // deleting a category cascades to its components, so it has to wait until
+      // every component the payload keeps has been attached to its category.
+      const removedIds = removedRes.rows.map(r => r.id)
 
       const result = []
       for (let i = 0; i < value.categories.length; i++) {
@@ -2023,6 +2075,8 @@ router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) =>
         }
         result.push(newCat)
       }
+
+      removedItems = (await retireStructureRows(client, removedIds)).removedItems
       return result
     })
 
@@ -2058,12 +2112,11 @@ router.delete('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next)
     // transaction, so a cleared structure never leaves items behind.
     const removedItems = await withTransaction(async (client) => {
       const result = await client.query(
-        `UPDATE grading_structure SET is_active=FALSE, updated_at=NOW()
-         WHERE subject_id=$1 AND is_active=TRUE RETURNING id`,
+        `SELECT id FROM grading_structure WHERE subject_id=$1 AND is_active=TRUE FOR UPDATE`,
         [req.params.id]
       )
       if (!result.rows.length) throw new AppError('No grading structure found for this subject.', 404)
-      return deleteEmptyScoreItems(client, result.rows.map(r => r.id))
+      return (await retireStructureRows(client, result.rows.map(r => r.id))).removedItems
     })
     res.json({
       message: removedItems

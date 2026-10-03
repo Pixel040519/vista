@@ -1782,6 +1782,11 @@ The panel says what goes and when:
   something was saved; a structure that was never saved just empties the editor. A refusal
   shows inside the panel.
 
+What the modal removes is **deleted** on the server, not hidden (see the node-api notes), so
+there is nothing to bring back afterwards. If the structure was changed in another tab after
+this modal opened, **Save Structure** is refused with a 409. The toast tells the admin to close
+the modal and open it again; saving anyway would have undone the other tab's change.
+
 **The panel also names the score items that go with it.** Removing a component deletes the
 score items a teacher set up under it in Score Entry (see the node-api notes), so the panel
 counts them from `items_by_component` on the scores check and says so in an amber note. For
