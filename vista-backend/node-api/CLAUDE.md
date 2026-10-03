@@ -777,9 +777,10 @@ must not learn that the teacher advises Grade 5 — Sampaguita.
 Three things that do **not** change, each of which looks like an omission:
 
 - `sectionUsage()` does not count the adviser. It counts what a delete would
-  *orphan*; the adviser is a pointer on the row being deleted. This is also why
-  the index carries `is_active=TRUE` — a soft-deleted section must release its
-  teacher, or they could never be reassigned.
+  *orphan*; the adviser is a pointer on the row being deleted. The index carries
+  `is_active=TRUE` from when sections were soft-deleted and had to release their
+  teacher. A delete now removes the row, so the clause only matters for rows left
+  from before.
 - `renameSectionEverywhere()` gains no statement — the adviser is keyed by the
   section's id, not its name. `PUT /sections/:id` does re-read through
   `loadSectionRow()` so the response still carries it, because the Sections tab
@@ -910,8 +911,35 @@ block (so a new year is right even if the year it copied from was not).
 `2026_09_07_mapeh_areas.sql` is the same rule as a backfill. There is no endpoint
 that accepts an area list — `POST /subjects` does not take `parent_id` — and none
 that deletes one: `DELETE /subjects/:id` refuses an area outright and cascades the
-whole family when given the learning area, with the grade check covering every
+whole family when given the learning area, with the usage check covering every
 member (a mark under Music blocks deleting MAPEH).
+
+**What blocks deleting a subject** is `subjectUsage()` in `curriculum.routes.js`, used by
+both `DELETE /subjects/:id` and the read-only `GET /subjects/:id/usage` that feeds the
+dashboard's delete confirmation, so the two cannot reach different verdicts. Recorded
+work refuses the delete (409, counts named): **grades, attendance, competency ratings
+and active score items**. Grades used to be the only test. That let a Kinder subject
+full of ratings go (Kinder never writes `grades`), along with any subject that had
+attendance but no grades yet, leaving that work pointing at a hidden row. **Setup**, which
+is the grading structure and competency skills, does not block. The confirmation names it,
+because the delete removes it for good.
+
+**Both deletes remove the row** rather than setting `is_active = FALSE`. A hidden row
+protected nothing (the guards already refuse a delete while anything recorded depends
+on it) and kept owning its name, so a subject or section removed by mistake could not
+be added back. `DELETE /subjects/:id` runs in one transaction. It locks the family's subject
+rows and their competency skills `FOR UPDATE`, re-counts usage, deletes
+`academic_predictions` (derived, and the one FK without a cascade), then deletes the
+subjects. The FKs cascade the areas, grading structure, score items and their scores, and
+competency skills. The lock means a grade or rating written concurrently either counts
+or fails, so it is never cascaded away.
+
+Sections mirror this. `GET /sections/:id/usage` and `DELETE /sections/:id` both build their
+verdict from `sectionUsage()` through `sectionDeleteBlocker()`, which uses the same sentence
+shape as the subject refusal (`countsSentence`). The DELETE locks the section row, re-reads
+its name, re-counts with its transaction client, then runs a plain `DELETE`. Nothing
+references a section by id, so nothing cascades. `2026_10_06_purge_soft_deleted_curriculum.sql`
+cleared older soft-deleted rows that carry no work.
 
 It is idempotent and safe to call on any subject, and skips silently rather than
 throwing, because a subject write must not fail on account of it. It fills in only
@@ -925,14 +953,37 @@ grading structure of its own, and skips entirely if any of the four names is tak
 the web app offers one — the Subjects tab lists MAPEH as a single row and the
 grading modal's area picker only selects.
 
-**Soft deletes are the subtle part.** `subjects_sy_grade_name_unique` does not
-filter `is_active`, so a deleted MAPEH's areas keep owning their names and a plain
-INSERT for the next one raises a 23505 that reaches the admin as "Record already
-exists." A dormant row with no work behind it is revived and repointed instead of
-duplicated. One that *does* carry work counts as taken — a deleted standalone
-"Music" with grades must not be quietly adopted into MAPEH's average. The same
-trap on the ordinary subject create now answers with a sentence naming it rather
-than the raw constraint error.
+**Legacy soft-deleted rows are the subtle part.** Subjects are no longer
+soft-deleted, but a database can still hold `is_active = FALSE` rows from before.
+The purge migration keeps any that carry work. `subjects_sy_grade_name_unique` does
+not filter `is_active`, so such a row still owns its name. A dormant area with no work
+behind it is revived and repointed rather than duplicated. One that *does* carry work
+counts as taken, because a deleted standalone "Music" with grades must not be quietly
+adopted into MAPEH's average. The same case on the ordinary subject create gets a
+sentence naming it rather than the raw constraint error.
+
+**Subject names are unique per grade level and school year ignoring case and
+spacing** — "MAPEH", "mapeH" and " Mapeh " are one subject. `assertSubjectNameFree()`
+in `curriculum.routes.js` is the single check behind `POST /subjects` and
+`PUT /subjects/:id` (rename or grade move), comparing through `NAME_KEY` from
+`utils/names.js`; names are stored normalised (`normalizeName`: trimmed, inner
+spaces collapsed). It names what is in the way — an existing subject, one of
+MAPEH's areas, or a dormant row holding the exact name — and also refuses a
+**second MAPEH** under another name ("MAPEH 4" beside "MAPEH"), which would
+compete for the same four areas. `subjects_sy_grade_name_ci_unique`
+(`2026_10_05_curriculum_names_case_insensitive.sql`) is the backstop, on active
+rows only so an invisible deleted "MAPEh" cannot block a live "MAPEH"; keep its
+expression identical to `NAME_KEY`. `ensureMapehAreas()` matches the four area
+names the same way, so an active "music" counts as taken.
+
+**Sections follow the same rule**, through `assertSectionNameFree()` on
+`POST /sections` and `PUT /sections/:id` and the `sections_sy_grade_name_ci_unique`
+index from the same migration. It matters more there: `assertSectionsExist()`
+resolves a typed section name case-insensitively (its `norm` is `nameKey` from
+`utils/names.js`), so two sections differing only by case would make the batch
+upload place a learner in whichever it found. A case-only rename ("mabini" →
+"Mabini") is allowed and fans out through `renameSectionEverywhere()` like any
+other rename.
 
 There is deliberately **no** "the set of areas changed, re-roll everything"
 helper. The set cannot change while grades exist, so the only roll-up that ever

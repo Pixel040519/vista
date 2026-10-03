@@ -54,12 +54,169 @@ const GRADE_COLORS = {
 const teacherLabel = (t) =>
   t ? `${t.surname}, ${t.first_name}${t.middle_name ? ` ${t.middle_name[0]}.` : ''}` : ''
 
+// Two subject or section names are the same when they differ only by case or
+// spacing — the API's rule (`assertSubjectNameFree` / `assertSectionNameFree`),
+// checked here as the admin types so a duplicate is named before Save rather
+// than refused after it. The API stays the judge; this sees only the grade
+// card's own items.
+const nameKey = (name) => String(name || '').trim().replace(/\s+/g, ' ').toLowerCase()
+const isMapehName = (name) => /\bmapeh\b/i.test(name || '')
+
+const nameClash = (type, name, siblings, excludeId = null) => {
+  const key = nameKey(name)
+  if (!key) return null
+  for (const s of siblings) {
+    // A subject's areas own their names too ("Music" under MAPEH).
+    for (const row of [s, ...(s.areas || [])]) {
+      if (row.id === excludeId || nameKey(row.name) !== key) continue
+      if (row !== s) return `"${row.name}" is already one of ${s.name}'s areas.`
+      return type === 'subject'
+        ? `"${s.name}" already exists in this grade level.`
+        : `Section "${s.name}" already exists in this grade level.`
+    }
+  }
+  if (type === 'subject' && isMapehName(name)) {
+    const other = siblings.find(s => s.id !== excludeId && isMapehName(s.name))
+    if (other) return `This grade level already has "${other.name}".`
+  }
+  return null
+}
+
+// ── Delete confirmation ───────────────────────────────────────
+//
+// Says what goes with the item — a MAPEH's areas, a section's adviser — and
+// what would stop the delete, so a refusal is not a surprise. When the API does
+// refuse (a subject with grades, a section still holding learners), its reason
+// is shown here in the panel rather than in a toast that closes before it is
+// read; the admin can then cancel with the explanation still in front of them.
+//
+// Subjects and sections both ask first (`getSubjectUsage` / `getSectionUsage`),
+// which reaches the same verdict the DELETE does, so a refusal shows up front
+// with Delete disabled: recorded work for a subject (grades, attendance,
+// competency ratings, score items), or anything still placed in a section
+// (learners, enrolment records, teacher assignments, score items). For a
+// subject, setup that would go with it (grading structure, competency skills)
+// is named so it is not lost silently. If that read fails the panel still
+// offers the delete; the API is the guard either way.
+function DeleteItemModal({ item, type, gradeLevel, syLabel, onClose, onDelete }) {
+  const [busy, setBusy]   = useState(false)
+  const [error, setError] = useState('')
+  const [usage, setUsage] = useState(null)
+  const [checking, setChecking] = useState(true)
+
+  const noun  = type === 'subject' ? 'subject' : 'section'
+  const areas = item.areas || []
+  const where = `${gradeLevel}${syLabel ? ` for SY ${syLabel}` : ''}`
+
+  useEffect(() => {
+    let alive = true
+    const read = type === 'subject' ? curriculumApi.getSubjectUsage : curriculumApi.getSectionUsage
+    read(item.id)
+      .then(res => {
+        if (!alive) return
+        setUsage(res.data)
+        if (res.data.blocked_reason) setError(res.data.blocked_reason)
+      })
+      .catch(() => {})
+      .finally(() => { if (alive) setChecking(false) })
+    return () => { alive = false }
+  }, [type, item.id])
+
+  // What setup goes with the subject. A MAPEH's structure lives on its areas,
+  // so it is counted per area rather than as categories of its own.
+  const setupLosses = []
+  if (type === 'subject' && usage && !usage.blocked_reason) {
+    const { categories, structured, skills } = usage.setup
+    if (structured) {
+      setupLosses.push(usage.area_count
+        ? `the grading structure of ${structured} of its ${usage.area_count} areas`
+        : `its grading structure (${categories} ${categories === 1 ? 'category' : 'categories'})`)
+    }
+    if (skills) setupLosses.push(`${skills} competency ${skills === 1 ? 'skill' : 'skills'}`)
+  }
+
+  const confirm = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await onDelete(item.id)
+      onClose()
+    } catch (err) {
+      setError(err?.response?.data?.error || `Could not delete this ${noun}.`)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal open onClose={busy ? () => {} : onClose} title={`Delete ${noun}?`} size="sm">
+      <div className="space-y-3 text-sm text-slate-600">
+        <p>
+          <span className="font-semibold text-slate-800">{type === 'section' ? 'Section ' : ''}"{item.name}"</span>{' '}
+          will be removed from {where}.
+        </p>
+
+        {/* What goes with it is moot once the delete is refused, so the
+            consequences give way to the reason. */}
+        {!error && areas.length > 0 && (
+          <p>
+            Its {areas.length} areas go with it:{' '}
+            <span className="text-slate-800">{areas.map(a => a.name).join(', ')}</span>.
+          </p>
+        )}
+
+        {!error && type === 'section' && item.adviser && (
+          <p>
+            <span className="text-slate-800">{teacherLabel(item.adviser)}</span> will no longer be
+            its class adviser.
+          </p>
+        )}
+
+        {setupLosses.length > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Also removed with it: {setupLosses.join(' and ')}. If you add this {noun} again, it will
+            have to be set up from the start.
+          </div>
+        )}
+
+        {!error && (
+          <p className="text-xs text-slate-500">
+            {checking
+              ? (type === 'subject' ? 'Checking for recorded work…' : 'Checking what is in this section…')
+              : type === 'subject'
+                ? `A subject cannot be deleted once grades, attendance, competency ratings or score items have been recorded${areas.length ? ' under it or any of its areas' : ''}.`
+                : 'A section cannot be deleted while learners, enrolment records, teacher assignments or score items are in it.'}
+          </p>
+        )}
+
+        {error && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">
+            {error}
+          </div>
+        )}
+      </div>
+
+      <div className="flex gap-3 pt-5">
+        <button type="button" onClick={onClose} disabled={busy} className="btn-secondary flex-1">
+          {error ? 'Close' : 'Cancel'}
+        </button>
+        <button type="button" onClick={confirm} disabled={busy || checking || !!error}
+          className="btn-primary flex-1 justify-center !bg-red-600 hover:!bg-red-700 disabled:opacity-60">
+          <Trash2 size={14}/>
+          {busy ? 'Deleting...' : `Delete ${noun}`}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
 // ── Inline editable item ──────────────────────────────────────
-function EditableItem({ item, onSave, onDelete, type, onGradingConfig, onAdviser }) {
+function EditableItem({ item, siblings, gradeLevel, syLabel, onSave, onDelete, type, onGradingConfig, onAdviser }) {
   const [editing, setEditing]   = useState(false)
   const [name, setName]         = useState(item.name)
   const [saving, setSaving]     = useState(false)
-  const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const clash = editing ? nameClash(type, name, siblings || [], item.id) : null
 
   const areaCount = item.area_count || 0
   const areas = item.areas || []
@@ -68,7 +225,7 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig, onAdviser
     : item.has_grading
 
   const handleSave = async () => {
-    if (!name.trim()) return
+    if (!name.trim() || clash) return
     setSaving(true)
     try {
       await onSave(item.id, { name:name.trim() })
@@ -79,18 +236,6 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig, onAdviser
     } finally { setSaving(false) }
   }
 
-  const handleDelete = async () => {
-    if (!window.confirm(`Remove "${item.name}"?`)) return
-    setDeleting(true)
-    try {
-      await onDelete(item.id)
-      toast.success(`"${item.name}" removed.`)
-    } catch (err) {
-      toast.error(err?.response?.data?.error || 'Cannot delete.')
-      setDeleting(false)
-    }
-  }
-
   const handleKey = e => {
     if (e.key === 'Enter') handleSave()
     if (e.key === 'Escape') { setEditing(false); setName(item.name) }
@@ -98,14 +243,17 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig, onAdviser
 
   if (editing) {
     return (
-      <div className="flex flex-col gap-1.5 p-2 bg-white rounded-lg border-2 border-brand-300 shadow-sm">
+      <div className={clsx('flex flex-col gap-1.5 p-2 bg-white rounded-lg border-2 shadow-sm',
+        clash ? 'border-red-300' : 'border-brand-300')}>
         <input autoFocus
           className="text-sm font-medium text-slate-800 bg-transparent outline-none border-b border-slate-200 pb-1"
-          value={name} onChange={e => setName(e.target.value)} onKeyDown={handleKey} placeholder="Name"/>
+          value={name} onChange={e => setName(e.target.value)} onKeyDown={handleKey} placeholder="Name"
+          aria-invalid={!!clash}/>
+        {clash && <p className="text-xs text-red-600">{clash}</p>}
         <div className="flex gap-1 justify-end mt-0.5">
           <button onClick={() => { setEditing(false); setName(item.name) }}
             className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100"><X size={13}/></button>
-          <button onClick={handleSave} disabled={saving || !name.trim()}
+          <button onClick={handleSave} disabled={saving || !name.trim() || !!clash}
             className="p-1 rounded text-brand-600 hover:text-brand-700 hover:bg-brand-50 disabled:opacity-40"><Check size={13}/></button>
         </div>
       </div>
@@ -177,23 +325,30 @@ function EditableItem({ item, onSave, onDelete, type, onGradingConfig, onAdviser
           className="p-1.5 rounded-lg text-slate-400 hover:text-amber-500 hover:bg-amber-50 transition-colors">
           <Pencil size={12}/>
         </button>
-        <button onClick={handleDelete} disabled={deleting}
-          className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
+        <button onClick={() => setConfirmDelete(true)}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+          title={`Delete ${type}`}>
           <Trash2 size={12}/>
         </button>
       </div>
+      {confirmDelete && (
+        <DeleteItemModal item={item} type={type} gradeLevel={gradeLevel} syLabel={syLabel}
+          onDelete={onDelete} onClose={() => setConfirmDelete(false)}/>
+      )}
     </div>
   )
 }
 
 // ── Add Item inline form ──────────────────────────────────────
-function AddItemForm({ gradeLevel, type, syId, onAdd, onClose }) {
+function AddItemForm({ gradeLevel, type, syId, siblings, onAdd, onClose }) {
   const [name, setName]   = useState('')
   const [saving, setSaving] = useState(false)
 
+  const clash = nameClash(type, name, siblings || [])
+
   const handleSubmit = async e => {
     e.preventDefault()
-    if (!name.trim()) return
+    if (!name.trim() || clash) return
     setSaving(true)
     try {
       await onAdd({ name:name.trim(), grade_level:gradeLevel, sy_id:syId })
@@ -206,16 +361,19 @@ function AddItemForm({ gradeLevel, type, syId, onAdd, onClose }) {
 
   return (
     <form onSubmit={handleSubmit}
-      className="flex flex-col gap-1.5 p-2 bg-white rounded-lg border-2 border-brand-300 shadow-sm mt-1">
+      className={clsx('flex flex-col gap-1.5 p-2 bg-white rounded-lg border-2 shadow-sm mt-1',
+        clash ? 'border-red-300' : 'border-brand-300')}>
       <input autoFocus
         className="text-sm font-medium text-slate-800 outline-none border-b border-slate-200 pb-1 bg-transparent"
         value={name} onChange={e => setName(e.target.value)}
         onKeyDown={e => e.key === 'Escape' && onClose()}
-        placeholder={type === 'subject' ? 'Subject name...' : 'Section name...'} required/>
+        placeholder={type === 'subject' ? 'Subject name...' : 'Section name...'} required
+        aria-invalid={!!clash}/>
+      {clash && <p className="text-xs text-red-600">{clash}</p>}
       <div className="flex gap-1 justify-end mt-0.5">
         <button type="button" onClick={onClose}
           className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100"><X size={13}/></button>
-        <button type="submit" disabled={saving || !name.trim()}
+        <button type="submit" disabled={saving || !name.trim() || !!clash}
           className="p-1 rounded text-brand-600 hover:text-brand-700 hover:bg-brand-50 disabled:opacity-40"><Check size={13}/></button>
       </div>
     </form>
@@ -223,7 +381,7 @@ function AddItemForm({ gradeLevel, type, syId, onAdd, onClose }) {
 }
 
 // ── Grade Level Card ──────────────────────────────────────────
-function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradingConfig, onAdviser }) {
+function GradeCard({ grade, items, type, syId, syLabel, onAdd, onSave, onDelete, onGradingConfig, onAdviser }) {
   const [open, setOpen]     = useState(true)
   const [adding, setAdding] = useState(false)
   const colors = GRADE_COLORS[grade] || GRADE_COLORS['Grade 1']
@@ -256,11 +414,12 @@ function GradeCard({ grade, items, type, syId, onAdd, onSave, onDelete, onGradin
             </p>
           )}
           {items.map(item => (
-            <EditableItem key={item.id} item={item} type={type} onSave={onSave} onDelete={onDelete}
+            <EditableItem key={item.id} item={item} siblings={items} gradeLevel={grade} syLabel={syLabel} type={type} onSave={onSave} onDelete={onDelete}
               onGradingConfig={onGradingConfig} onAdviser={onAdviser}/>
           ))}
           {adding && (
-            <AddItemForm gradeLevel={grade} type={type} syId={syId} onAdd={onAdd} onClose={() => setAdding(false)}/>
+            <AddItemForm gradeLevel={grade} type={type} syId={syId} siblings={items}
+              onAdd={onAdd} onClose={() => setAdding(false)}/>
           )}
         </div>
       )}
@@ -1239,7 +1398,7 @@ export default function CurriculumManagement() {
                   tallest card in that row, and each row is measured on its own. */}
               {visibleGrades.map(grade => (
                 <GradeCard key={grade} grade={grade}
-                  items={subjects[grade] || []} type="subject" syId={selectedSY.id}
+                  items={subjects[grade] || []} type="subject" syId={selectedSY.id} syLabel={selectedSY.label}
                   onAdd={handleAddSubject} onSave={handleUpdateSubject} onDelete={handleDeleteSubject}
                   onGradingConfig={descriptiveGrades.has(grade) ? undefined : setGradingSubject}/>
               ))}
@@ -1272,7 +1431,7 @@ export default function CurriculumManagement() {
                   tallest card in that row, and each row is measured on its own. */}
               {visibleGrades.map(grade => (
                 <GradeCard key={grade} grade={grade}
-                  items={sections[grade] || []} type="section" syId={selectedSY.id}
+                  items={sections[grade] || []} type="section" syId={selectedSY.id} syLabel={selectedSY.label}
                   onAdd={handleAddSection} onSave={handleUpdateSection} onDelete={handleDeleteSection}
                   onAdviser={sec => setAdviserFor({ section: sec, gradeLevel: grade })}/>
               ))}

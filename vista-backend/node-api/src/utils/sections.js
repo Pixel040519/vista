@@ -18,10 +18,13 @@
  */
 
 const { query } = require('../config/database');
+const poolQuery = query;
 const { AppError } = require('../middleware/error.middleware');
+const { nameKey: norm } = require('./names');
 
-/** Case- and spacing-insensitive key for matching a name the user typed. */
-const norm = (s) => String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+// `norm` is the same key `sections_sy_grade_name_ci_unique` enforces, which is
+// what makes the lookup below unambiguous: a grade level can never hold both
+// "Mabini" and "mabini", so a typed name resolves to at most one section.
 
 /**
  * `"<grade_level>|<name>"` (both normalised) -> the **stored** spelling of the
@@ -84,9 +87,13 @@ const assertSectionsExist = async (schoolYearId, rows, describe) => {
  * `students` is counted **only for the active year** — that table is the active
  * year's snapshot, so its rows say nothing about an archived or upcoming one.
  *
+ * Takes a transaction client when given one, so a delete can re-count inside
+ * its transaction after locking the section row.
+ *
  * @param {{id, school_year_id, label, is_active, grade_level, name}} sec
  */
-const sectionUsage = async (sec) => {
+const sectionUsage = async (sec, client = null) => {
+  const query = client ? client.query.bind(client) : poolQuery;
   const [enrolments, learners, assignments, classes, items] = await Promise.all([
     query(
       `SELECT COUNT(*)::int AS n FROM student_enrollments

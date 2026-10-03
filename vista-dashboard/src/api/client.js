@@ -298,12 +298,14 @@ export const curriculumApi = {
   createSubject:      (data)      => api.post('/curriculum/subjects', data),
   updateSubject:      (id, d)     => api.put(`/curriculum/subjects/${id}`, d),
   deleteSubject:      (id)        => api.delete(`/curriculum/subjects/${id}`),
+  getSubjectUsage:    (id)        => api.get(`/curriculum/subjects/${id}/usage`),
   // Sections (sy_id filters by school year)
   getSections:        (params)    => api.get('/curriculum/sections', { params }),
   getSectionsGrouped: (sy_id)     => api.get('/curriculum/sections/grouped', { params: { sy_id } }),
   createSection:      (data)      => api.post('/curriculum/sections', data),
   updateSection:      (id, d)     => api.put(`/curriculum/sections/${id}`, d),
   deleteSection:      (id)        => api.delete(`/curriculum/sections/${id}`),
+  getSectionUsage:    (id)        => api.get(`/curriculum/sections/${id}/usage`),
   // Class adviser — the teacher responsible for a section as a whole, as
   // opposed to the per-subject rows in teacher_assignments. `teacher_id: null`
   // clears it.

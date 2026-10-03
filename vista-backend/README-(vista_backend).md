@@ -47,6 +47,14 @@ psql vista_db -f database/migrations/<file>.sql
 adds `users.last_login_at`) must be applied before running the staff-invitation code;
 until it is, every sign-in fails with `column "last_login_at" of relation "users" does not exist`.
 
+Two migrations belong to the curriculum changes. Apply them in this order:
+- `2026_10_05_curriculum_names_case_insensitive.sql` makes subject and section names unique
+  per grade level and school year **ignoring case and spacing**, so "mapeH" cannot be added
+  beside "MAPEH". It stops and lists the names if duplicates already exist. Delete or rename
+  one of each, then re-run it.
+- `2026_10_06_purge_soft_deleted_curriculum.sql` removes subjects and sections that were
+  soft-deleted before deletes became real deletes. It keeps any that still carry recorded work.
+
 ### 3. Start Node.js API
 ```bash
 cd node-api
@@ -157,6 +165,28 @@ before changing any of them.
 | POST | /api/behavior | Log observation (auto-sentiment) | Teacher |
 | PUT | /api/behavior/:id | Edit own observation | Teacher |
 | DELETE | /api/behavior/:id | Delete own observation | Teacher |
+
+### Curriculum Endpoints (subjects and sections)
+
+Names are unique per grade level and school year **ignoring case and spacing**. A clash is
+a 409 that names the existing subject or section. A delete **removes the row**. It is refused
+(409, with counts) while anything recorded depends on the row. For a subject that means
+grades, attendance, competency ratings or score items. For a section it means learners,
+enrolment records, teacher assignments or score items. A subject's grading structure and
+competency skills are deleted with it. A MAPEH's four areas go with it too.
+
+| Method | Endpoint | Description | Role |
+|--------|----------|-------------|------|
+| GET | /api/curriculum/subjects/grouped?sy_id= | Subjects per grade level, MAPEH with its areas | All |
+| POST | /api/curriculum/subjects | Add a subject (a MAPEH gets its four areas automatically) | Admin |
+| PUT | /api/curriculum/subjects/:id | Rename (or move grade level) | Admin |
+| GET | /api/curriculum/subjects/:id/usage | What a delete would be refused for, or take with it | Admin |
+| DELETE | /api/curriculum/subjects/:id | Delete a subject with its setup | Admin |
+| GET | /api/curriculum/sections/grouped?sy_id= | Sections per grade level, with advisers | All |
+| POST | /api/curriculum/sections | Add a section | Admin |
+| PUT | /api/curriculum/sections/:id | Rename (carried to every table holding the name) | Admin |
+| GET | /api/curriculum/sections/:id/usage | What a delete would be refused for | Admin |
+| DELETE | /api/curriculum/sections/:id | Delete a section | Admin |
 
 ### Public content Endpoints
 

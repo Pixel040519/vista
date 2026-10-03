@@ -395,6 +395,25 @@ the height of the tallest card in that row, each row measured on its own. `Grade
 is therefore `bg-white flex flex-col` with a `flex-1` body, so a collapsed card fills
 its stretched cell as an empty white card instead of leaving a hole inside its border.
 
+**A subject or section name that is already taken in the grade card is flagged as it is
+typed.** `nameClash(type, …)` compares the add or rename against the card's own items (and,
+for subjects, their areas), ignoring case and spacing (the API's rule). For subjects it also
+catches a second MAPEH. The form turns red, names the item in the way, and disables Save. The
+API is still the real check.
+
+**Deleting a subject or section opens `DeleteItemModal`**, not a browser `confirm()`. It names
+the item with its grade level and school year, and lists what goes with it: a MAPEH's areas, or
+a section's adviser. It also says what would block the delete. The panel first reads
+`curriculumApi.getSubjectUsage()` or `getSectionUsage()`, which gives the same verdict as the
+DELETE. Recorded work on a subject (grades, attendance, competency ratings, score items), or
+anything still in a section (learners, enrolment records, teacher assignments, score items),
+shows the refusal up front with Delete disabled, and the "what goes with it" lines are hidden. Setup that would go with the subject (its grading structure, competency
+skills) appears in an amber "Also removed with it" note. Delete stays disabled while that read
+runs. If the read fails, the panel still offers Delete and the API remains the guard. If the
+API refuses, the reason appears inside the panel and Delete is disabled, because a toast
+closes before a long refusal can be read. On success the handler's toast carries the
+server's message. The row no longer adds a second toast.
+
 **A section row also carries its class adviser.** `EditableItem` renders it as a
 **second line** under the name rather than a chip beside it — it is a person's name, so
 it needs the width, and a muted italic "No adviser" has to be as visible as a filled one

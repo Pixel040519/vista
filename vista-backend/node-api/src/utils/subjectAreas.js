@@ -49,6 +49,7 @@
 
 const { query } = require('../config/database')
 const { AppError } = require('../middleware/error.middleware')
+const { NAME_KEY, nameKey } = require('./names')
 
 /**
  * MAPEH's four areas, in DepEd's own order, and the test for which subject is a
@@ -146,22 +147,28 @@ const ensureMapehAreas = async (client, subject) => {
   if (Number(own.rows[0].n) > 0) return []
 
   // Decide every name before writing any of them, so the set is all-or-nothing.
+  // Matched the way subject names are compared everywhere — ignoring case and
+  // spacing — so an active "music" counts as taken rather than getting a
+  // "Music" area beside it.
   const existing = await run(client,
-    `SELECT s.id, s.name, s.is_active,
+    `SELECT s.id, s.name, s.is_active, ${NAME_KEY('s.name')} AS key,
             (SELECT COUNT(*) FROM grades g WHERE g.subject_id = s.id)
           + (SELECT COUNT(*) FROM score_items si WHERE si.subject_id = s.id)
               AS work
        FROM subjects s
-      WHERE s.school_year_id = $1 AND s.grade_level = $2 AND s.name = ANY($3::text[])`,
-    [subject.school_year_id, subject.grade_level, MAPEH_AREAS])
-  const byName = new Map(existing.rows.map(r => [r.name, r]))
+      WHERE s.school_year_id = $1 AND s.grade_level = $2
+        AND ${NAME_KEY('s.name')} = ANY($3::text[])`,
+    [subject.school_year_id, subject.grade_level, MAPEH_AREAS.map(nameKey)])
 
   const plan = []
   for (const name of MAPEH_AREAS) {
-    const row = byName.get(name)
-    if (!row) { plan.push({ name, revive: null }); continue }
-    if (row.is_active || Number(row.work) > 0) return []   // genuinely taken
-    plan.push({ name, revive: row.id })
+    const rows = existing.rows.filter(r => r.key === nameKey(name))
+    if (rows.some(r => r.is_active || Number(r.work) > 0)) return []   // genuinely taken
+    // Only a row holding this exact name blocks an INSERT
+    // (`subjects_sy_grade_name_unique` is byte-for-byte), so that is the one to
+    // revive; a dormant row differing only by case can stay where it is.
+    const exact = rows.find(r => r.name === name)
+    plan.push({ name, revive: exact ? exact.id : null })
   }
 
   const created = []
@@ -262,7 +269,8 @@ const rollUpAfterGradeWrite = async (client, {
 // changed" helper. The set cannot change while grades exist:
 // `ensureMapehAreas()` refuses a MAPEH that holds its own marks, an area cannot
 // be deleted on its own, and deleting the learning area is refused while any of
-// the family carries a grade. So the only roll-up that ever has to run is the
+// the family carries a grade or other recorded work (`subjectUsage` in
+// curriculum.routes.js). So the only roll-up that ever has to run is the
 // one after a grade write.
 
 module.exports = {

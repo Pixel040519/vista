@@ -8,7 +8,8 @@ const { loadSection, sectionUsage, describeUsage, renameSectionEverywhere } = re
 const { gradeScopeForRole, canManageGrade, isScopedAdmin, isSuperAdmin } = require('../utils/roles')
 const { RATING_SCALES, resolveAssessment } = require('../utils/grading')
 const { loadAssessmentRows } = require('../utils/assessmentConfig')
-const { areasOf, assertGradeable, ensureMapehAreas } = require('../utils/subjectAreas')
+const { areasOf, assertGradeable, ensureMapehAreas, isMapeh } = require('../utils/subjectAreas')
+const { NAME_KEY, normalizeName } = require('../utils/names')
 // The same predicate the Enrollment roster filters on — see `utils/rosterSql.js`.
 const { PREV_JOIN, BELONGS_TO_YEAR, withStudentAlias } = require('../utils/rosterSql')
 
@@ -1029,12 +1030,67 @@ const loadSubjectRow = async (id) => {
   return r.rows[0] || null
 }
 
+/**
+ * Refuse a subject name another subject in the same grade level and school year
+ * already answers to. Shared by create and rename so the two cannot disagree.
+ *
+ * Names are compared ignoring case and spacing (`NAME_KEY`): "mapeH"
+ * beside "MAPEH" is the same learning area to a teacher, a report card and every
+ * `teacher_assignments` row holding it by name, and a second row would split its
+ * grades and attendance in two. `subjects_sy_grade_name_ci_unique` backs this
+ * up, but only this can say *which* subject is in the way.
+ *
+ * Three more cases, each with its own sentence:
+ * - the name belongs to an **area** ("Music" while MAPEH is graded through one);
+ * - a **dormant** row holds the exact name, which the original byte-for-byte
+ *   constraint still enforces — a differently cased dormant row does not block;
+ * - a **second MAPEH** under another name ("MAPEH 4" beside "MAPEH"): the grade
+ *   level would have two learning areas competing for the same four areas.
+ */
+const assertSubjectNameFree = async ({ sy_id, grade_level, name, excludeId = null }) => {
+  const r = await query(
+    `SELECT s.id, s.name, s.is_active, s.parent_id, p.name AS parent_name,
+            ${NAME_KEY('s.name')} = ${NAME_KEY('$3::text')} AS same_name
+       FROM subjects s LEFT JOIN subjects p ON p.id = s.parent_id
+      WHERE s.school_year_id = $1 AND s.grade_level = $2
+        AND s.id IS DISTINCT FROM $4::uuid`,
+    [sy_id, grade_level, name, excludeId])
+  const rows = r.rows
+
+  const live = rows.find(s => s.is_active && s.same_name)
+  if (live) {
+    if (live.parent_id) {
+      throw new AppError(
+        `"${live.name}" is already one of ${live.parent_name}'s areas in ${grade_level}.`, 409)
+    }
+    throw new AppError(live.name === name
+      ? `"${name}" already exists in ${grade_level} for this school year.`
+      : `"${name}" is the same subject as "${live.name}", which already exists in ${grade_level} ` +
+        `for this school year. Subject names are not case-sensitive.`, 409)
+  }
+
+  if (rows.some(s => !s.is_active && s.name === name)) {
+    throw new AppError(
+      `"${name}" was removed from ${grade_level} earlier this school year and that record ` +
+      `still holds the name. Choose a different name.`, 409)
+  }
+
+  if (isMapeh(name)) {
+    const other = rows.find(s => s.is_active && !s.parent_id && isMapeh(s.name))
+    if (other) {
+      throw new AppError(
+        `${grade_level} already has "${other.name}". A grade level has one MAPEH, ` +
+        `graded through Music, Arts, Physical Education and Health.`, 409)
+    }
+  }
+}
+
 router.post('/subjects', authorizeAnyAdmin, async (req, res, next) => {
   try {
     // No `parent_id`. Areas are not composed by hand — MAPEH's four are created
     // for it by `ensureMapehAreas()`, which is the only writer of an area row.
     const { error, value } = Joi.object({
-      name:         Joi.string().min(1).max(100).required(),
+      name:         Joi.string().trim().min(1).max(100).required(),
       grade_level:  Joi.string().valid(...GRADE_LEVELS).required(),
       sy_id:        Joi.string().uuid().optional(),
     }).validate(req.body, { stripUnknown: true })
@@ -1043,20 +1099,8 @@ router.post('/subjects', authorizeAnyAdmin, async (req, res, next) => {
     enforceGradeScope(req, value.grade_level)
 
     const sy_id = await resolveSYId(value.sy_id)
-
-    // Subjects are soft-deleted but `subjects_sy_grade_name_unique` does not
-    // filter `is_active`, so a dormant row of the same name still owns it. Say
-    // so instead of letting the constraint surface as "Record already exists."
-    const dup = await query(
-      'SELECT id, is_active FROM subjects WHERE school_year_id=$1 AND grade_level=$2 AND name=$3',
-      [sy_id, value.grade_level, value.name]
-    )
-    if (dup.rows.length) {
-      throw new AppError(dup.rows[0].is_active
-        ? `"${value.name}" already exists in ${value.grade_level} for this school year.`
-        : `"${value.name}" was removed from ${value.grade_level} earlier this school year and still holds the name. Rename this one, or restore the original.`,
-        409)
-    }
+    value.name = normalizeName(value.name)
+    await assertSubjectNameFree({ sy_id, grade_level: value.grade_level, name: value.name })
 
     const created = await withTransaction(async (client) => {
       const result = await client.query(
@@ -1084,7 +1128,7 @@ router.post('/subjects', authorizeAnyAdmin, async (req, res, next) => {
 router.put('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
-      name:        Joi.string().min(1).max(100).optional(),
+      name:        Joi.string().trim().min(1).max(100).optional(),
       grade_level: Joi.string().valid(...GRADE_LEVELS).optional(),
     }).validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
@@ -1102,15 +1146,17 @@ router.put('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
     if (value.grade_level && cur.parent_id && value.grade_level !== cur.grade_level) {
       throw new AppError('An area follows its learning area — move the learning area instead.', 422)
     }
-    // Without this a rename onto an existing name raises a raw 23505.
-    if (value.name && value.name !== cur.name) {
-      const dup = await query(
-        `SELECT id FROM subjects
-          WHERE school_year_id=$1 AND grade_level=$2 AND name=$3 AND is_active=TRUE AND id<>$4`,
-        [cur.school_year_id, value.grade_level || cur.grade_level, value.name, cur.id])
-      if (dup.rows.length) {
-        throw new AppError(`"${value.name}" already exists in ${value.grade_level || cur.grade_level} for this school year.`, 409)
-      }
+    // A rename, or a move to another grade level, has to land on a free name.
+    // Excluding this row lets a case-only correction ("MAPEh" -> "MAPEH") through.
+    if (value.name) value.name = normalizeName(value.name)
+    if ((value.name && value.name !== cur.name) ||
+        (value.grade_level && value.grade_level !== cur.grade_level)) {
+      await assertSubjectNameFree({
+        sy_id: cur.school_year_id,
+        grade_level: value.grade_level || cur.grade_level,
+        name: value.name || cur.name,
+        excludeId: cur.id,
+      })
     }
 
     const sets=[]; const params=[]
@@ -1133,15 +1179,116 @@ router.put('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// ── What deleting a subject would take with it ───────────────
+//
+// Split by what it is. **Recorded work** — grades, attendance, competency
+// ratings, score items — blocks the delete: it was entered against this subject
+// by a teacher and must never go with it. Grades alone used to be the test,
+// which let a Kinder subject full of ratings go (Kinder never writes `grades`),
+// and any subject with attendance but no grades yet. **Setup** — the grading
+// structure and competency skills — does not block, because it is
+// configuration rather than anything a learner did; the delete removes it for
+// good, so the confirmation names it first.
+//
+// Counted over the whole family: deleting MAPEH takes its four areas, so work
+// recorded under Music blocks it exactly as work under MAPEH itself would.
+//
+// Takes a transaction client when given one — the DELETE re-counts inside its
+// transaction, after locking the rows.
+const subjectUsage = async (ids, client = null) => {
+  const r = await (client ? client.query.bind(client) : query)(
+    `SELECT
+       (SELECT COUNT(*) FROM grades     WHERE subject_id = ANY($1::uuid[]))::int AS grades,
+       (SELECT COUNT(*) FROM attendance WHERE subject_id = ANY($1::uuid[]))::int AS attendance,
+       (SELECT COUNT(*) FROM ece_competency_records rec
+          JOIN competency_skills k ON k.id = rec.skill_id
+         WHERE k.subject_id = ANY($1::uuid[]))::int AS ratings,
+       (SELECT COUNT(*) FROM score_items
+         WHERE subject_id = ANY($1::uuid[]) AND is_active = TRUE)::int AS score_items,
+       (SELECT COUNT(*) FROM grading_structure
+         WHERE subject_id = ANY($1::uuid[]) AND is_active = TRUE AND category_id IS NULL)::int AS categories,
+       (SELECT COUNT(DISTINCT subject_id) FROM grading_structure
+         WHERE subject_id = ANY($1::uuid[]) AND is_active = TRUE)::int AS structured,
+       (SELECT COUNT(*) FROM competency_skills
+         WHERE subject_id = ANY($1::uuid[]) AND is_active = TRUE)::int AS skills`,
+    [ids])
+  const u = r.rows[0]
+  return {
+    blocking: { grades: u.grades, attendance: u.attendance, ratings: u.ratings, score_items: u.score_items },
+    setup:    { categories: u.categories, structured: u.structured, skills: u.skills },
+  }
+}
+
+const countOf = (n, one, many) => `${n} ${n === 1 ? one : many}`
+
+// "2 learners, 4 teacher assignments and 30 score items are" — shared by the
+// subject and section refusals so the two read alike.
+const countsSentence = (parts) => {
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]
+  return `${list} ${parts.length === 1 && /^1 /.test(list) ? 'is' : 'are'}`
+}
+
+/** The refusal sentence, or null when nothing recorded stands in the way. */
+const subjectDeleteBlocker = (row, areaCount, { blocking: b }) => {
+  const parts = []
+  if (b.grades)      parts.push(countOf(b.grades, 'grade', 'grades'))
+  if (b.attendance)  parts.push(countOf(b.attendance, 'attendance record', 'attendance records'))
+  if (b.ratings)     parts.push(countOf(b.ratings, 'competency rating', 'competency ratings'))
+  if (b.score_items) parts.push(countOf(b.score_items, 'score item', 'score items'))
+  if (!parts.length) return null
+  return `Cannot delete "${row.name}": ${countsSentence(parts)} ` +
+    `recorded under it${areaCount ? ' and its areas' : ''}. A subject can only be deleted ` +
+    `before any work has been recorded against it.`
+}
+
+/**
+ * The section counterpart: everything that holds the section by name, from
+ * `sectionUsage()`. Learners are named in preference to enrolment records —
+ * on the active year they are the same people counted twice.
+ */
+const sectionDeleteBlocker = (sec, u) => {
+  const parts = []
+  if (u.learners)         parts.push(countOf(u.learners, 'learner', 'learners'))
+  else if (u.enrolments)  parts.push(countOf(u.enrolments, 'enrolment record', 'enrolment records'))
+  if (u.assignments)      parts.push(countOf(u.assignments, 'teacher assignment', 'teacher assignments'))
+  if (u.classes)          parts.push(countOf(u.classes, 'class assignment', 'class assignments'))
+  if (u.score_items)      parts.push(countOf(u.score_items, 'score item', 'score items'))
+  if (!parts.length) return null
+  return `Cannot delete "${sec.name}": ${countsSentence(parts)} still in it ` +
+    `(${sec.grade_level}, SY ${sec.label}). A section can only be deleted once it is empty.`
+}
+
+/** Load a subject for the delete paths, with the scope check both need. */
+const loadSubjectForDelete = async (req) => {
+  const sub = await query(
+    'SELECT id, name, grade_level, school_year_id, parent_id FROM subjects WHERE id=$1', [req.params.id])
+  if (!sub.rows.length) throw new AppError('Subject not found.', 404)
+  const row = sub.rows[0]
+  if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, row.grade_level)) {
+    throw new AppError('Subject is outside your grade scope.', 403)
+  }
+  const areas = row.parent_id ? [] : await areasOf(row.id)
+  return { row, areas, family: [row.id, ...areas.map(a => a.id)] }
+}
+
+// Read-only: what the delete confirmation shows before the admin commits, and
+// the same verdict `DELETE` reaches, so the panel cannot promise a delete the
+// API then refuses.
+router.get('/subjects/:id/usage', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const { row, areas, family } = await loadSubjectForDelete(req)
+    const usage = await subjectUsage(family)
+    res.json({
+      ...usage,
+      area_count: areas.length,
+      blocked_reason: subjectDeleteBlocker(row, areas.length, usage),
+    })
+  } catch (err) { next(err) }
+})
+
 router.delete('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
-    const sub = await query(
-      'SELECT id, name, grade_level, school_year_id, parent_id FROM subjects WHERE id=$1', [req.params.id])
-    if (!sub.rows.length) throw new AppError('Subject not found.', 404)
-    const row = sub.rows[0]
-    if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, row.grade_level)) {
-      throw new AppError('Subject is outside your grade scope.', 403)
-    }
+    const { row, areas, family } = await loadSubjectForDelete(req)
 
     // An area is structural, not something an admin assembled: MAPEH is graded
     // through exactly its four wherever it exists. Removing one on its own would
@@ -1159,21 +1306,31 @@ router.delete('/subjects/:id', authorizeAnyAdmin, async (req, res, next) => {
     }
 
     // A learning area goes with its areas: they exist only for it, which is what
-    // the FK's ON DELETE CASCADE already says. So the usage check has to cover
-    // the whole family — a grade recorded under Music blocks deleting MAPEH,
-    // exactly as a grade under MAPEH itself would.
-    const areas = await areasOf(row.id)
-    const family = [row.id, ...areas.map(a => a.id)]
-    const inUse = await query(
-      `SELECT s.name, COUNT(*)::int AS n FROM grades g
-         JOIN subjects s ON s.id = g.subject_id
-        WHERE g.subject_id = ANY($1::uuid[]) GROUP BY s.name ORDER BY s.name`, [family])
-    if (inUse.rows.length) {
-      const where = inUse.rows.map(r => `${r.n} under ${r.name}`).join(', ')
-      throw new AppError(`Cannot delete: this subject has existing grade records (${where}).`, 409)
-    }
-    await query(
-      'UPDATE subjects SET is_active=FALSE, updated_at=NOW() WHERE id = ANY($1::uuid[])', [family])
+    // the FK's ON DELETE CASCADE already says. So the usage check covers the
+    // whole family (see `subjectUsage`).
+    //
+    // The row is deleted outright, not soft-deleted. Recorded work refuses the
+    // delete, so nothing a learner did ever pointed at it, and a hidden row only
+    // kept holding the name — a subject removed by mistake could not simply be
+    // added back. The FKs then cascade the setup: grading structure, score items
+    // (with their scores), competency skills (with their ratings), and the areas
+    // themselves. `academic_predictions` is the one table without a cascade; it
+    // is derived data, so it goes first.
+    //
+    // Locked before the re-count so the check and the delete see the same thing:
+    // a grade, attendance mark or score item written concurrently has to take a
+    // key-share lock on the subject row, and a rating one on its skill row, so
+    // it either committed before the count (and blocks) or waits for this
+    // transaction and then fails on a subject that no longer exists.
+    await withTransaction(async (client) => {
+      await client.query('SELECT id FROM subjects WHERE id = ANY($1::uuid[]) FOR UPDATE', [family])
+      await client.query(
+        'SELECT id FROM competency_skills WHERE subject_id = ANY($1::uuid[]) FOR UPDATE', [family])
+      const blocker = subjectDeleteBlocker(row, areas.length, await subjectUsage(family, client))
+      if (blocker) throw new AppError(blocker, 409)
+      await client.query('DELETE FROM academic_predictions WHERE subject_id = ANY($1::uuid[])', [family])
+      await client.query('DELETE FROM subjects WHERE id = ANY($1::uuid[])', [family])
+    })
 
     res.json({
       message: areas.length
@@ -1256,10 +1413,47 @@ router.get('/sections/grouped', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+/**
+ * Refuse a section name another section in the same grade level and school
+ * year already answers to — ignoring case and spacing, the subjects' rule
+ * (`NAME_KEY`). For sections it matters more: five tables hold a section by its
+ * name string, and `assertSectionsExist()` resolves a typed name to the stored
+ * one case-insensitively, so "Mabini" beside "mabini" would leave the batch
+ * upload placing learners in whichever it found. `sections_sy_grade_name_ci_unique`
+ * backs this up; only this can say which section is in the way.
+ *
+ * A dormant section holding the exact name is refused too: the original
+ * byte-for-byte constraint covers deleted rows, and would otherwise surface as
+ * a bare "Record already exists."
+ */
+const assertSectionNameFree = async ({ sy_id, grade_level, name, excludeId = null, label = null }) => {
+  const r = await query(
+    `SELECT id, name, is_active,
+            ${NAME_KEY('name')} = ${NAME_KEY('$3::text')} AS same_name
+       FROM sections
+      WHERE school_year_id = $1 AND grade_level = $2
+        AND id IS DISTINCT FROM $4::uuid`,
+    [sy_id, grade_level, name, excludeId])
+  const year = label ? `SY ${label}` : 'this school year'
+
+  const live = r.rows.find(s => s.is_active && s.same_name)
+  if (live) {
+    throw new AppError(live.name === name
+      ? `Section "${name}" already exists in ${grade_level} for ${year}.`
+      : `Section "${name}" is the same as "${live.name}", which already exists in ${grade_level} ` +
+        `for ${year}. Section names are not case-sensitive.`, 409)
+  }
+  if (r.rows.some(s => !s.is_active && s.name === name)) {
+    throw new AppError(
+      `Section "${name}" was removed from ${grade_level} earlier in ${year} and that record ` +
+      `still holds the name. Choose a different name.`, 409)
+  }
+}
+
 router.post('/sections', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
-      name:        Joi.string().min(1).max(100).required(),
+      name:        Joi.string().trim().min(1).max(100).required(),
       grade_level: Joi.string().valid(...GRADE_LEVELS).required(),
       sy_id:       Joi.string().uuid().optional(),
     }).validate(req.body)
@@ -1268,11 +1462,8 @@ router.post('/sections', authorizeAnyAdmin, async (req, res, next) => {
     enforceGradeScope(req, value.grade_level)
 
     const sy_id = await resolveSYId(value.sy_id)
-    const dup = await query(
-      'SELECT id FROM sections WHERE school_year_id=$1 AND grade_level=$2 AND name=$3 AND is_active=TRUE',
-      [sy_id, value.grade_level, value.name]
-    )
-    if (dup.rows.length) throw new AppError(`Section "${value.name}" already exists in ${value.grade_level} for this school year.`, 409)
+    value.name = normalizeName(value.name)
+    await assertSectionNameFree({ sy_id, grade_level: value.grade_level, name: value.name })
 
     // `adviser` is returned NULL rather than omitted so a freshly-added section
     // has the same shape as one that came back from a read — the Sections tab
@@ -1296,7 +1487,7 @@ router.post('/sections', authorizeAnyAdmin, async (req, res, next) => {
 router.put('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
-      name:        Joi.string().min(1).max(100).optional(),
+      name:        Joi.string().trim().min(1).max(100).optional(),
       grade_level: Joi.string().valid(...GRADE_LEVELS).optional(),
     }).validate(req.body, { stripUnknown: true })
     if (error) throw new AppError(error.details[0].message, 422)
@@ -1307,22 +1498,18 @@ router.put('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
     const sec = await loadSection(req.params.id)
     if (!sec || !sec.section_is_active) throw new AppError('Section not found.', 404)
 
-    const newName  = value.name        !== undefined ? value.name        : sec.name
+    const newName  = value.name        !== undefined ? normalizeName(value.name) : sec.name
     const newGrade = value.grade_level !== undefined ? value.grade_level : sec.grade_level
     const renaming = newName  !== sec.name
     const moving   = newGrade !== sec.grade_level
     if (!renaming && !moving) throw new AppError('Nothing to update.', 400)
 
-    // The unique constraint is (school_year_id, grade_level, name); catching the
-    // collision here gives a readable message instead of a 500 from Postgres.
-    const dup = await query(
-      `SELECT id FROM sections
-        WHERE school_year_id=$1 AND grade_level=$2 AND name=$3 AND is_active=TRUE AND id<>$4`,
-      [sec.school_year_id, newGrade, newName, sec.id]
-    )
-    if (dup.rows.length) {
-      throw new AppError(`Section "${newName}" already exists in ${newGrade} for SY ${sec.label}.`, 409)
-    }
+    // Excluding this row lets a case-only correction ("mabini" -> "Mabini")
+    // through; the rename below still carries it across all five tables.
+    await assertSectionNameFree({
+      sy_id: sec.school_year_id, grade_level: newGrade, name: newName,
+      excludeId: sec.id, label: sec.label,
+    })
 
     const usage = await sectionUsage(sec)
 
@@ -1365,32 +1552,52 @@ router.put('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+/** Load a section for the delete paths, with the scope check both need. */
+const loadSectionForDelete = async (req) => {
+  const sec = await loadSection(req.params.id)
+  if (!sec || !sec.section_is_active) throw new AppError('Section not found.', 404)
+  if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, sec.grade_level)) {
+    throw new AppError('Section is outside your grade scope.', 403)
+  }
+  return sec
+}
+
+// Read-only, the section twin of `GET /subjects/:id/usage`: the delete
+// confirmation asks before the admin commits, and gets the verdict the DELETE
+// below would reach, so a refusal shows up front instead of after the click.
+router.get('/sections/:id/usage', authorizeAnyAdmin, async (req, res, next) => {
+  try {
+    const sec = await loadSectionForDelete(req)
+    const usage = await sectionUsage(sec)
+    res.json({ usage, blocked_reason: sectionDeleteBlocker(sec, usage) })
+  } catch (err) { next(err) }
+})
+
 router.delete('/sections/:id', authorizeAnyAdmin, async (req, res, next) => {
   try {
-    const sec = await loadSection(req.params.id)
-    if (!sec || !sec.section_is_active) throw new AppError('Section not found.', 404)
-    if (isScopedAdmin(req.user.role) && !canManageGrade(req.user.role, sec.grade_level)) {
-      throw new AppError('Section is outside your grade scope.', 403)
-    }
+    const sec = await loadSectionForDelete(req)
 
-    // Scoped by grade level AND school year. The old guard matched on the name
-    // alone, so a Grade 6 "Mabuhay" could not be deleted while a Kinder learner
-    // sat in a differently-scoped section that happened to share the name.
-    const usage = await sectionUsage(sec)
-    if (usage.total > 0) {
-      throw new AppError(
-        `Cannot delete "${sec.name}" (${sec.grade_level}, SY ${sec.label}): it still holds ${describeUsage(usage)}.`,
-        409
-      )
-    }
-
-    // The adviser is deliberately not part of `sectionUsage`. That guard counts
-    // what a delete would *orphan* — learners, enrolment records, teacher
-    // assignments, score items, all of which hold the section by name and would
-    // outlive it. The adviser is a pointer on the row being deleted and goes
-    // with it, which is also why the uniqueness index carries `is_active=TRUE`:
-    // a soft-deleted section must stop holding its teacher.
-    await query('UPDATE sections SET is_active=FALSE, updated_at=NOW() WHERE id=$1', [req.params.id])
+    // Scoped by grade level AND school year (see `sectionUsage`). The adviser is
+    // deliberately not part of it. That guard counts what a delete would
+    // *orphan* — learners, enrolment records, teacher assignments, score items,
+    // all of which hold the section by name and would outlive it. The adviser
+    // is a pointer on the row being deleted and goes with it.
+    //
+    // Deleted outright rather than soft-deleted: nothing references a section by
+    // id, and the guard establishes that nothing holds it by name either, so a
+    // hidden row would only keep owning the name and stop the section being
+    // added back. The row is locked before the re-count, the same shape as the
+    // subject delete, so a concurrent rename of this section cannot slip
+    // between the check and the delete.
+    await withTransaction(async (client) => {
+      const locked = await client.query(
+        'SELECT name, grade_level FROM sections WHERE id=$1 AND is_active=TRUE FOR UPDATE', [sec.id])
+      if (!locked.rows.length) throw new AppError('Section not found.', 404)
+      const cur = { ...sec, ...locked.rows[0] }   // counted under its name as of the lock
+      const blocker = sectionDeleteBlocker(cur, await sectionUsage(cur, client))
+      if (blocker) throw new AppError(blocker, 409)
+      await client.query('DELETE FROM sections WHERE id=$1', [sec.id])
+    })
     res.json({ message: `Section "${sec.name}" removed from ${sec.grade_level}.` })
   } catch (err) { next(err) }
 })

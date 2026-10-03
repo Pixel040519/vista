@@ -106,7 +106,7 @@ Key tables:
 - `parent_student` — many-to-many guardian↔student link. Each row holds the guardian's own contact details — and for a guardian **with an account** those are copies of one person's details, one per learner. So name, mobile number, email and home address are written to **every** row sharing the `parent_id` (and name and phone to `users` too) by `PUT /students/:id/guardians/:gid`, and a parent's own `PUT /api/profile/me` reaches the rows as well; only `relationship` and `is_emergency_contact` are per learner. Before that split an edit changed one copy, so a sibling's record kept the old name and number. `parent_id` (FK `users.id`, nullable) is their **parent portal account**, the login the `vista_parent` app uses, and is NULL for a contact-only guardian. **An email is one login, and a parent account's email can never be saved on a separate guardian:** adding a guardian, editing a contact-only one, ticking Add Invitation or pressing the invitation button with such an email is refused (409, naming no one). The only ways on are to clear the email or to link that account explicitly — "Already has a parent account" or "Link that account instead" — where the account supplies the name, email and phone. It once linked automatically when the typed name matched, which kept a differently typed phone on this learner's entry while the account and its other learners kept the old one. One belonging to a teacher or admin is refused for an invitation. **The same rule reaches an address that has no account yet** — one that lives only on `parent_student`, and was checked nowhere: `assertGuardianEmailFree()` refuses a second guardian of the **same learner** holding an email another guardian already has (which the batch upload always refused inside a sheet), and an address used on **any** learner under a **different name**. The same address under the same name on another learner is one parent entered on each of their children and stays allowed — that is the ordinary case, and `linkContactEntriesForAccount()` gathers exactly those entries onto the account the moment one exists, copying its name, email and phone onto them so every entry for that person agrees; the response counts the learners it reached, because a phone that differed is replaced. Without those two rules, inviting one of a pair of look-alike entries built the account from that entry alone and stranded the other: its learner never appeared in the parent's app, inviting it was refused, and it could only be edited for as long as nobody touched its email. `UNIQUE(parent_id, student_id)` means one account appears under a learner once. Every writer goes through `grantParentAccess()` in `utils/parentInvitations.js` — the invitation-era replacement for `ensureParentAccount()`, which took a password an admin had typed. See "Parent portal accounts are invitations" below.
 - `teacher_assignments` / `class_assignments` — teacher↔class/subject mappings, scoped to a school year; unique per `(grade_level, section, subject, school_year)`.
 - `attendance` — per-student, per-subject, per-day record (Present/Absent/Late/Excused); unique on `(student_id, date, subject_id)` so each teacher records independently per subject. `school_year_id` (nullable, FK `school_years.id`) records **which year the attendance belongs to**, derived from the subject on write — `subjects` is scoped per school year, so the subject is authoritative. It is deliberately **not** derived from the date: consecutive school years leave months uncovered between one year's `end_date` and the next one's `start_date`, and every record falling in such a gap used to belong to no year at all and was invisible to every year-scoped query. NULL means genuinely unattributable (a legacy row with no subject) and counts for no year.
-- `subjects` — curriculum subjects scoped to grade level + school year. `parent_id` (UUID, FK `subjects.id`, `ON DELETE CASCADE`) makes a row an **area** of another subject rather than a learning area of its own — MAPEH is graded through Music, Arts, Physical Education and Health. NULL on every ordinary subject. See "Composite learning areas" below.
+- `subjects` — curriculum subjects scoped to grade level + school year. A name is unique within its grade level and year **ignoring case and spacing** (`subjects_sy_grade_name_ci_unique`, active rows), so "mapeH" cannot be added beside "MAPEH". `parent_id` (UUID, FK `subjects.id`, `ON DELETE CASCADE`) makes a row an **area** of another subject rather than a learning area of its own — MAPEH is graded through Music, Arts, Physical Education and Health. NULL on every ordinary subject. See "Composite learning areas" below.
 - `grades` — per-subject, per **grading period** (`score` = initial weighted avg; `grade` = final grade; `remarks` = "Passed"/"Failed" under the DO 8 policy, or a DO 015 descriptor under the newer ones). The column is still named `quarter` but means "period index" — see the grading-policy note below.
 - `grading_structure` — configurable categories + components per subject (self-ref `category_id`; NULL = category, non-NULL = component).
 - `score_items` — individual assessments under a component, scoped to **subject + section + quarter**.
@@ -124,7 +124,7 @@ Key tables:
 - `risk_assessments` — AI risk tier (Stable/Moderate/High). Factor columns `attendance_factor`/`academic_factor`/`behavioral_factor`/`ece_competency_factor` are `DECIMAL(5,4)`. Three are 0–1 (normalize before insert, e.g. avg_grade 92 → 0.92); **`behavioral_factor` is the signed raw VADER compound (−1 to +1)** — column is wide enough to hold negatives and FastAPI persists it verbatim from `behavioral_score`. `ece_competency_factor` is populated for **descriptively-assessed** learners from their latest-quarter rating average, weighted per the record's own `rating_scale` (E/G/F/NA still gives E=1.0 / G=0.75 / F=0.5 / NA=0.25). FastAPI follows the data rather than a grade list — a numeric learner has no competency records, so the factor stays NULL.
 - `academic_predictions` — grade forecasts with confidence scores.
 - `school_years` — SY management via `is_active` (one) + `is_upcoming` (many). No `is_current` column. `period_model` (`'4Q'` | `'3T'`) and `grading_policy` (`'DO8_2015'` | `'DO15_2026'` | `'ZERO_BASED'`) declare **how that year is graded** — see "Grading periods & transmutation" below.
-- `sections` — class sections per grade level + school year. `adviser_id` (UUID, FK `users.id`, `ON DELETE SET NULL`) is the **class adviser** — the teacher responsible for the section as a whole, as distinct from the per-subject rows in `teacher_assignments`. See "Class advisers" below.
+- `sections` — class sections per grade level + school year. Like subjects, a name is unique within its grade level and year **ignoring case and spacing** (`sections_sy_grade_name_ci_unique`, active rows). `adviser_id` (UUID, FK `users.id`, `ON DELETE SET NULL`) is the **class adviser** — the teacher responsible for the section as a whole, as distinct from the per-subject rows in `teacher_assignments`. See "Class advisers" below.
 - `competency_domains` / `competency_skills` / `ece_competency_records` — competency tracker for **descriptively-assessed** grade levels. `rating_scale` (`'EGFNA'` | `'CODVBG'` | `'ABCDE'`) is stamped on every record and a pairwise CHECK ties it to the legal codes for that scale. Unique on `(student_id, skill_id, school_year_id, quarter)`.
 - `account_invitations` — one row per invitation, for **any** role: a parent's portal invitation and a teacher's or admin's staff invitation are the same row shape. It was `parent_invitations` until `2026_10_04_staff_invitations.sql` renamed it when staff accounts became invitations too. Columns: `user_id`, the authorized `email`, `invited_by`/`invited_at`, `expires_at` (30 days), `consumed_at`, `revoked_at`/`revoked_by`, plus the **live one-time code on the same row** (`code_hash`, `code_issued_at`, `code_expires_at`, `code_attempts`). Keeping the code here rather than in a table of its own is what makes "issuing a new code invalidates the previous unused one" automatic instead of a rule to enforce. `code_hash` is NULL at invite time, because no message is sent then. A partial unique index allows exactly **one live invitation per account** (`WHERE consumed_at IS NULL AND revoked_at IS NULL`), and `ON DELETE CASCADE` on `user_id` is load-bearing — removing a parent's last guardian row hard-deletes their `users` row. The shared mechanics live in `utils/invitations.js`; parent-only rules stay in `utils/parentInvitations.js`.
 - `password_reset_codes` — the same code discipline for an active account's self-service reset. Deliberately **not** folded into `account_invitations`: an invitation is a thing an admin creates, sees and revokes, while a reset code is ephemeral and belongs to the account holder.
@@ -270,8 +270,9 @@ the section by name, making it a sixth entry in that fan-out. Do not revive it f
 Three things that clause is doing:
 
 - `adviser_id IS NOT NULL` — unadvised sections are the common case and must not collide.
-- `is_active = TRUE` — sections are **soft**-deleted, so without it a deleted section
-  would go on holding its teacher and the admin could not reassign them.
+- `is_active = TRUE` — sections used to be **soft**-deleted, so without it a deleted
+  section would go on holding its teacher and the admin could not reassign them. A delete
+  now removes the row, but the clause stays harmless and covers any row left from before.
 - `adviser_id` leads so the same index serves the "which section do I advise" lookup
   in `/auth/login` and `/auth/me`.
 
@@ -410,7 +411,9 @@ Three things about the roll-up that are easy to get wrong:
   "re-roll everything" helper and the only roll-up that ever runs is the one after
   a grade write. `ensureMapehAreas()` skips a MAPEH holding its own marks, an
   area cannot be deleted on its own, and deleting the learning area is refused
-  while any member of the family carries a grade.
+  while any member of the family carries a grade (or attendance, competency
+  ratings or score items — see "Deleting a subject or section removes the row"
+  below).
 - **A learning area with areas is not gradeable.** `POST /api/grades`,
   `POST /api/scores`, `POST /api/scores/items` and
   `PUT /api/curriculum/subjects/:id/grading` all refuse it with a 409 naming the
@@ -472,12 +475,17 @@ is **already taken** in that grade level and school year by an active subject, o
 by a dormant one that still holds work. All-or-nothing — three of four would leave
 MAPEH quietly averaging the wrong number.
 
-Subjects are soft-deleted while `subjects_sy_grade_name_unique` does not filter
-`is_active`, so a deleted MAPEH's areas go on owning their names. A dormant row
-with no work behind it is therefore **revived and repointed** rather than
-duplicated — the same choice the Students page makes for an archived learner —
-which is what stops the next MAPEH in that grade level from failing on a raw
-unique violation.
+**Deleting a subject or section removes the row** (it used to set `is_active =
+FALSE` and leave it holding its name). A delete is refused while recorded work
+depends on the row — for a subject, grades, attendance, competency ratings or
+score items; for a section, anything that still names it — so nothing a learner
+did is ever lost. The setup that goes with a subject (grading structure,
+competency skills, a MAPEH's areas) is named in the dashboard's confirmation
+first. `2026_10_06_purge_soft_deleted_curriculum.sql` cleared the rows left from
+before, keeping any that still carry work. Those legacy dormant rows are why
+`ensureMapehAreas()` still **revives and repoints** a dormant area with no work
+behind it rather than duplicating it: `subjects_sy_grade_name_unique` does not
+filter `is_active`, so such a row still owns its name.
 
 ## Enrollment & school-year rollover
 
