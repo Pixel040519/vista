@@ -948,6 +948,23 @@ scoped admin gets 403 and a super admin without the flag gets 409. The flag trav
 body schema alone (`POST /sections` validates without `stripUnknown`). The school-year
 routes are not gated, because changing a year's status is how it is reopened.
 
+**Score items follow their grading component.** `deleteEmptyScoreItems()` in
+`curriculum.routes.js` runs wherever a component is removed: in `PUT /subjects/:id/grading`
+for every row missing from the payload (a component, or a category with its components),
+and in `DELETE /subjects/:id/grading`. Each runs in the same transaction as the soft-delete.
+It deletes only items with no `student_scores`. Removal is already refused while one has a
+score, so in practice that is every item under the component.
+
+Without it the items stayed active, pointing at an inactive component. Every reader builds
+from the active components (`getStructureTree`), so the items were dropped from Score Entry,
+the grade calculation, `/breakdown` and the export. But they still blocked `subjectUsage()`'s
+delete, inflated the FastAPI score-entry progress widget, counted in `sectionUsage()`, and
+made `ensureMapehAreas()` see work. Re-adding a component of the same name made a new row and
+did not recover them. Both responses report `removed_score_items` and say so in `message`.
+`GET /subjects/:id/grading/scores-check` returns `items_by_component` so the dashboard's
+delete confirmation can name the count first. `2026_10_07_remove_orphaned_score_items.sql`
+cleared the leftovers, keeping any item with scores.
+
 Sections mirror this. `GET /sections/:id/usage` and `DELETE /sections/:id` both build their
 verdict from `sectionUsage()` through `sectionDeleteBlocker()`, which uses the same sentence
 shape as the subject refusal (`countsSentence`). The DELETE locks the section row, re-reads

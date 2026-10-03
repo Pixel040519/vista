@@ -1841,6 +1841,33 @@ router.get('/subjects/:id/grading', async (req, res, next) => {
   } catch (err) { next(err) }
 })
 
+// ── Score items follow their component ────────────────────────
+//
+// A score item (Quiz 1, set up by a teacher in Score Entry) hangs off one
+// grading component. Every reader — Score Entry, the grade calculation, the
+// Grade Summary, the export — builds from the *active* components and fits
+// items into them, so an item whose component is removed vanishes from all of
+// them while staying in the table. Left there, it blocked deleting the subject
+// ("2 score items are recorded under it", with nothing anyone could see to
+// remove), inflated the teacher dashboard's progress, and never came back even
+// when a component of the same name was added again (that is a new row).
+//
+// So removing a component — in a grading save, with its category, or by
+// clearing the structure — deletes its score items in the same transaction.
+// Only empty ones: removal is already refused while any item under the
+// component has a score, so in practice that is all of them, and the
+// `NOT EXISTS` keeps the delete honest regardless. It is what Score Entry does
+// when a teacher removes an empty item (`POST /api/scores/items`).
+const deleteEmptyScoreItems = async (client, componentIds) => {
+  if (!componentIds.length) return 0
+  const r = await client.query(
+    `DELETE FROM score_items si
+      WHERE si.component_id = ANY($1::uuid[])
+        AND NOT EXISTS (SELECT 1 FROM student_scores ss WHERE ss.score_item_id = si.id)`,
+    [componentIds])
+  return r.rowCount
+}
+
 router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) => {
   try {
     // Validate subject exists
@@ -1889,6 +1916,7 @@ router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) =>
       }
     }
 
+    let removedItems = 0
     const categories = await withTransaction(async (client) => {
       // Collect IDs that should remain active
       const keepIds = []
@@ -1929,7 +1957,8 @@ router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) =>
         }
       }
 
-      // Soft-delete rows that are no longer in the payload
+      // Soft-delete rows that are no longer in the payload, and the empty score
+      // items set up under them (see `deleteEmptyScoreItems`).
       if (removedRes.rows.length > 0) {
         const removedIds = removedRes.rows.map(r => r.id)
         await client.query(
@@ -1937,6 +1966,7 @@ router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) =>
            WHERE id = ANY($1)`,
           [removedIds]
         )
+        removedItems = await deleteEmptyScoreItems(client, removedIds)
       }
 
       const result = []
@@ -1996,7 +2026,13 @@ router.put('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next) =>
       return result
     })
 
-    res.json({ message: 'Grading structure saved.', categories })
+    res.json({
+      message: removedItems
+        ? `Grading structure saved. ${removedItems} empty score item${removedItems === 1 ? '' : 's'} under the removed components ${removedItems === 1 ? 'was' : 'were'} deleted.`
+        : 'Grading structure saved.',
+      categories,
+      removed_score_items: removedItems,
+    })
   } catch (err) { next(err) }
 })
 
@@ -2018,29 +2054,56 @@ router.delete('/subjects/:id/grading', authorizeAnyAdmin, async (req, res, next)
       throw new AppError(`Cannot clear — ${names} has recorded student scores. Clear scores in Score Entry first.`, 422)
     }
 
-    const result = await query(
-      `UPDATE grading_structure SET is_active=FALSE, updated_at=NOW()
-       WHERE subject_id=$1 AND is_active=TRUE RETURNING id`,
-      [req.params.id]
-    )
-    if (!result.rows.length) throw new AppError('No grading structure found for this subject.', 404)
-    res.json({ message: 'Grading structure cleared.' })
+    // The structure and the empty score items under it go together, in one
+    // transaction, so a cleared structure never leaves items behind.
+    const removedItems = await withTransaction(async (client) => {
+      const result = await client.query(
+        `UPDATE grading_structure SET is_active=FALSE, updated_at=NOW()
+         WHERE subject_id=$1 AND is_active=TRUE RETURNING id`,
+        [req.params.id]
+      )
+      if (!result.rows.length) throw new AppError('No grading structure found for this subject.', 404)
+      return deleteEmptyScoreItems(client, result.rows.map(r => r.id))
+    })
+    res.json({
+      message: removedItems
+        ? `Grading structure cleared, with ${removedItems} empty score item${removedItems === 1 ? '' : 's'}.`
+        : 'Grading structure cleared.',
+      removed_score_items: removedItems,
+    })
   } catch (err) { next(err) }
 })
 
 // GET /api/curriculum/subjects/:id/grading/scores-check
-// Returns component IDs that have recorded student scores
+// Returns component IDs that have recorded student scores, and how many score
+// items each component has (any section or period). The second is what the
+// grading modal's delete confirmation reports: removing a component deletes
+// its score items, which a teacher set up in Score Entry, so the admin is told
+// before they go.
 router.get('/subjects/:id/grading/scores-check', authorizeAnyAdmin, async (req, res, next) => {
   try {
-    const result = await query(
-      `SELECT DISTINCT gs.id
-       FROM grading_structure gs
-       JOIN score_items si ON si.component_id = gs.id AND si.is_active = TRUE
-       JOIN student_scores ss ON ss.score_item_id = si.id
-       WHERE gs.subject_id=$1 AND gs.is_active=TRUE`,
-      [req.params.id]
-    )
-    res.json({ components_with_scores: result.rows.map(r => r.id) })
+    const [scored, items] = await Promise.all([
+      query(
+        `SELECT DISTINCT gs.id
+         FROM grading_structure gs
+         JOIN score_items si ON si.component_id = gs.id AND si.is_active = TRUE
+         JOIN student_scores ss ON ss.score_item_id = si.id
+         WHERE gs.subject_id=$1 AND gs.is_active=TRUE`,
+        [req.params.id]
+      ),
+      query(
+        `SELECT si.component_id, COUNT(*)::int AS n
+         FROM score_items si
+         JOIN grading_structure gs ON gs.id = si.component_id AND gs.is_active = TRUE
+         WHERE gs.subject_id=$1 AND si.is_active = TRUE
+         GROUP BY si.component_id`,
+        [req.params.id]
+      ),
+    ])
+    res.json({
+      components_with_scores: scored.rows.map(r => r.id),
+      items_by_component: Object.fromEntries(items.rows.map(r => [r.component_id, r.n])),
+    })
   } catch (err) { next(err) }
 })
 

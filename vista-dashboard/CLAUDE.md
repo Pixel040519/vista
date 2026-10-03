@@ -1770,6 +1770,31 @@ Scoped admins (`admin_ece`, `admin_elem`) see **all** teachers in the list (both
 ### Grading config modal (`GradingConfigModal.jsx`)
 Category weight fields turn red when total > 100%; component weight fields turn red when their total exceeds the parent category's weight. Negative percentage values are clamped to 0. Delete buttons gray out for categories/components with recorded student scores.
 
+**Deleting asks first, inside the modal.** The category trash, the component trash and
+**Clear All** all open `RemoveConfirm`, which replaces the modal body rather than stacking a
+second `Modal` (the adviser modal's Remove idiom). It used to be the browser's `confirm()`.
+The panel says what goes and when:
+- **A category** names its components and its weight.
+- **A component** names its weight and its category.
+- Both say that nothing is removed until **Save Structure**, and that Cancel discards the removal.
+- **Clear All** counts the categories and components, warns that Score Entry stops working for
+  the subject, and says the saved structure is removed now. It calls the API only when
+  something was saved; a structure that was never saved just empties the editor. A refusal
+  shows inside the panel.
+
+**The panel also names the score items that go with it.** Removing a component deletes the
+score items a teacher set up under it in Score Entry (see the node-api notes), so the panel
+counts them from `items_by_component` on the scores check and says so in an amber note. For
+example: "2 score items set up in Score Entry under it have no scores yet. They are deleted
+when you save, and a teacher would have to set them up again." For a category it sums its
+components, and for Clear All the whole structure. The note does not appear when there are
+none. The save and clear toasts show the server's message, which says how many items were
+deleted.
+
+A blank row just added, with no name and no components, still goes without asking, since there
+is nothing to lose. A row with recorded scores still refuses with a toast; its trash is already
+greyed out.
+
 Two props come from the Curriculum page's archived-year lock:
 - `readOnly` shows the structure with no way to change it. Fields are read-only, there is no reordering grip, and add, remove, Copy from, Clear All and Save are hidden. Cancel reads Close, and a note says the year is archived. The MAPEH area picker still works, so each area's weights can be viewed.
 - `writeParams` (`{ allow_archived: true }` once a super admin has unlocked the year) is passed to `saveGrading` and `clearGrading`.

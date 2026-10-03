@@ -19,10 +19,19 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved, re
   const [dragOverIdx, setDragOverIdx] = useState(null)
   const [gripHeld, setGripHeld]     = useState(false)
   const [compsWithScores, setCompsWithScores] = useState(new Set())
+  // Score items per component (any section or period). Removing a component
+  // deletes its items, so the delete confirmation names how many go.
+  const [itemsByComp, setItemsByComp] = useState({})
   const [showCopy, setShowCopy]     = useState(false)
   const [copySubjects, setCopySubjects] = useState([])
   const [loadingCopy, setLoadingCopy] = useState(false)
   const [copyFilter, setCopyFilter] = useState('')
+  // A removal waiting for confirmation: { kind: 'category', catIdx },
+  // { kind: 'component', catIdx, compIdx } or { kind: 'all' }. While set, the
+  // modal body is the confirmation instead of the editor — one surface, no
+  // second Modal stacked over this one (the adviser modal's Remove idiom).
+  const [confirmRemove, setConfirmRemove] = useState(null)
+  const [removeError, setRemoveError] = useState('')
 
   // MAPEH has no weights of its own — its grade is the average of its areas, and
   // each area carries a full Written Work / Performance Task / Assessment tree.
@@ -40,6 +49,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved, re
   useEffect(() => {
     setActiveArea(null)
     setShowCopy(false)
+    setConfirmRemove(null)
     setAreaConfigured(Object.fromEntries(
       (subject?.areas || []).map(a => [a.id, !!a.has_grading])))
   }, [open, subject?.id])
@@ -48,7 +58,7 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved, re
   useEffect(() => {
     if (!open || !target) return
     // The picker has nothing to load: a composite subject has no structure.
-    if (isComposite && !activeArea) { setCategories([]); setCompsWithScores(new Set()); return }
+    if (isComposite && !activeArea) { setCategories([]); setCompsWithScores(new Set()); setItemsByComp({}); return }
     setLoading(true)
     Promise.all([
       curriculumApi.getGrading(target.id),
@@ -68,10 +78,13 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved, re
           setCategories([])
         }
         setCompsWithScores(new Set(scoresRes.data.components_with_scores || []))
+        setItemsByComp(scoresRes.data.items_by_component || {})
       })
-      .catch(() => { setCategories([]); setCompsWithScores(new Set()) })
+      .catch(() => { setCategories([]); setCompsWithScores(new Set()); setItemsByComp({}) })
       .finally(() => setLoading(false))
   }, [open, target?.id])
+
+  useEffect(() => { setConfirmRemove(null); setRemoveError('') }, [target?.id])
 
   const compHasScores = (compId) => compsWithScores.has(compId)
   const categoryHasScores = (cat) => (cat.components || []).some(c => c.id && compHasScores(c.id))
@@ -98,8 +111,11 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved, re
     if (categoryHasScores(cat)) {
       return toast.error(`Cannot remove "${cat.name}" — it has components with recorded student scores. Clear scores in Score Entry first.`)
     }
-    if (cat.name.trim() && !window.confirm(`Remove category "${cat.name}"?`)) return
-    setCategories(prev => prev.filter((_, i) => i !== idx))
+    // A blank row just added has nothing to lose, so it goes without asking.
+    if (!cat.name.trim() && !cat.components.length) {
+      return setCategories(prev => prev.filter((_, i) => i !== idx))
+    }
+    setConfirmRemove({ kind: 'category', catIdx: idx })
   }
 
   const toggleCategory = (idx) => {
@@ -154,10 +170,48 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved, re
     if (comp.id && compHasScores(comp.id)) {
       return toast.error(`Cannot remove "${comp.name}" — it has recorded student scores. Clear scores in Score Entry first.`)
     }
-    if (comp.name.trim() && !window.confirm(`Remove component "${comp.name}"?`)) return
-    setCategories(prev => prev.map((c, i) =>
-      i === catIdx ? { ...c, components: c.components.filter((_, j) => j !== compIdx) } : c
-    ))
+    if (!comp.name.trim()) {
+      return setCategories(prev => prev.map((c, i) =>
+        i === catIdx ? { ...c, components: c.components.filter((_, j) => j !== compIdx) } : c
+      ))
+    }
+    setConfirmRemove({ kind: 'component', catIdx, compIdx })
+  }
+
+  // The confirmed removal. A category or component only leaves the editor —
+  // nothing is written until Save Structure, and Cancel still discards it.
+  // Clearing is different: it removes the saved structure at once.
+  const confirmRemoval = async () => {
+    const r = confirmRemove
+    if (!r) return
+    if (r.kind === 'category') {
+      setCategories(prev => prev.filter((_, i) => i !== r.catIdx))
+      return setConfirmRemove(null)
+    }
+    if (r.kind === 'component') {
+      setCategories(prev => prev.map((c, i) =>
+        i === r.catIdx ? { ...c, components: c.components.filter((_, j) => j !== r.compIdx) } : c
+      ))
+      return setConfirmRemove(null)
+    }
+    // Clear: a structure that was never saved only needs the editor emptied.
+    if (!categories.some(c => c.id)) {
+      setCategories([])
+      return setConfirmRemove(null)
+    }
+    setSaving(true)
+    setRemoveError('')
+    try {
+      const res = await curriculumApi.clearGrading(target.id, writeParams)
+      toast.success(res.data.message || 'Grading structure cleared.')
+      setItemsByComp({})
+      setCategories([])
+      if (isComposite) setAreaConfigured(prev => ({ ...prev, [target.id]: false }))
+      onSaved?.()
+      setConfirmRemove(null)
+    } catch (err) {
+      setRemoveError(err?.response?.data?.error || 'Failed to clear.')
+    } finally { setSaving(false) }
   }
 
   // ── Validation ───────────────────────────────────────────
@@ -196,8 +250,8 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved, re
           })),
         }))
       }
-      await curriculumApi.saveGrading(target.id, payload, writeParams)
-      toast.success('Grading structure saved.')
+      const res = await curriculumApi.saveGrading(target.id, payload, writeParams)
+      toast.success(res.data.message || 'Grading structure saved.')
       onSaved?.()
       // An area saved sends you back to the picker rather than closing, because
       // MAPEH needs all four before it can produce a grade at all — finishing
@@ -218,17 +272,8 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved, re
     if (compsWithScores.size > 0) {
       return toast.error('Cannot clear — some components have recorded student scores. Clear scores in Score Entry first.')
     }
-    if (!window.confirm('Remove all grading structure for this subject?')) return
-    setSaving(true)
-    try {
-      await curriculumApi.clearGrading(target.id, writeParams)
-      toast.success('Grading structure cleared.')
-      setCategories([])
-      if (isComposite) setAreaConfigured(prev => ({ ...prev, [target.id]: false }))
-      onSaved?.()
-    } catch (err) {
-      toast.error(err?.response?.data?.error || 'Failed to clear.')
-    } finally { setSaving(false) }
+    setRemoveError('')
+    setConfirmRemove({ kind: 'all' })
   }
 
   // ── Copy from another subject ─────────────────────────────
@@ -280,7 +325,19 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved, re
   return (
     <Modal open={open} onClose={onClose} size="lg"
       title={`Grading Structure \u2014 ${activeArea ? `${subject.name} \u203A ${activeArea.name}` : subject.name}`}>
-      {isComposite && !activeArea ? (
+      {confirmRemove ? (
+        <RemoveConfirm
+          removal={confirmRemove}
+          categories={categories}
+          itemsByComp={itemsByComp}
+          subjectName={target?.name}
+          saving={saving}
+          error={removeError}
+          onBack={() => { setConfirmRemove(null); setRemoveError('') }}
+          onConfirm={confirmRemoval}
+          fmtWeight={fmtWeight}
+        />
+      ) : isComposite && !activeArea ? (
         <div className="space-y-4">
           <p className="text-sm text-slate-500">
             {readOnly ? 'Pick an area to view its structure.' : 'Pick the area to configure.'}
@@ -554,5 +611,91 @@ export default function GradingConfigModal({ open, onClose, subject, onSaved, re
         </div>
       )}
     </Modal>
+  )
+}
+
+// ── Removal confirmation ──────────────────────────────────────
+//
+// Says exactly what goes, and when. Removing a category or component only
+// changes the editor: its weight has to be given to another before the
+// structure can be saved again, and Cancel still discards the removal. Clearing
+// removes the saved structure from the server immediately, and Score Entry
+// cannot be used for the subject until one is set up again.
+function RemoveConfirm({ removal, categories, itemsByComp = {}, subjectName, saving, error, onBack, onConfirm, fmtWeight }) {
+  const cat  = removal.catIdx != null ? categories[removal.catIdx] : null
+  const comp = cat && removal.compIdx != null ? cat.components[removal.compIdx] : null
+  const named = (n) => n?.trim() || 'Untitled'
+  const weightOf = (x) => parseFloat(x?.weight) || 0
+  const compCount = categories.reduce((n, c) => n + c.components.length, 0)
+  // Score items a teacher set up in Score Entry. Only saved components have any,
+  // and removal is refused while one has a score, so these are all still empty.
+  const itemsOf = (c) => (c?.id && itemsByComp[c.id]) || 0
+  const itemsIn = (cats) => cats.reduce((n, c) => n + c.components.reduce((m, cp) => m + itemsOf(cp), 0), 0)
+  const items = removal.kind === 'category' ? itemsIn([cat])
+    : removal.kind === 'component' ? itemsOf(comp)
+    : itemsIn(categories)
+
+  let title, lines, action
+  if (removal.kind === 'category') {
+    const comps = cat.components.filter(c => c.name.trim())
+    title = <>Remove category <span className="text-slate-900">"{named(cat.name)}"</span>?</>
+    lines = [
+      comps.length > 0 &&
+        <>Its {comps.length} component{comps.length === 1 ? '' : 's'} go{comps.length === 1 ? 'es' : ''} with it: <span className="text-slate-800">{comps.map(c => c.name).join(', ')}</span>.</>,
+      weightOf(cat) > 0 &&
+        <>Its {fmtWeight(weightOf(cat))}% has to be given to another category before the structure can be saved.</>,
+    ]
+    action = 'Remove category'
+  } else if (removal.kind === 'component') {
+    title = <>Remove component <span className="text-slate-900">"{named(comp.name)}"</span> from {named(cat.name)}?</>
+    lines = [
+      weightOf(comp) > 0 &&
+        <>Its {fmtWeight(weightOf(comp))}% has to be given to another component of {named(cat.name)} before the structure can be saved.</>,
+    ]
+    action = 'Remove component'
+  } else {
+    title = <>Clear the grading structure{subjectName ? <> for <span className="text-slate-900">{subjectName}</span></> : ''}?</>
+    lines = [
+      <>All {categories.length} categor{categories.length === 1 ? 'y' : 'ies'} and {compCount} component{compCount === 1 ? '' : 's'} are removed.</>,
+      <>Score Entry cannot be used for this subject until a structure is set up again.</>,
+    ]
+    action = 'Clear structure'
+  }
+
+  const deferred = removal.kind !== 'all'
+  const where = removal.kind === 'component' ? 'under it' : removal.kind === 'category' ? 'under its components' : 'under them'
+
+  return (
+    <div className="space-y-3 text-sm text-slate-600">
+      <p className="font-medium text-slate-700">{title}</p>
+      {lines.filter(Boolean).map((l, i) => <p key={i}>{l}</p>)}
+      {items > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {items} score item{items === 1 ? '' : 's'} set up in Score Entry {where} {items === 1 ? 'has' : 'have'} no
+          scores yet. {items === 1 ? 'It is' : 'They are'} deleted {deferred ? 'when you save' : 'too'}, and a
+          teacher would have to set {items === 1 ? 'it' : 'them'} up again.
+        </div>
+      )}
+      <p className="text-xs text-slate-500">
+        {deferred
+          ? 'Nothing is removed until you press Save Structure, and Cancel discards it.'
+          : 'This removes the saved structure now. It cannot be undone, but a structure can be set up again or copied from another subject.'}
+      </p>
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="flex gap-3 pt-2">
+        <button type="button" onClick={onBack} disabled={saving} className="btn-secondary flex-1">
+          Go back
+        </button>
+        <button type="button" onClick={onConfirm} disabled={saving || !!error}
+          className="btn-primary flex-1 justify-center !bg-red-600 hover:!bg-red-700 disabled:opacity-60">
+          <Trash2 size={14}/>
+          {saving ? 'Clearing...' : action}
+        </button>
+      </div>
+    </div>
   )
 }

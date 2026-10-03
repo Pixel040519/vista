@@ -54,6 +54,9 @@ Two migrations belong to the curriculum changes. Apply them in this order:
   one of each, then re-run it.
 - `2026_10_06_purge_soft_deleted_curriculum.sql` removes subjects and sections that were
   soft-deleted before deletes became real deletes. It keeps any that still carry recorded work.
+- `2026_10_07_remove_orphaned_score_items.sql` removes score items left behind under a
+  removed grading component. They were invisible in Score Entry but still blocked deleting
+  the subject. It keeps any item that somehow has scores.
 
 ### 3. Start Node.js API
 ```bash
