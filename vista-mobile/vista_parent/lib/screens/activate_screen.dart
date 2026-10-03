@@ -6,6 +6,7 @@ import 'package:vista_api/vista_api.dart';
 
 import '../providers.dart';
 import '../theme.dart';
+import '../widgets/password_checklist.dart';
 
 /// Activation and password reset are the same three beats — email, one-time
 /// code, new password — so they are one screen with two endings rather than two
@@ -112,8 +113,9 @@ class _ActivateScreenState extends ConsumerState<ActivateScreen> {
   }
 
   Future<void> _setPassword() async {
-    if (_password.text.length < 8) {
-      setState(() => _error = 'Choose a password of at least 8 characters.');
+    final weak = PasswordPolicy.error(_password.text);
+    if (weak != null) {
+      setState(() => _error = weak);
       return;
     }
     if (_password.text != _confirm.text) {
@@ -317,8 +319,9 @@ class _ActivateScreenState extends ConsumerState<ActivateScreen> {
         TextField(
           controller: _password,
           obscureText: _obscure,
+          onChanged: (_) => setState(() => _error = null),
           decoration: InputDecoration(
-            hintText: 'At least 8 characters',
+            hintText: 'Choose a strong password',
             prefixIcon: const Icon(Icons.lock_outline),
             suffixIcon: IconButton(
               icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
@@ -333,12 +336,15 @@ class _ActivateScreenState extends ConsumerState<ActivateScreen> {
         TextField(
           controller: _confirm,
           obscureText: _obscure,
+          onChanged: (_) => setState(() => _error = null),
           decoration: const InputDecoration(
             hintText: 'Type it again',
             prefixIcon: Icon(Icons.lock_outline),
           ),
           onSubmitted: (_) => _setPassword(),
         ),
+        const SizedBox(height: 14),
+        PasswordChecklist(password: _password.text, confirm: _confirm.text),
         const SizedBox(height: 18),
         FilledButton(
           onPressed: _loading ? null : _setPassword,

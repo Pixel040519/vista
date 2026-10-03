@@ -1497,7 +1497,7 @@ facility, which replaces the cached one. Until any facility exists the website k
 showing the photos it was built with.
 
 ### Profile (`pages/Profile.jsx`)
-Any authenticated role at `/profile`. Account summary card (avatar, full_name, role pill, email, phone, "Member since"). Editable **Personal Information** form (surname/first_name/middle_name/phone; email is disabled with helper text). **Change Password** form (current + new + confirm with individual show/hide toggles); 401 surfaces inline as "Current password is incorrect" rather than a toast. Teacher-only **My Teaching Assignments** read-only card rendered from `activeAssignments`. Calls `updateUser(patch)` from AuthContext after save so the sidebar updates immediately.
+Any authenticated role at `/profile`. Account summary card (avatar, full_name, role pill, email, phone, "Member since"). Editable **Personal Information** form (surname/first_name/middle_name/phone; email is disabled with helper text). **Change Password** form (current + new + confirm with individual show/hide toggles, and the shared `PasswordChecklist` beneath them, two columns); 401 surfaces inline as "Current password is incorrect" rather than a toast. Teacher-only **My Teaching Assignments** read-only card rendered from `activeAssignments`. Calls `updateUser(patch)` from AuthContext after save so the sidebar updates immediately.
 
 ### Sign-in: activation and password reset (`pages/AccountAccess.jsx`)
 
@@ -1509,6 +1509,10 @@ inline. The code step says "*if* this email has been invited" — the API answer
 email identically and this page genuinely does not know. `CodeInput` is six boxes on
 one value: typing advances, Backspace on an empty box steps back, paste or autofill
 fills them all.
+
+The password step renders `components/PasswordChecklist.jsx` — the strength rules from
+`utils/passwordPolicy.js` (mirror of the backend module) plus "Both passwords match" — and
+holds the submit until every line is ticked. Profile uses the same component.
 
 Activation ends **signed in** through `startSession()` (new on `AuthContext`, shared
 with `login`), except for a parent, who is told to use the VISTA Parent app — the

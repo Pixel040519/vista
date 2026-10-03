@@ -3,6 +3,8 @@ import { UserCog, Mail, Phone, ShieldCheck, Calendar, Eye, EyeOff, KeyRound, Gra
 import { useAuth } from '../context/AuthContext'
 import { profileApi } from '../api/client'
 import { PhoneInput } from '../components/UI'
+import PasswordChecklist from '../components/PasswordChecklist'
+import { passwordError } from '../utils/passwordPolicy'
 import { formatName, nameInitial, titleCase } from '../utils/nameHelper'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
@@ -216,8 +218,9 @@ function ChangePasswordForm() {
       setFieldError('Please enter your current password.')
       return
     }
-    if (form.newPassword.length < 8) {
-      setFieldError('New password must be at least 8 characters.')
+    const weak = passwordError(form.newPassword)
+    if (weak) {
+      setFieldError(weak)
       return
     }
     if (form.newPassword !== form.confirmPassword) {
@@ -274,7 +277,7 @@ function ChangePasswordForm() {
             label="New Password"
             value={form.newPassword}
             onChange={v => setField('newPassword', v)}
-            placeholder="Min. 8 characters"
+            placeholder="Choose a strong password"
             visible={show.next}
             onToggle={() => toggle('next')}
             autoComplete="new-password"
@@ -289,6 +292,8 @@ function ChangePasswordForm() {
             autoComplete="new-password"
           />
         </div>
+
+        <PasswordChecklist password={form.newPassword} confirm={form.confirmPassword} twoColumn />
 
         {fieldError && (
           <div className="px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">

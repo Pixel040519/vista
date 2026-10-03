@@ -6,6 +6,7 @@ const { query } = require('../config/database')
 const { authenticate } = require('../middleware/auth.middleware')
 const { AppError } = require('../middleware/error.middleware')
 const { normaliseName } = require('../utils/nameHelper')
+const { strongPassword } = require('../utils/passwordPolicy')
 const { gradeScopeForRole } = require('../utils/roles')
 const {
   uploadProfilePhoto,
@@ -24,7 +25,7 @@ const updateSchema = Joi.object({
 
 const passwordSchema = Joi.object({
   currentPassword: Joi.string().required(),
-  newPassword:     Joi.string().min(8).required(),
+  newPassword:     strongPassword(Joi),
 })
 
 // PUT /api/profile/me — update own name parts + phone
@@ -124,6 +125,9 @@ router.patch('/me/password', async (req, res, next) => {
 
     const ok = await bcrypt.compare(currentPassword, existing.rows[0].password_hash)
     if (!ok) throw new AppError('Current password is incorrect.', 401)
+    if (newPassword === currentPassword) {
+      throw new AppError('Choose a new password that is different from your current one.', 422)
+    }
 
     const hash = await bcrypt.hash(newPassword, await bcrypt.genSalt(12))
     await query(

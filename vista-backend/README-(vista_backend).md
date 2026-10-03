@@ -97,6 +97,14 @@ who could reach the API could mint a `super_admin`. It is now super-admin only, 
 no `parent` role, and is kept for bootstrapping and scripts — the one path that
 still takes a password.
 
+**Every chosen password must be strong**: 8–72 characters with an uppercase letter, a
+lowercase letter, a number and a symbol. `activation/complete`, `password-reset/complete`,
+`PATCH /api/profile/me/password` and `register` all validate through
+`strongPassword(Joi)` in `src/utils/passwordPolicy.js` and answer 422 naming what is
+missing. The 72 is bcrypt's byte limit — anything longer would be silently truncated.
+Signing in is not affected, so an older, weaker password keeps working until it is next
+changed. A Profile change also refuses the current password as the new one.
+
 The six unauthenticated activation and reset routes answer **identically whether
 or not the email has an account** — same message, same status, same timing — so
 they cannot be used to discover which addresses are registered. They are rate

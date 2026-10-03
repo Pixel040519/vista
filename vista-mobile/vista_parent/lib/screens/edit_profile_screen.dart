@@ -7,6 +7,7 @@ import 'package:vista_api/vista_api.dart';
 
 import '../providers.dart';
 import '../theme.dart';
+import '../widgets/password_checklist.dart';
 import '../widgets/photo_picker.dart';
 
 class EditProfileScreen extends ConsumerStatefulWidget {
@@ -475,10 +476,10 @@ class _ChangePasswordCardState extends ConsumerState<_ChangePasswordCard> {
                 label: 'New password',
                 visible: _showNext,
                 onToggle: () => setState(() => _showNext = !_showNext),
+                onChanged: (_) => setState(() {}),
                 validator: (v) {
-                  if (v == null || v.length < 8) {
-                    return 'Use at least 8 characters';
-                  }
+                  final weak = PasswordPolicy.error(v ?? '');
+                  if (weak != null) return weak;
                   if (v == _current.text) {
                     return 'New password must differ from current';
                   }
@@ -492,9 +493,12 @@ class _ChangePasswordCardState extends ConsumerState<_ChangePasswordCard> {
                 visible: _showConfirm,
                 onToggle: () =>
                     setState(() => _showConfirm = !_showConfirm),
+                onChanged: (_) => setState(() {}),
                 validator: (v) =>
                     (v != _next.text) ? 'Passwords do not match' : null,
               ),
+              const SizedBox(height: 12),
+              PasswordChecklist(password: _next.text, confirm: _confirm.text),
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Text(_error!,
@@ -526,6 +530,7 @@ class _PasswordField extends StatelessWidget {
     required this.visible,
     required this.onToggle,
     required this.validator,
+    this.onChanged,
   });
 
   final TextEditingController controller;
@@ -533,6 +538,7 @@ class _PasswordField extends StatelessWidget {
   final bool visible;
   final VoidCallback onToggle;
   final String? Function(String?) validator;
+  final ValueChanged<String>? onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -540,6 +546,7 @@ class _PasswordField extends StatelessWidget {
       controller: controller,
       obscureText: !visible,
       textInputAction: TextInputAction.next,
+      onChanged: onChanged,
       decoration: InputDecoration(
         labelText: label,
         suffixIcon: IconButton(

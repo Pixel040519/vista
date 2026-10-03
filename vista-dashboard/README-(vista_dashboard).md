@@ -43,6 +43,11 @@ npm run dev
 | `/enrollment/promotion` | Year-End Promotion wizard | Admin |
 | `/profile` | Own profile + password change | All roles |
 
+Every form that sets a password — `/activate`, `/forgot-password` and `/profile` — shows
+`components/PasswordChecklist.jsx`, which ticks off the strength rule as you type: 8–72
+characters with an uppercase letter, a lowercase letter, a number and a symbol. The rule is
+`src/utils/passwordPolicy.js`, a mirror of the API's; the API is what enforces it.
+
 ---
 
 ## Project Structure
@@ -60,6 +65,7 @@ src/
 │   │   └── Topbar.jsx
 │   ├── AccountRoster.jsx   ← shared pieces of the three Account Management tabs
 │   ├── ParentAccounts.jsx  ← the Parents tab
+│   ├── PasswordChecklist.jsx ← live password-strength rules
 │   └── UI/
 │       └── index.jsx       ← StatCard, RiskBadge, Modal, etc.
 └── pages/

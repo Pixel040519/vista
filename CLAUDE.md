@@ -1064,6 +1064,26 @@ Admin; and nobody can deactivate themselves or the last Super Admin who can sign
 can be more than one. `POST /api/auth/register` still exists for bootstrapping and is
 the one path that still takes a password.
 
+## Password strength
+
+Every password a person **chooses** must be 8–72 characters with an uppercase letter, a
+lowercase letter, a number and a symbol. That covers all four writers:
+`/auth/activation/complete`, `/auth/password-reset/complete`, `PATCH /profile/me/password`
+(which also refuses the current password as the new one) and the bootstrap
+`/auth/register`. Signing in is untouched: an older, weaker password keeps working until
+its holder next changes it.
+
+The rule lives in `vista-backend/node-api/src/utils/passwordPolicy.js` — routes use its
+`strongPassword(Joi)` rather than writing their own `.min()` — and is mirrored in
+`vista-dashboard/src/utils/passwordPolicy.js` and
+`vista-mobile/packages/vista_api/lib/src/password_policy.dart`, which drive the live
+checklist (`PasswordChecklist` on each side). The API is the enforcement; change a rule in
+all three or a form will offer a password the server then refuses.
+
+The **72 is bytes, not a style choice**: bcrypt ignores everything past 72 bytes, so a
+longer password would be accepted and then only partly checked at sign-in. Letters are
+matched as Unicode (`Ñ` is uppercase); a symbol is anything not a letter, digit or space.
+
 ## Public content (announcements, facility gallery)
 
 Admins manage what the landing page shows from VISTA instead of a developer editing the site.

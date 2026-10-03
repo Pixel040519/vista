@@ -20,6 +20,7 @@ const {
   generateCode, hashCode, compareCode, equalizeWork, settle, codeExpiry,
 } = require('../utils/authCodes');
 const { sendActivationCode, sendPasswordResetCode } = require('../utils/mailer');
+const { strongPassword } = require('../utils/passwordPolicy');
 
 /**
  * The sections a teacher advises in the **active** school year.
@@ -42,7 +43,7 @@ const loadAdvisory = (teacherId) => advisorySections(teacherId);
 
 const registerSchema = Joi.object({
   email:       Joi.string().email().required(),
-  password:    Joi.string().min(8).required(),
+  password:    strongPassword(Joi),
   surname:     Joi.string().min(1).required(),
   first_name:  Joi.string().min(1).required(),
   middle_name: Joi.string().optional().allow(''),
@@ -411,8 +412,7 @@ router.post('/activation/complete', async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
       activation_token: Joi.string().required(),
-      password: Joi.string().min(8).required()
-        .messages({ 'string.min': 'Choose a password of at least 8 characters.' }),
+      password: strongPassword(Joi),
     }).validate(req.body || {}, { stripUnknown: true });
     if (error) throw new AppError(error.details[0].message, 422);
 
@@ -549,8 +549,7 @@ router.post('/password-reset/complete', async (req, res, next) => {
   try {
     const { error, value } = Joi.object({
       reset_token: Joi.string().required(),
-      password: Joi.string().min(8).required()
-        .messages({ 'string.min': 'Choose a password of at least 8 characters.' }),
+      password: strongPassword(Joi),
     }).validate(req.body || {}, { stripUnknown: true });
     if (error) throw new AppError(error.details[0].message, 422);
 

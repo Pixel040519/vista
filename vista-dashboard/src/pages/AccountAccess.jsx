@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Eye, EyeOff, KeyRound, Mail, Lock, Check, CheckCircle2 } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, KeyRound, Mail, Lock, CheckCircle2 } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { authApi } from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import PasswordChecklist from '../components/PasswordChecklist'
+import { isStrongPassword } from '../utils/passwordPolicy'
 
 // The two "prove you hold this email" flows on the dashboard's sign-in page:
 //
@@ -182,9 +184,7 @@ function PasswordStep({ copy, email, busy, error, onClearError, onSubmit }) {
   const [confirm, setConfirm] = useState('')
   const [show, setShow]   = useState(false)
 
-  const longEnough = pw.length >= 8
-  const matches    = pw.length > 0 && pw === confirm
-  const ready      = longEnough && matches
+  const ready = isStrongPassword(pw) && pw === confirm
 
   const submit = (e) => { e.preventDefault(); if (ready) onSubmit(pw) }
 
@@ -208,24 +208,10 @@ function PasswordStep({ copy, email, busy, error, onClearError, onSubmit }) {
         <input id="acc-pw2" type={show ? 'text' : 'password'} autoComplete="new-password" className="input"
           value={confirm} onChange={e => { setConfirm(e.target.value); onClearError() }} />
       </div>
-      <ul className="space-y-1.5 text-sm">
-        <Rule ok={longEnough}>At least 8 characters</Rule>
-        <Rule ok={matches}>Both passwords match</Rule>
-      </ul>
+      <PasswordChecklist password={pw} confirm={confirm} />
       <ErrorLine text={error} />
       <SubmitButton busy={busy} disabled={!ready} label={copy.submit} busyLabel="Saving…" />
     </form>
-  )
-}
-
-function Rule({ ok, children }) {
-  return (
-    <li className={clsx('flex items-center gap-2', ok ? 'text-emerald-700' : 'text-slate-500')}>
-      <span className={clsx('w-4 h-4 rounded-full grid place-items-center', ok ? 'bg-emerald-100' : 'bg-slate-100')}>
-        {ok && <Check size={11} strokeWidth={3} />}
-      </span>
-      {children}
-    </li>
   )
 }
 
