@@ -92,8 +92,8 @@ and keeps only the learner name left-aligned; the old Grades page had the misali
 **The same rule bites row hover.** `.table-base tbody tr` sets
 `hover:bg-slate-50/60`, and that selector outranks a bare `hover:bg-…` on the
 `<tr>` — so a stronger hover needs `hover:!bg-…` or it silently does nothing.
-Worth doing where rows are **clickable**: the Parents tab opens a panel on click
-and uses `hover:!bg-brand-50`, because the default tint is faint enough to read
+Worth doing where rows are **clickable**: all three Account Management tabs open a
+panel on click and use `hover:!bg-brand-50`, because the default tint is faint enough to read
 as a stripe rather than as an affordance.
 
 ## Input / cursor conventions
@@ -445,20 +445,13 @@ For the teacher themself, `advisory` off `useAuth()` also drives a header chip o
 matching assignment chip **plus** a banner above the list. The banner is the point: a
 teacher can advise a class they teach no subject in, and then no chip would match.
 
-On **Account Management → Teachers** the advisory is **merged into the assignment chip**
-rather than listed beside it — an advisory is a property *of a class*, so one class gets
-one chip reading `Grade 1 · Makabayan · English · Adviser`, amber instead of brand. The
-same merge runs per school year in the Assignment History modal, so a teacher who taught
-that class last year without advising it gets the marker only on the year they held it.
-
-Two shapes the merge cannot cover, both handled beside it:
-
-- **An advisory with no assignment for that class** stands alone as its own chip — there
-  is nothing to append the marker to, and it is the case the whole feature exists for.
-  `unattachedAdvisory()` / `advisoryKeys()` are shared by the tag row and the history
-  modal so the two mark the same thing the same way.
-- **Advised classes sort first**, because the chip column collapses after two behind
-  `+N more` and the marker must not be what gets hidden.
+On **Account Management → Teachers** the advisory is **one chip per advised class** —
+`Grade 1 · Makabayan · Adviser`, amber — and the subject chips beside it are plain brand
+chips with no marker. It used to be merged *into* each subject chip for that class, so a
+teacher with English and MAPEH in their advisory read `… · English · Adviser`, `… · MAPEH
+· Adviser`, which looked like two advisories. The advisory chip always leads and is never
+folded behind `+N more`. The Assignment History modal (per school year) and the account
+panel's Assignments section follow the same rule through `AdvisoryRow` / `SubjectRow`.
 
 The Edit Teacher form carries a read-only note naming the advisory and pointing at the
 Curriculum page. Deliberately read-only: a control here would be a second write surface
@@ -1516,8 +1509,29 @@ landed where it was meant to.
 so they read as one page: `RosterFilters` (search left, state chips beside it — a chip
 with nobody in it is hidden unless it is All or selected), `PersonCell` (two-letter
 avatar, `formatName`, email under it), `AccessCell` (chip with a dot, and one line
-under it), `RowActions` (Edit pencil + ⋯), `RowMenu` + `useRowMenus` (one open menu per
-page, portalled), `WhatHappensNext` and `InvitationCreated`. The words and colours of
+under it), `RowActions` (Edit pencil + ⋯; no `onEdit` means no pencil), `RowMenu` + `useRowMenus` (one open menu per
+page, portalled), `WhatHappensNext`, `InvitationCreated` and `AccountPanel`. **Every
+row opens its account in a right-hand panel**, on all three tabs. Parents use their own
+`ParentPanel`; Teachers and Admins use `AccountPanel` (portalled, `z-50`, the same width
+and header — avatar, name, access chip and line). A staff panel has two modes off one
+`panel` state (`{ kind, id, mode, back }`): **view** (`StaffDetails` — Contact with an
+Edit details link, then Assignments with the adviser marks and an Assignment history
+button for a teacher or the Role for an admin, then Account access) and **edit**
+(`TeacherForm` / `AdminForm`). The row and the menu's View account open view; the Edit
+pencil and the menu's Edit details open edit directly. An edit started from the view
+sets `back`, so Cancel and Save return to the view instead of closing. Escape closes the
+view but never a form, and not while the history dialog sits on top
+(`closeOnEscape`). Access actions stay on the ⋯ menu, as for parents. All three edit forms
+(Teacher, Admin, Parent) carry **Discard changes** (`DiscardButton`, left of the footer,
+tooltip "Undo changes"): it resets the form to how it opened without closing it and is
+disabled until something differs. **Save changes is held on the same condition** — the
+parent form always was, and the staff `FormFooter` now disables its submit when it is
+given `onDiscard` (edit mode) and nothing is dirty, which also blocks an Enter-key save;
+the Invite forms pass no `onDiscard` and are unaffected. Staff forms measure "dirty"
+against a `start` snapshot taken on open; the parent form against the account's current
+values (`parentFields`). The per-child `ChildForm` on the Parents panel uses the same
+button and rule. Invite
+Teacher/Admin/Parent stay centred modals. The words and colours of
 an access line are shared through `utils/accessDisplay.js` (`invitedLine`,
 `whenSignedIn`, `expiredLine`, `toneClasses`); the *states* stay in
 `utils/staffAccess.js` and `utils/parentAccess.js`, which mirror their backend modules.
@@ -1532,8 +1546,8 @@ admins although this file has always said the tab is theirs too.
 
 What is allowed to differ is what genuinely differs: the second column (assignments,
 role, or children), the state names (staff are **Deactivated**, parents **Revoked**),
-and that a parent row also opens the account panel, because a parent's account *is*
-its children.
+and what the account panel lists under Contact — children and Add a child for a parent,
+assignments or role for staff.
 
 ### Account Management → Teachers and Admins
 
@@ -1560,12 +1574,26 @@ Both tables have the same columns: person · assignments (teachers) or role (adm
 "Invited Oct 2 by you · open until Nov 1", "A code was sent and is waiting to be
 entered", "Invitation cancelled · never activated". The filter is **state chips**
 counted client-side over what the search returned; a chip with nobody in it is hidden
-unless selected, the Parents tab's rule. Actions are an Edit pencil and a **⋯ menu**
-offering only what the state allows — Reissue invitation, Reactivate, Edit details,
-Assignment history (teachers), and below a divider in red Cancel invitation,
-Deactivate, Delete permanently (teachers, once deactivated). Cancel confirms in its
-own small dialog; Deactivate/Delete reuse the existing dialogs, opened on the chosen
-option. The admin row for yourself is marked "(you)" and offers no Deactivate.
+unless selected, the Parents tab's rule. The **row itself is clickable** and opens the
+account panel on view (`hover:!bg-brand-50/60`, the Parents tab's idiom; `RowActions`
+stops propagation so the pencil and ⋯ do not also open it). Actions are an Edit pencil
+and a **⋯ menu** offering only what the state allows — Reissue invitation, Reactivate,
+View account, Edit details, Assignment history (teachers), and below a divider in red
+Cancel invitation, Deactivate, Delete permanently (teachers, once deactivated). Cancel
+confirms in its own small dialog; Deactivate/Delete reuse the existing dialogs, opened
+on the chosen option.
+
+**Your own admin row** is marked "(you)" — and so is the panel header when it is open
+(`AccountPanel`'s `suffix`) — and has **no Edit pencil, no Edit details and no
+Deactivate** in its menu (`staffMenu` skips an action passed as `null`; `RowActions`
+skips the pencil without `onEdit`). Your own details are the Profile page's. The panel's
+own **Edit details** link in Contact is still offered on your account; it was left in
+place deliberately, and is the one remaining way to edit yourself from this page.
+
+**Assignments render the advisory once.** In the table, the view panel and the
+Assignment History modal, an advised class is its own amber chip/row
+(`Grade 1 · Makabayan · Adviser`, `AdvisoryRow`) and the subject chips/rows beside it
+are plain (`SubjectRow`) — see "Account Management → Teachers" under Class advisers.
 
 **The menu is portalled and `fixed`-positioned off its button.** The table sits in an
 `overflow-x-auto` wrapper, which also clips vertically, so a menu hanging below the
@@ -1616,6 +1644,24 @@ offered and then refused is worse than never offered. It also resolves a home
 address (the account's, else the learner's), because `guardianSchema` requires
 one even on the link path.
 
+**Each child row has its own Edit and Remove**, for what the parent is *to that
+learner*. Edit (`ChildForm`, inline in the row) changes relationship and emergency
+contact only — it sends just those two fields to `PUT /guardians/:gid`, which writes
+per-learner fields to that one row, so the account and the other children are
+untouched. It has Discard / Cancel / Save, Save disabled until something changed.
+Remove (`RemoveChild`, a confirm over the panel) is `DELETE /guardians/:gid`: they stop
+being that learner's guardian altogether, which the dialog distinguishes from revoking
+access. The wording takes the panel's point of view — the panel *is* the guardian, so
+the child is what comes off it: hint **"Remove from this guardian"**, title **"Remove
+{first name} from this guardian?"**, button **"Remove {first name}"**. "Remove from this
+child" read backwards and was replaced. It reads the learner's other guardians on open and warns in amber when the
+learner would be left with **no guardians** or **no emergency contact**. **Remove is
+disabled on the account's last child** (`kids`, which counts `other_children` too):
+the API hard-deletes a parent left with no learners, so here it would destroy the
+login and its history — the tooltip points at Revoke access instead. Manage Guardians
+still allows that removal, with its own warning that the app account goes too; this is
+a UI guard on this surface only.
+
 **Invite Parent creates the account and its children in one save**, in the staff
 forms' layout (name in one row, Sign-in email beside Mobile number, then Children, then
 "What happens next") and ends on the same **Invitation created** screen, whose steps
@@ -1647,7 +1693,7 @@ reaches. `grantLabel()` decides Reissue vs **Restore Access**, as elsewhere.
 ### Teacher-assignment dropdown (Accounts → Edit Teacher)
 Subjects already taken by another teacher for that `(grade_level, section)` are disabled in the dropdown and shown with the assigned teacher's name. Taken subjects render in red via inline `style` to override the parent `<select>` color; available subjects use normal color.
 
-Scoped admins (`admin_ece`, `admin_elem`) see **all** teachers in the list (both admin tiers share the same roster). Inside `TeacherForm` the grade-level `<select>` options are filtered to `gradeScope`; existing assignment rows whose `grade_level` sits outside the caller's scope render as `locked` — all three `<select>` are disabled, the remove (`X`) button is replaced with a "Locked" badge, and the row's current grade/section/subject values render as synthetic `<option>`s so the display stays readable. Locked rows are passed through to the backend untouched and preserved by the scope-aware DELETE in `PUT /api/accounts/teachers/:id`. The "Copy from previous SY" flow filters copied rows to in-scope grades and prepends existing locked rows so out-of-scope assignments aren't wiped.
+Scoped admins (`admin_ece`, `admin_elem`) see **all** teachers in the list (both admin tiers share the same roster). Inside `TeacherForm` the grade-level `<select>` options are filtered to `gradeScope`; existing assignment rows whose `grade_level` sits outside the caller's scope render as `locked` — all three `<select>` are disabled, the remove (`X`) button is replaced with a "Locked" badge, and the row's current grade/section/subject values render as synthetic `<option>`s so the display stays readable. Locked rows are passed through to the backend untouched and preserved by the scope-aware DELETE in `PUT /api/accounts/teachers/:id`. The "Copy from previous SY" flow filters copied rows to in-scope grades and prepends existing locked rows so out-of-scope assignments aren't wiped. Its select **holds the year last copied from** (`copiedFrom`); it was pinned to `value=""`, so it snapped back to "Select year..." after every pick and nothing on screen said a copy had happened. Once a year is chosen the placeholder is disabled; Discard changes clears it along with the rows.
 
 ### Grading config modal (`GradingConfigModal.jsx`)
 Category weight fields turn red when total > 100%; component weight fields turn red when their total exceeds the parent category's weight. Negative percentage values are clamped to 0. Delete buttons gray out for categories/components with recorded student scores.

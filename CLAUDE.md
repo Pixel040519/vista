@@ -286,7 +286,7 @@ candidates endpoint redacts the same way.
 
 **That endpoint is the only writer.** Several surfaces *display* the advisory — Student
 Detail, the teacher's own dashboard and profile, and Account Management → Teachers, which
-shows it on the assignment chips and in the assignment-history modal — and none of them
+shows it as its own chip beside the assignment chips and in the assignment-history modal — and none of them
 write it. Do not add a second control: one rule, one write surface, which is the mistake
 this codebase has already made once (the removed "Carry over" button). Displaying it
 beside teacher assignments is fine and useful; `PUT /api/accounts/teachers/:id` must keep
@@ -992,7 +992,12 @@ a glance, editing the person, and attaching another learner to one that already
 exists. Editing there is a second **entry point**, not a second rule: it calls the
 same `PUT /guardians/:gid` Manage Guardians calls, which writes the shared fields
 to every `parent_student` row of the account and to `users`, so the two surfaces
-cannot drift. It also
+cannot drift. The same holds per child: each child on the account can have its
+relationship and emergency contact edited (the same PUT, sending only those two
+per-learner fields) or be removed (`DELETE /guardians/:gid`, the Manage Guardians
+remove). Removal is **not offered on the account's last child** there, because that
+delete path hard-deletes a parent left with no learners — the UI points at Revoke
+access instead; Manage Guardians still allows it, with its own warning. It also
 creates a parent, for a family new to VISTA — **with their children in the same
 save**, never before them. A `users` row with no `parent_student` row is a state
 nothing else can express: the parent signs in to an empty app, appears on no

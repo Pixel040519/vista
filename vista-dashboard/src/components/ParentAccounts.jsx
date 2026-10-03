@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Search, X, Plus, Phone, Mail, Home, RotateCcw, ShieldCheck, Pencil, UserRound, ShieldOff } from 'lucide-react'
+import { Search, X, Plus, Phone, Mail, Home, RotateCcw, ShieldCheck, Pencil, UserRound, ShieldOff, UserMinus, AlertTriangle } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { Modal, PhoneInput } from './UI'
@@ -15,7 +15,7 @@ import {
 } from '../utils/accessDisplay'
 import {
   RosterFilters, stateChips, PersonCell, AccessChip, AccessCell, RowActions, RowMenu, useRowMenus,
-  WhatHappensNext, InvitationCreated, titled,
+  WhatHappensNext, InvitationCreated, titled, DiscardButton,
 } from './AccountRoster'
 
 // The Parents tab of Account Management.
@@ -25,8 +25,8 @@ import {
 // one table (person · what they cover · account access · actions), an Edit
 // pencil and a ⋯ menu, and the same "Invitation created" confirmation. What is
 // genuinely different stays different: a parent covers children rather than
-// classes, so a row also opens a panel listing them, and their access is
-// revoked rather than deactivated.
+// classes, so their account panel lists children, and their access is revoked
+// rather than deactivated.
 //
 // Everything it writes goes through an endpoint that already existed, so this
 // is a second ENTRY POINT to each rule and never a second rule: `PUT
@@ -205,9 +205,8 @@ export default function ParentAccounts({ createOpen, onOpenCreate, onCloseCreate
                 const key = `parent:${p.id}`
                 const access = accessOf(p)
                 return (
-                  // Rows open the account panel, which the staff tabs have no
-                  // need for — a parent's children are the account. `!` is
-                  // required: `.table-base tbody tr:hover` outranks a bare
+                  // Rows open the account panel, as the staff tabs' rows do.
+                  // `!` is required: `.table-base tbody tr:hover` outranks a bare
                   // `hover:bg-…` (see "Tables" in the dashboard CLAUDE.md).
                   <tr key={p.id} className="hover:!bg-brand-50/60 cursor-pointer transition-colors"
                     onClick={() => setPanel({ id: p.id, mode: 'view' })}>
@@ -292,19 +291,24 @@ export default function ParentAccounts({ createOpen, onOpenCreate, onCloseCreate
 }
 
 /* ── One account, and the children on it ──────────────────────────────────
- * The reason this tab has a panel the staff tabs do not: a parent's account IS
- * its children, and attaching another learner to an account that already
- * exists is something no learner's page can do. It opens on whatever the row
+ * The staff tabs open theirs through `AccountPanel`; this one is its own
+ * because a parent's account IS its children, and attaching another learner to
+ * an account that already exists is something no learner's page can do. It opens on whatever the row
  * asked for — viewing, the Edit pencil, or the menu's Add a child.
  */
 function ParentPanel({ parent, meId, initialMode = 'view', onClose, onChanged }) {
   const [adding, setAdding] = useState(initialMode === 'add')
   const [editing, setEditing] = useState(initialMode === 'edit')
+  const [childEdit, setChildEdit] = useState(null)       // guardian_id of the child row being edited
+  const [removeTarget, setRemoveTarget] = useState(null) // the child row being removed
+  // Escape closes the panel only when nothing is half-done in it: no form open,
+  // and no confirmation sitting on top of it.
+  const busyHere = adding || editing || !!childEdit || !!removeTarget
   useEffect(() => {
-    const esc = (e) => { if (e.key === 'Escape' && !adding && !editing) onClose() }
+    const esc = (e) => { if (e.key === 'Escape' && !busyHere) onClose() }
     window.addEventListener('keydown', esc)
     return () => window.removeEventListener('keydown', esc)
-  }, [onClose, adding, editing])
+  }, [onClose, busyHere])
 
   const access = accessOf(parent)
   const kids = parent.children.length + (parent.other_children || 0)
@@ -375,7 +379,10 @@ function ParentPanel({ parent, meId, initialMode = 'view', onClose, onChanged })
               </h4>
               <span className="text-xs text-slate-500">They see these learners in the app</span>
             </div>
-            {parent.children.map(c => (
+            {parent.children.map(c => childEdit === c.guardian_id
+              ? <ChildForm key={c.guardian_id} child={c} onCancel={() => setChildEdit(null)}
+                  onSaved={() => { setChildEdit(null); onChanged() }} />
+              : (
               <div key={c.guardian_id} className="flex items-center gap-3 px-3.5 py-2.5 border border-slate-200 rounded-xl">
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold text-slate-900">{childName(c)}</div>
@@ -387,6 +394,27 @@ function ParentPanel({ parent, meId, initialMode = 'view', onClose, onChanged })
                   c.is_emergency_contact ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500')}>
                   {c.is_emergency_contact ? 'Emergency' : 'No emergency'}
                 </span>
+                <div className="flex items-center gap-0.5">
+                  <button onClick={() => setChildEdit(c.guardian_id)}
+                    aria-label={`Edit relationship and emergency contact for ${childName(c)}`} title="Edit for this child"
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors">
+                    <Pencil size={15} />
+                  </button>
+                  {/* Never on the last child: the server deletes a parent account
+                      left with no learners, so this would quietly destroy the
+                      login and its history. Revoking is the undoable way to cut
+                      someone off. `kids` includes children outside the caller's
+                      grades, which the delete counts too. */}
+                  <button onClick={() => setRemoveTarget(c)} disabled={kids <= 1}
+                    aria-label={`Remove ${childName(c)} from this guardian`}
+                    title={kids <= 1
+                      ? 'This is their only child. Removing it would delete the account — revoke access instead.'
+                      : 'Remove from this guardian'}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors
+                               disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-400">
+                    <UserMinus size={15} />
+                  </button>
+                </div>
               </div>
             ))}
             {parent.other_children > 0 && (
@@ -422,8 +450,139 @@ function ParentPanel({ parent, meId, initialMode = 'view', onClose, onChanged })
           </section>
         </div>
       </aside>
+
+      <Modal open={!!removeTarget} onClose={() => setRemoveTarget(null)} title={removeTarget ? `Remove ${removeTarget.first_name} from this guardian?` : ''} size="sm">
+        {removeTarget && (
+          <RemoveChild parent={parent} child={removeTarget} kids={kids}
+            onClose={() => setRemoveTarget(null)}
+            onRemoved={() => { setRemoveTarget(null); onChanged() }} />
+        )}
+      </Modal>
     </div>,
     document.body
+  )
+}
+
+/* ── What they are to one child ───────────────────────────────────────────
+ * Relationship and emergency contact are the two PER-LEARNER fields, so this
+ * sends only those: `PUT /guardians/:gid` writes them to this one row and leaves
+ * the account and its other children alone — the same request Manage Guardians
+ * makes from the learner's side.
+ */
+function ChildForm({ child, onCancel, onSaved }) {
+  const start = { relationship: child.relationship || 'Guardian', is_emergency_contact: !!child.is_emergency_contact }
+  const [form, setForm] = useState(start)
+  const [busy, setBusy] = useState(false)
+  const dirty = form.relationship !== start.relationship || form.is_emergency_contact !== start.is_emergency_contact
+
+  const save = async () => {
+    setBusy(true)
+    try {
+      const res = await studentApi.updateGuardian(child.student_id, child.guardian_id, form)
+      toast.success(res.data?.message || 'Guardian updated.', { duration: 6000 })
+      onSaved()
+    } catch { /* interceptor toasts */ } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="px-3.5 py-3 border border-brand-200 bg-brand-50/40 rounded-xl space-y-3">
+      <div>
+        <div className="text-sm font-semibold text-slate-900">{childName(child)}</div>
+        <div className="text-xs text-slate-500">
+          {child.grade_level}{child.section ? ` · ${child.section}` : ''} · applies to this child only
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+        <label className="block text-sm font-medium text-slate-700">Relationship
+          <select className="input mt-1.5" value={form.relationship}
+            onChange={e => setForm(f => ({ ...f, relationship: e.target.value }))}>
+            {/* Keep a stored value the list no longer offers, rather than
+                silently showing the first option and saving that. */}
+            {!RELATIONSHIPS.includes(form.relationship) && <option>{form.relationship}</option>}
+            {RELATIONSHIPS.map(r => <option key={r}>{r}</option>)}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 h-[42px] text-sm text-slate-700 cursor-pointer">
+          <input type="checkbox" className="w-4 h-4 accent-brand-500" checked={form.is_emergency_contact}
+            onChange={e => setForm(f => ({ ...f, is_emergency_contact: e.target.checked }))} />
+          Emergency contact
+        </label>
+      </div>
+      <div className="flex items-center justify-end gap-2">
+        <DiscardButton onClick={() => setForm(start)} disabled={!dirty || busy} />
+        <button onClick={onCancel} className="btn-secondary !h-9 !px-3 !text-[12.5px]">Cancel</button>
+        <button disabled={!dirty || busy} onClick={save}
+          className="btn-primary !h-9 !px-4 !text-[12.5px] disabled:opacity-50">
+          {busy ? 'Saving…' : 'Save changes'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/* ── Removing them from one child ─────────────────────────────────────────
+ * `DELETE /guardians/:gid` — the guardian entry goes, so they stop being this
+ * learner's guardian entirely. That is NOT revoking access, which keeps every
+ * entry and only stops sign-in, for all children at once. The panel never
+ * offers this on the last child, because the server then deletes the account.
+ *
+ * The learner's other guardians are read on open so the dialog can say when
+ * the learner would be left with nobody on record, or no emergency contact.
+ */
+function RemoveChild({ parent, child, kids, onClose, onRemoved }) {
+  const [others, setOthers] = useState(null)   // the learner's other guardians; null while loading
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let live = true
+    studentApi.get(child.student_id)
+      .then(res => { if (live) setOthers((res.data.student?.guardians || []).filter(g => g.id !== child.guardian_id)) })
+      .catch(() => { if (live) setOthers([]) })
+    return () => { live = false }
+  }, [child.student_id, child.guardian_id])
+
+  const remove = async () => {
+    setBusy(true)
+    try {
+      await studentApi.removeGuardian(child.student_id, child.guardian_id)
+      toast.success(`${parent.first_name} is no longer ${child.first_name}'s guardian.`, { duration: 6000 })
+      onRemoved()
+    } catch { /* interceptor toasts */ } finally { setBusy(false) }
+  }
+
+  const left = kids - 1
+  const noGuardians = others && others.length === 0
+  const noEmergency = others && !noGuardians && child.is_emergency_contact && !others.some(g => g.is_emergency_contact)
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-600 leading-relaxed">
+        <b className="text-slate-900">{parent.surname}, {parent.first_name}</b> will no longer be{' '}
+        <b className="text-slate-900">{childName(child)}</b>'s {(child.relationship || 'guardian').toLowerCase()}
+        {child.is_emergency_contact && ' or emergency contact'}, and {child.first_name} disappears from their VISTA
+        Parent app. Their account and their other {left === 1 ? 'child stay' : `${left} children stay`} as they are.
+      </p>
+      <p className="text-xs text-slate-500 leading-relaxed">
+        This is not the same as revoking access, which keeps them on every child and only stops them signing in.
+      </p>
+      {(noGuardians || noEmergency) && (
+        <div className="flex gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+          <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-900 leading-relaxed">
+            {noGuardians
+              ? `${child.first_name} will have no guardians on record.`
+              : `${child.first_name} will have no emergency contact.`}
+            {' '}Add one from their record under Manage Guardians.
+          </p>
+        </div>
+      )}
+      <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
+        <button onClick={onClose} className="btn-secondary">Keep</button>
+        <button disabled={busy || others === null} onClick={remove} className="btn-primary !bg-red-600 hover:!bg-red-700">
+          {others === null ? 'Checking…' : busy ? 'Removing…' : `Remove ${child.first_name}`}
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -445,15 +604,19 @@ function ParentPanel({ parent, meId, initialMode = 'view', onClose, onChanged })
  * as taken by a parent account, refusing the parent their own email. The PUT
  * excludes the row's own account, so the server is the right judge.
  */
+// The form's values as the account holds them — the starting point, and what
+// Discard changes puts back.
+const parentFields = (parent) => ({
+  surname: parent.surname || '',
+  first_name: parent.first_name || '',
+  middle_name: parent.middle_name || '',
+  phone: parent.phone || '',
+  home_address: parent.home_address || '',
+  email: parent.email || '',
+})
+
 function ParentDetailsForm({ parent, onCancel, onSaved }) {
-  const [form, setForm] = useState({
-    surname: parent.surname || '',
-    first_name: parent.first_name || '',
-    middle_name: parent.middle_name || '',
-    phone: parent.phone || '',
-    home_address: parent.home_address || '',
-    email: parent.email || '',
-  })
+  const [form, setForm] = useState(() => parentFields(parent))
   const [busy, setBusy] = useState(false)
   const set = (patch) => setForm(f => ({ ...f, ...patch }))
   const emailEditable = !parent.has_password
@@ -531,6 +694,7 @@ function ParentDetailsForm({ parent, onCancel, onSaved }) {
       </label>
 
       <div className="flex items-center justify-end gap-2 pt-1">
+        <DiscardButton onClick={() => setForm(parentFields(parent))} disabled={!dirty || busy} />
         <button onClick={onCancel} className="btn-secondary !h-9 !px-3 !text-[12.5px]">Cancel</button>
         <button disabled={!ready || busy} onClick={save}
           className="btn-primary !h-9 !px-4 !text-[12.5px] disabled:opacity-50">

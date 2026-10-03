@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Search, MoreHorizontal, Check, Copy, Pencil } from 'lucide-react'
+import { Search, MoreHorizontal, Check, Copy, Pencil, X, RotateCcw } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { toneClasses, shortStateLabel } from '../utils/accessDisplay'
@@ -99,6 +99,58 @@ export function AccessCell({ state, detail }) {
   )
 }
 
+// ── Account panel ─────────────────────────────────────────────
+/**
+ * The right-hand panel Teachers and Admins open an account in — to view it or
+ * to edit it — shaped like the Parents tab's account panel so all three tabs
+ * look the same: avatar, name, access chip and its line, then the body.
+ *
+ * Portalled at z-50 for the reason ParentPanel is: rendered in place it would
+ * sit inside the page's `animate-fade-in` stacking context, under the Topbar.
+ * Escape closes it only while `closeOnEscape` — the caller turns that off
+ * while a form is open (a keypress must not throw away what was typed) and
+ * while a dialog sits on top of it.
+ */
+export function AccountPanel({ open, onClose, eyebrow, person, tone = 'brand', suffix = null, state, detail, closeOnEscape = false, children }) {
+  useEffect(() => {
+    if (!open || !closeOnEscape) return
+    const esc = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', esc)
+    return () => window.removeEventListener('keydown', esc)
+  }, [open, closeOnEscape, onClose])
+
+  if (!open || !person) return null
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-slate-900/40" onClick={onClose} />
+      <aside role="dialog" aria-label={`${eyebrow ? `${eyebrow}: ` : ''}${formatName(person)}`}
+        className="relative w-full max-w-xl h-full bg-white border-l border-slate-200 shadow-2xl flex flex-col animate-fade-in">
+        <div className="px-6 py-5 border-b border-slate-200 flex items-start gap-3">
+          <div className={clsx('w-11 h-11 shrink-0 rounded-full grid place-items-center text-sm font-bold', AVATAR[tone])}>
+            {initials(person)}
+          </div>
+          <div className="flex-1 min-w-0">
+            {eyebrow && <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{eyebrow}</p>}
+            <h3 className="text-lg font-bold text-slate-900">{formatName(person)}{suffix}</h3>
+            {state && (
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
+                <AccessChip state={state} />
+                {detail && <span className="text-xs text-slate-500">{detail}</span>}
+              </div>
+            )}
+          </div>
+          <button onClick={onClose} aria-label="Close"
+            className="w-8 h-8 grid place-items-center rounded-lg hover:bg-slate-100">
+            <X size={18} className="text-slate-600" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
+      </aside>
+    </div>,
+    document.body
+  )
+}
+
 // ── Row menu ──────────────────────────────────────────────────
 /**
  * One open menu at a time for the whole page; a click anywhere else or Escape
@@ -189,12 +241,35 @@ function MenuItem({ item, onToggle, danger }) {
 export function RowActions({ editLabel, onEdit, menu }) {
   return (
     <div className="flex items-center gap-1 justify-end" onClick={e => e.stopPropagation()}>
-      <button onClick={onEdit} aria-label={editLabel} title="Edit"
-        className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors">
-        <Pencil size={15} />
-      </button>
+      {/* No `onEdit` means no pencil — your own admin row, for one. The ⋯
+          stays put, since it is the last item in a right-aligned row. */}
+      {onEdit && (
+        <button onClick={onEdit} aria-label={editLabel} title="Edit"
+          className="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50 transition-colors">
+          <Pencil size={15} />
+        </button>
+      )}
       {menu}
     </div>
+  )
+}
+
+// ── Edit forms ────────────────────────────────────────────────
+/**
+ * Discard changes, on all three edit forms (Teacher, Admin, Parent). It puts
+ * the form back to how it opened without closing it, and is disabled until
+ * something differs from that. `mr-auto` sits it at the left of a footer whose
+ * Cancel and Save are right-aligned, apart from the two that leave the form.
+ */
+export function DiscardButton({ onClick, disabled }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled}
+      title="Undo changes"
+      className="mr-auto inline-flex items-center gap-1.5 px-2 py-2 text-sm font-semibold text-slate-600 rounded-lg
+                 hover:text-red-600 hover:bg-red-50 transition-colors
+                 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-600">
+      <RotateCcw size={14} /> Discard changes
+    </button>
   )
 }
 

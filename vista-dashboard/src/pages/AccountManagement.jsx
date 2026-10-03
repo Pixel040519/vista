@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   UserCog, Plus, Pencil, Trash2, ShieldOff, ShieldCheck, X, BookOpen, History,
-  GraduationCap, RotateCcw, MailPlus, AlertTriangle,
+  GraduationCap, RotateCcw, MailPlus, AlertTriangle, Phone, Mail, UserRound, CalendarDays,
 } from 'lucide-react'
 import { accountApi, curriculumApi } from '../api/client'
 import { LoadingSpinner, EmptyState, Modal, PhoneInput } from '../components/UI'
@@ -14,10 +14,10 @@ import ParentAccounts from '../components/ParentAccounts'
 import {
   STAFF_ACCESS_STATES, staffAccessOf, staffAccessDetail, canReissue, canCancel, canChangeStaffEmail,
 } from '../utils/staffAccess'
-import { invitationOpenUntil } from '../utils/accessDisplay'
+import { invitationOpenUntil, fmtDate } from '../utils/accessDisplay'
 import {
   RosterFilters, stateChips, PersonCell, AccessCell, RowActions, RowMenu, useRowMenus,
-  WhatHappensNext, InvitationCreated, titled,
+  WhatHappensNext, InvitationCreated, titled, AccountPanel, DiscardButton,
 } from '../components/AccountRoster'
 
 // ── School Data ───────────────────────────────────────────────
@@ -205,11 +205,17 @@ const STAFF_NEXT = [
   <>They enter this email, receive a 6-digit code, and create their password.</>,
 ]
 
-function FormFooter({ onClose, saving, label, savingLabel }) {
+// `onDiscard` (edit only) adds Discard changes on the left: it puts the form
+// back to how it opened and stays disabled until something differs from that.
+// An edit's Save is held the same way, as the Parents tab's is — there is
+// nothing to save yet. A create form passes no `onDiscard` and is unaffected.
+function FormFooter({ onClose, saving, label, savingLabel, onDiscard, dirty }) {
+  const unchanged = !!onDiscard && !dirty
   return (
-    <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+    <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+      {onDiscard && <DiscardButton onClick={onDiscard} disabled={!dirty || saving} />}
       <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
-      <button type="submit" disabled={saving} className="btn-primary justify-center disabled:opacity-60">
+      <button type="submit" disabled={saving || unchanged} className="btn-primary justify-center disabled:opacity-60">
         {saving ? savingLabel : label}
       </button>
     </div>
@@ -232,7 +238,9 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
   const isRowLocked = (row) => !isSuperAdmin && !!row.grade_level && !effectiveScope.includes(row.grade_level)
   const teacherId = initial?.id || null
   const emailEditable = mode === 'create' || canChangeStaffEmail(initial)
-  const [form, setForm] = useState({
+  // What the form opened with — Discard changes goes back to it, and it is
+  // what "has anything changed" is measured against.
+  const [start] = useState(() => ({
     surname:     initial?.surname     || '',
     first_name:  initial?.first_name   || '',
     middle_name: initial?.middle_name  || '',
@@ -245,10 +253,15 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
           subject:     a.subject,
         }))
       : [emptyRow()],
-  })
+  }))
+  const [form, setForm] = useState(start)
+  const dirty = JSON.stringify(form) !== JSON.stringify(start)
   const [saving, setSaving]   = useState(false)
   const [takenAssignments, setTakenAssignments] = useState([])
   const [pastYears, setPastYears] = useState({}) // { "2024-2025": [{grade_level,section,subject},...] }
+  // The year last copied from, so the select shows it. It was pinned to "",
+  // which snapped back to "Select year..." and left no sign a copy had happened.
+  const [copiedFrom, setCopiedFrom] = useState('')
 
   useEffect(() => {
     accountApi.getAssignments()
@@ -337,10 +350,11 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
                 <span className="text-xs text-slate-500 whitespace-nowrap">Copy assignments from a previous school year</span>
                 <select
                   className="input text-xs py-1 w-auto pr-7"
-                  value=""
+                  value={copiedFrom}
                   onChange={e => {
                     const sy = e.target.value
                     if (!sy || !pastYears[sy]) return
+                    setCopiedFrom(sy)
                     const copied = pastYears[sy]
                       .filter(a => isSuperAdmin || effectiveScope.includes(a.grade_level))
                       .map(a => ({
@@ -355,7 +369,7 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
                     toast.success(`Copied ${copied.length} assignment${copied.length !== 1 ? 's' : ''} from SY ${sy}`)
                   }}
                 >
-                  <option value="">Select year...</option>
+                  <option value="" disabled={!!copiedFrom}>Select year...</option>
                   {copyableYears.map(sy => (
                     <option key={sy} value={sy}>SY {sy} ({pastYears[sy].length})</option>
                   ))}
@@ -416,6 +430,7 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
       {mode === 'create' && <WhatHappensNext steps={STAFF_NEXT} />}
 
       <FormFooter onClose={onClose} saving={saving}
+        onDiscard={mode === 'edit' ? () => { setForm(start); setCopiedFrom('') } : null} dirty={dirty}
         label={mode === 'create' ? 'Create invitation' : 'Save changes'}
         savingLabel={mode === 'create' ? 'Creating…' : 'Saving…'} />
     </form>
@@ -423,32 +438,15 @@ function TeacherForm({ initial, onSubmit, onClose, mode }) {
 }
 
 // ── Assignment Tags ───────────────────────────────────────────
-// Which (grade_level, section) pairs this teacher advises. Shared by the tag
-// row and the history modal so the two mark the same thing the same way.
-const advisoryKeys = (advisory = []) =>
-  new Set(advisory.map(v => `${v.grade_level}|||${v.section}`))
-
-// Advisories with no assignment row to attach to — the teacher advises the class
-// but teaches no subject in it. They need a chip of their own, because there is
-// nothing to append the marker to and dropping them would lose the fact.
-const unattachedAdvisory = (advisory = [], rows = []) =>
-  advisory.filter(v => !rows.some(a => a.grade_level === v.grade_level && a.section === v.section))
-
 function AssignmentTags({ assignments = [], advisory = [] }) {
   const [expanded, setExpanded] = useState(false)
 
-  // The advisory is a property **of a class**, so it rides on the assignment
-  // chips for that class rather than sitting beside them as a separate entry —
-  // one class, one chip, reading "Grade · Section · Subject · Adviser".
-  const keys   = advisoryKeys(advisory)
-  const marked = assignments.map(a => ({ ...a, adviser: keys.has(`${a.grade_level}|||${a.section}`) }))
-  // Advised classes sort first so the marker cannot end up hidden behind
-  // "+N more" — it is the most significant thing in this column.
-  const ordered = [...marked.filter(a => a.adviser), ...marked.filter(a => !a.adviser)]
-  const orphans = unattachedAdvisory(advisory, assignments)
-
-  const visible = expanded ? ordered : ordered.slice(0, 2)
-  const extra   = ordered.length - 2
+  // The advisory is one chip per advised class — "Grade 1 · Makabayan · Adviser"
+  // — never a marker repeated on every subject the teacher has in that class,
+  // which read as one advisory per subject. It always leads and is never folded
+  // behind "+N more": it is the most significant thing in this column.
+  const visible = expanded ? assignments : assignments.slice(0, 2)
+  const extra   = assignments.length - 2
 
   // A teacher can hold either fact without the other, so the empty state has to
   // consider both — otherwise someone who advises a class but teaches nothing
@@ -459,23 +457,19 @@ function AssignmentTags({ assignments = [], advisory = [] }) {
 
   return (
     <div className="flex flex-wrap gap-1">
-      {orphans.map(v => (
+      {advisory.map(v => (
         <span key={v.id}
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 text-xs font-semibold border border-amber-200"
-          title="Class adviser, with no subject taught in this class — set on the Curriculum page">
+          title="Class adviser — set on the Curriculum page">
           <GraduationCap size={10} />
           {v.grade_level} · {v.section} · Adviser
         </span>
       ))}
       {visible.map((a, i) => (
         <span key={i}
-          className={clsx('inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border',
-            a.adviser
-              ? 'bg-amber-50 text-amber-800 font-semibold border-amber-200'
-              : 'bg-brand-50 text-brand-700 font-medium border-brand-100')}
-          title={a.adviser ? 'Class adviser — set on the Curriculum page' : undefined}>
-          {a.adviser ? <GraduationCap size={10} /> : <BookOpen size={10} />}
-          {a.grade_level} · {a.section} · {a.subject}{a.adviser && ' · Adviser'}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-brand-50 text-brand-700 text-xs font-medium border border-brand-100">
+          <BookOpen size={10} />
+          {a.grade_level} · {a.section} · {a.subject}
         </span>
       ))}
       {!expanded && extra > 0 && (
@@ -484,6 +478,30 @@ function AssignmentTags({ assignments = [], advisory = [] }) {
           +{extra} more
         </button>
       )}
+    </div>
+  )
+}
+
+/** One advised class, as a row — the history modal and the account panel. */
+function AdvisoryRow({ v }) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
+      <GraduationCap size={12} className="text-amber-600 flex-shrink-0" />
+      <span className="text-sm text-amber-900">
+        {v.grade_level} &middot; {v.section} &middot; <span className="font-semibold">Class adviser</span>
+      </span>
+    </div>
+  )
+}
+
+/** One subject assignment, as a row — never marked as the advisory. */
+function SubjectRow({ a }) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 rounded-lg border bg-slate-50 border-slate-100">
+      <BookOpen size={12} className="text-brand-500 flex-shrink-0" />
+      <span className="text-sm text-slate-700">
+        {a.grade_level} &middot; {a.section} &middot; <span className="font-medium">{a.subject}</span>
+      </span>
     </div>
   )
 }
@@ -613,33 +631,10 @@ function AssignmentHistory({ teacher, onClose }) {
                 SY {sy}
               </h3>
               <div className="space-y-1.5">
-                {/* Same rule as the tag row: the advisory marks the subject rows
-                    for that class rather than sitting above them as its own
-                    entry, and only stands alone when there is no such row. */}
-                {unattachedAdvisory(advisoryBy[sy], grouped[sy]).map(v => (
-                  <div key={v.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
-                    <GraduationCap size={12} className="text-amber-600 flex-shrink-0" />
-                    <span className="text-sm text-amber-900">
-                      {v.grade_level} &middot; {v.section} &middot; <span className="font-semibold">Class adviser</span>
-                    </span>
-                  </div>
-                ))}
-                {(grouped[sy] || []).map(a => {
-                  const adviser = advisoryKeys(advisoryBy[sy]).has(`${a.grade_level}|||${a.section}`)
-                  return (
-                    <div key={a.id}
-                      className={clsx('flex items-center gap-2 px-3 py-2 rounded-lg border',
-                        adviser ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-100')}>
-                      {adviser
-                        ? <GraduationCap size={12} className="text-amber-600 flex-shrink-0" />
-                        : <BookOpen size={12} className="text-brand-500 flex-shrink-0" />}
-                      <span className={clsx('text-sm', adviser ? 'text-amber-900' : 'text-slate-700')}>
-                        {a.grade_level} &middot; {a.section} &middot; <span className="font-medium">{a.subject}</span>
-                        {adviser && <> &middot; <span className="font-semibold">Adviser</span></>}
-                      </span>
-                    </div>
-                  )
-                })}
+                {/* Same rule as the tag row: one row for the advised class,
+                    then the subjects, none of them marked. */}
+                {(advisoryBy[sy] || []).map(v => <AdvisoryRow key={v.id} v={v} />)}
+                {(grouped[sy] || []).map(a => <SubjectRow key={a.id} a={a} />)}
                 {!grouped[sy] && (
                   <p className="text-xs text-slate-400 px-3">No subjects taught this school year.</p>
                 )}
@@ -668,7 +663,7 @@ const ADMIN_ROLE_OPTIONS = [
 function AdminForm({ initial, onSubmit, onClose, mode, superAdminCount }) {
   const emailEditable = mode === 'create' || canChangeStaffEmail(initial)
   const isExistingSuper = mode === 'edit' && initial?.role === ROLES.SUPER_ADMIN
-  const [form, setForm] = useState({
+  const [start] = useState(() => ({
     surname:     initial?.surname     || '',
     first_name:  initial?.first_name  || '',
     middle_name: initial?.middle_name || '',
@@ -676,7 +671,9 @@ function AdminForm({ initial, onSubmit, onClose, mode, superAdminCount }) {
     phone:       initial?.phone       || '',
     role:        initial?.role        || '',
     confirm_password: '',
-  })
+  }))
+  const [form, setForm] = useState(start)
+  const dirty = JSON.stringify(form) !== JSON.stringify(start)
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState('')
 
@@ -771,9 +768,95 @@ function AdminForm({ initial, onSubmit, onClose, mode, superAdminCount }) {
       {error && <p className="text-sm text-red-600 -mt-2" role="alert">{error}</p>}
 
       <FormFooter onClose={onClose} saving={saving}
+        onDiscard={mode === 'edit' ? () => { setForm(start); setError('') } : null} dirty={dirty}
         label={mode === 'edit' ? 'Save changes' : grantingSuper ? 'Create Super Admin invitation' : 'Create invitation'}
         savingLabel={mode === 'edit' ? 'Saving…' : 'Creating…'} />
     </form>
+  )
+}
+
+// ── Account details (the panel's view) ───────────────────────
+// What the Parents tab's account panel shows for a parent, for a staff member:
+// contact, then what the account covers (classes or role), then access. Read
+// only — Edit details swaps the panel to the form, and the access actions stay
+// on the ⋯ menu, as they do for parents.
+const PANEL_SECTION = 'text-xs font-semibold uppercase tracking-wider text-slate-500'
+
+function StaffDetails({ staff, kind, isMe, onEdit, onHistory }) {
+  const assignments = staff.assignments || []
+  const advisory = staff.advisory || []
+  const role = ADMIN_ROLE_OPTIONS.find(o => o.id === staff.role)
+
+  return (
+    <div className="space-y-6">
+      <section className="space-y-2">
+        <div className="flex items-baseline justify-between">
+          <h4 className={PANEL_SECTION}>Contact</h4>
+          <button onClick={onEdit} className="text-xs font-semibold text-brand-600">Edit details</button>
+        </div>
+        <div className="flex items-center gap-2.5 text-sm text-slate-700">
+          <Phone size={15} className="text-slate-400" />{staff.phone || '—'}
+        </div>
+        <div className="flex items-center gap-2.5 text-sm text-slate-700">
+          <Mail size={15} className="text-slate-400" />{staff.email}
+          <span className="px-1.5 py-0.5 rounded-full bg-slate-100 text-[11px] text-slate-500">Sign-in email</span>
+        </div>
+        {staff.created_at && (
+          <div className="flex items-center gap-2.5 text-sm text-slate-700">
+            <CalendarDays size={15} className="text-slate-400" />Account created {fmtDate(staff.created_at, true)}
+          </div>
+        )}
+      </section>
+
+      {kind === 'teacher' ? (
+        <section className="space-y-2.5">
+          <div className="flex items-baseline justify-between">
+            <h4 className={PANEL_SECTION}>Assignments · {assignments.length}</h4>
+            <span className="text-xs text-slate-500">This school year</span>
+          </div>
+          {/* The tag row's rule: one row for the advised class, then the subjects. */}
+          {advisory.map(v => <AdvisoryRow key={v.id} v={v} />)}
+          {assignments.map((a, i) => <SubjectRow key={a.id || i} a={a} />)}
+          {!assignments.length && !advisory.length && (
+            <p className="text-sm text-slate-500">No assignments this school year.</p>
+          )}
+          {advisory.length > 0 && (
+            <p className="text-xs text-slate-500">Class advisers are set on the Curriculum page's Sections tab.</p>
+          )}
+          {onHistory && (
+            <button onClick={onHistory}
+              className="w-full h-10 flex items-center justify-center gap-2 text-sm font-semibold text-brand-600
+                         border border-dashed border-slate-300 rounded-xl hover:bg-slate-50">
+              <History size={16} /> Assignment history
+            </button>
+          )}
+        </section>
+      ) : (
+        <section className="space-y-2">
+          <h4 className={PANEL_SECTION}>Role</h4>
+          <div className="px-3.5 py-3 border border-slate-200 rounded-xl">
+            <span className={clsx('inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold',
+              staff.role === ROLES.SUPER_ADMIN ? 'bg-slate-800 text-white' : 'bg-purple-50 text-purple-700')}>
+              {ROLE_LABELS[staff.role] || staff.role}
+            </span>
+            {role && <p className="text-sm text-slate-600 mt-2">{role.desc}</p>}
+          </div>
+        </section>
+      )}
+
+      <section className="space-y-2">
+        <h4 className={PANEL_SECTION}>Account access</h4>
+        <div className="px-3.5 py-3 border border-slate-200 rounded-xl">
+          <p className="text-xs leading-relaxed text-slate-500">
+            {canChangeStaffEmail(staff)
+              ? 'They haven’t activated yet, so the sign-in email can still be corrected.'
+              : 'Activated with this address, so it can’t be changed here.'}
+            {' '}Reissue, cancel, deactivate and reactivate are on the ⋯ menu in the list.
+            {isMe && ' This is your own account, so it can’t be deactivated from here.'}
+          </p>
+        </div>
+      </section>
+    </div>
   )
 }
 
@@ -791,7 +874,8 @@ function staffMenu(staff, actions) {
       run: actions.reactivate,
     })
   }
-  items.push({ key: 'edit', icon: Pencil, label: 'Edit details', run: actions.edit })
+  items.push({ key: 'view', icon: UserRound, label: 'View account', hint: actions.viewHint, run: actions.view })
+  if (actions.edit) items.push({ key: 'edit', icon: Pencil, label: 'Edit details', run: actions.edit })
   if (actions.history) items.push({ key: 'history', icon: History, label: 'Assignment history', run: actions.history })
 
   const danger = []
@@ -854,12 +938,19 @@ export default function AccountManagement() {
   const [teacherState, setTeacherState] = useState('')
 
   const [showCreate, setShowCreate] = useState(false)
-  const [editTarget, setEditTarget] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleteMode, setDeleteMode] = useState('deactivate')   // which option the dialog opens on
   const [historyTarget, setHistoryTarget] = useState(null)
   const [cancelTarget, setCancelTarget] = useState(null)   // { kind, staff }
   const [created, setCreated] = useState(null)             // { kind, account }
+  // The account open in the right-hand panel, as the Parents tab does it:
+  // { kind: 'teacher' | 'admin', id, mode: 'view' | 'edit', back }. `back` is
+  // set when an edit was started from the view, so Cancel and Save return there
+  // instead of closing the panel.
+  const [panel, setPanel] = useState(null)
+  const openView = (kind, p) => setPanel({ kind, id: p.id, mode: 'view', back: false })
+  const openEdit = (kind, p) => setPanel({ kind, id: p.id, mode: 'edit', back: false })
+  const leaveEdit = () => setPanel(p => (p?.back ? { ...p, mode: 'view', back: false } : null))
 
   const fetch_ = useCallback(async () => {
     setLoading(true)
@@ -888,9 +979,9 @@ export default function AccountManagement() {
   }
 
   const handleEdit = async (data) => {
-    const res = await accountApi.updateTeacher(editTarget.id, data)
+    const res = await accountApi.updateTeacher(panel.id, data)
     announce(res, 'Account updated.')
-    setEditTarget(null)
+    leaveEdit()
     fetch_()
   }
 
@@ -920,7 +1011,6 @@ export default function AccountManagement() {
   const [adminSearch, setAdminSearch] = useState('')
   const [adminState, setAdminState] = useState('')
   const [showAdminCreate, setShowAdminCreate] = useState(false)
-  const [adminEditTarget, setAdminEditTarget] = useState(null)
   const [adminDeleteTarget, setAdminDeleteTarget] = useState(null)
   // Counted over every admin, not the search result: the warning in the invite
   // form states how many Super Admins VISTA has, whatever the list is showing.
@@ -962,9 +1052,9 @@ export default function AccountManagement() {
     fetchAdmins()
   }
   const handleEditAdmin = async (data) => {
-    const res = await accountApi.updateAdmin(adminEditTarget.id, data)
+    const res = await accountApi.updateAdmin(panel.id, data)
     announce(res, 'Admin account updated.')
-    setAdminEditTarget(null)
+    leaveEdit()
     fetchAdmins()
   }
   const handleDeleteAdmin = async () => {
@@ -1089,18 +1179,24 @@ export default function AccountManagement() {
                   {shownTeachers.map(t => {
                     const key = `teacher:${t.id}`
                     return (
-                      <tr key={t.id}>
+                      // The row opens the account panel, as on the Parents tab.
+                      // `!` because `.table-base tbody tr:hover` outranks a
+                      // bare `hover:bg-…` (see "Tables" in the dashboard CLAUDE.md).
+                      <tr key={t.id} className="hover:!bg-brand-50/60 cursor-pointer transition-colors"
+                        onClick={() => openView('teacher', t)}>
                         <td><PersonCell person={t} muted={staffAccessOf(t).id === 'deactivated'} /></td>
                         <td className="max-w-xs"><AssignmentTags assignments={t.assignments} advisory={t.advisory} /></td>
                         <td><AccessCell state={staffAccessOf(t)} detail={staffAccessDetail(t, { meId })} /></td>
                         <td>
-                          <RowActions editLabel={`Edit ${formatName(t)}`} onEdit={() => setEditTarget(t)}
+                          <RowActions editLabel={`Edit ${formatName(t)}`} onEdit={() => openEdit('teacher', t)}
                             menu={<RowMenu label={`More actions for ${formatName(t)}`}
                               open={menus.isOpen(key)} onToggle={menus.toggle(key)}
                               {...staffMenu(t, {
                                 reissue:    () => handleReissue('teacher', t),
                                 reactivate: () => handleReactivate(t),
-                                edit:       () => setEditTarget(t),
+                                view:       () => openView('teacher', t),
+                                viewHint:   'Contact details and assignments',
+                                edit:       () => openEdit('teacher', t),
                                 history:    () => setHistoryTarget(t),
                                 cancel:     () => setCancelTarget({ kind: 'teacher', staff: t }),
                                 deactivate: () => { setDeleteMode('deactivate'); setDeleteTarget(t) },
@@ -1148,7 +1244,8 @@ export default function AccountManagement() {
                     const key = `admin:${a.id}`
                     const isMe = a.id === meId
                     return (
-                      <tr key={a.id}>
+                      <tr key={a.id} className="hover:!bg-brand-50/60 cursor-pointer transition-colors"
+                        onClick={() => openView('admin', a)}>
                         <td>
                           <PersonCell person={a} tone="purple" muted={staffAccessOf(a).id === 'deactivated'}
                             suffix={isMe && <span className="ml-1.5 text-xs font-normal text-slate-500">(you)</span>} />
@@ -1161,13 +1258,16 @@ export default function AccountManagement() {
                         </td>
                         <td><AccessCell state={staffAccessOf(a)} detail={staffAccessDetail(a, { meId })} /></td>
                         <td>
-                          <RowActions editLabel={`Edit ${formatName(a)}`} onEdit={() => setAdminEditTarget(a)}
+                          <RowActions editLabel={`Edit ${formatName(a)}`} onEdit={isMe ? null : () => openEdit('admin', a)}
                             menu={<RowMenu label={`More actions for ${formatName(a)}`}
                               open={menus.isOpen(key)} onToggle={menus.toggle(key)}
                               {...staffMenu(a, {
                                 reissue:    () => handleReissue('admin', a),
                                 reactivate: () => handleReactivateAdmin(a),
-                                edit:       () => setAdminEditTarget(a),
+                                view:       () => openView('admin', a),
+                                viewHint:   'Contact details and role',
+                                // Not on your own row — your own details are Profile's.
+                                edit:       isMe ? null : () => openEdit('admin', a),
                                 cancel:     () => setCancelTarget({ kind: 'admin', staff: a }),
                                 // Never yourself — the API refuses it too.
                                 deactivate: isMe ? null : () => setAdminDeleteTarget(a),
@@ -1188,12 +1288,6 @@ export default function AccountManagement() {
         title={titled('Invite Admin', "They'll choose their own password when they activate the account.")} size="lg">
         <AdminForm mode="create" onSubmit={handleCreateAdmin} onClose={() => setShowAdminCreate(false)}
           superAdminCount={superAdminCount} />
-      </Modal>
-      <Modal open={!!adminEditTarget} onClose={() => setAdminEditTarget(null)}
-        title="Edit Admin" size="lg">
-        {adminEditTarget && (
-          <AdminForm mode="edit" initial={adminEditTarget} onSubmit={handleEditAdmin} onClose={() => setAdminEditTarget(null)} />
-        )}
       </Modal>
       <Modal open={!!adminDeleteTarget} onClose={() => setAdminDeleteTarget(null)}
         title="Deactivate Admin Account">
@@ -1223,11 +1317,30 @@ export default function AccountManagement() {
         <TeacherForm mode="create" onSubmit={handleCreate} onClose={() => setShowCreate(false)} />
       </Modal>
 
-      <Modal open={!!editTarget} onClose={() => setEditTarget(null)} title="Edit Teacher" size="lg">
-        {editTarget && (
-          <TeacherForm mode="edit" initial={editTarget} onSubmit={handleEdit} onClose={() => setEditTarget(null)} />
-        )}
-      </Modal>
+      {/* ── The account panel (view or edit), on the right ───── */}
+      {panel && (() => {
+        const isAdmin = panel.kind === 'admin'
+        const person = (isAdmin ? admins : teachers).find(x => x.id === panel.id)
+        const editing = panel.mode === 'edit'
+        return (
+          <AccountPanel open={!!person} onClose={() => setPanel(null)}
+            eyebrow={editing ? (isAdmin ? 'Edit Admin' : 'Edit Teacher') : (isAdmin ? ROLE_LABELS[person?.role] : 'Teacher')}
+            person={person} tone={isAdmin ? 'purple' : 'brand'}
+            suffix={person?.id === meId && <span className="ml-1.5 text-sm font-normal text-slate-500">(you)</span>}
+            state={person && staffAccessOf(person)}
+            detail={person && staffAccessDetail(person, { meId })}
+            // Not while a form is open, nor under the history dialog it can open.
+            closeOnEscape={!editing && !historyTarget}>
+            {person && (editing
+              ? (isAdmin
+                  ? <AdminForm key={person.id} mode="edit" initial={person} onSubmit={handleEditAdmin} onClose={leaveEdit} />
+                  : <TeacherForm key={person.id} mode="edit" initial={person} onSubmit={handleEdit} onClose={leaveEdit} />)
+              : <StaffDetails staff={person} kind={panel.kind} isMe={person.id === meId}
+                  onEdit={() => setPanel(p => ({ ...p, mode: 'edit', back: true }))}
+                  onHistory={isAdmin ? null : () => setHistoryTarget(person)} />)}
+          </AccountPanel>
+        )
+      })()}
 
       {/* ── Invitation created (staff; Parents shows its own) ── */}
       <Modal open={!!created} onClose={() => setCreated(null)}
