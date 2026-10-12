@@ -4,7 +4,29 @@ Entry point `main.py`. Port 8000. Role-agnostic — all access control lives in 
 
 ## Routers
 
-- `/analyze` — VADER sentiment analysis.
+- `/analyze` — VADER sentiment analysis of teacher behaviour observations. Stock VADER
+  was built on social-media text and scored most classroom writing as exactly 0 —
+  "follows instructions", "cooperates", and even "bullies" and "refuses" (it does no
+  stemming; only "bully" and "refused" are in its lexicon). `services/behavior_lexicon.py`
+  fixes that without replacing VADER: `install()` adds school vocabulary (every
+  inflection listed, VADER's -4..+4 scale) plus frequency boosters, and `rewrite()`
+  turns phrases VADER misreads into ones its negation handles — "refuses to X",
+  "lacks X", "needs to X", "stopped Xing", "without help". The rewritten text is only
+  scored, never stored or returned. Score through `polarity()` in `routers/sentiment.py`,
+  not `analyzer.polarity_scores()` directly, or the rewrites are skipped. The label's
+  neutral band is ±0.1 (was ±0.2, where a single mild word lands); risk and class-health
+  read the raw compound, so only the label depends on it. Leave context-dependent words
+  out of the lexicon (the module docstring lists them) — a teacher override is the
+  answer for those, not a guess.
+
+  **After changing the lexicon, the rewrites or the neutral band, run
+  `scripts/rescore_behavior.py`** (dry run; `--apply` to write). Saved logs keep the
+  reading they got on the day, so without it old and new logs are scored by different
+  rules. It imports `polarity()` and `compound_to_sentiment()` rather than calling the
+  endpoint, so the result is exactly what re-saving would give, and needs neither
+  FastAPI nor Node running. It skips every log with `sentiment_overridden = TRUE` —
+  label, score and the recorded suggestion all stay as the teacher left them — and
+  fills in logs saved while the analyzer was down (NULL `ai_sentiment`).
 - `/predict` — grade prediction via Linear Regression. The forecast wraps at the **school year's own period count** (`SELECT period_model FROM school_years WHERE is_active`), not a hardcoded 4 — DepEd moved to three terms in DO 009, s. 2026.
 - `/classify` — risk assessment. `POST /classify/risk` classifies one student and persists the row to `risk_assessments` (audit trail). `GET /classify/risk/all` is **live-computed**: it aggregates attendance (last 30d) / grades (latest quarter) / behavior (this month) / ECE competency (latest quarter in active SY) directly from the source tables for every active student — it does NOT read `risk_assessments`. That means every active student appears immediately without needing a manual classify call. Response includes `attendance_factor`, `academic_factor`, `behavioral_factor`, `ece_competency_factor`, and a derived `top_factor`. Competency is the 4th factor, computed from the latest-quarter rating average.
 

@@ -30,7 +30,7 @@ npm run dev
 | `/students/:id` | Student profile + AI insights | All |
 | `/attendance` | Daily attendance marking | All (save: admin/teacher) |
 | `/grades` | Grade viewer | All |
-| `/behavior` | Teachers: class roster + per-learner observation timeline, log with live tone preview. Admins: school-wide read-only log | Admin, Teacher (log: teacher) |
+| `/behavior` | Teachers: class roster + per-learner observation timeline, log with a live tone suggestion the teacher can change. Admins: school-wide read-only log | Admin, Teacher (log: teacher) |
 | `/score-entry` | Score items + raw score entry per subject | Teacher |
 | `/my-class` | An adviser's read-only view of the section they advise | Teacher (adviser) |
 | `/ece-competency` | Competency tracker for descriptively-assessed levels | Admin (read-only), Teacher |

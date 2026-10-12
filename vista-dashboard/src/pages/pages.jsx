@@ -284,7 +284,7 @@ export function Attendance() {
 // ============================================================
 import { behaviorApi, aiApi } from '../api/client'
 import { SentimentBadge, Modal, StatCard } from '../components/UI'
-import { Heart, Plus as PlusIcon, Pencil, Trash2, Smile, Meh, Frown, X as XIcon, Users, Activity, Calendar, Clock, Check, ChevronDown, ChevronLeft, ChevronRight, ArrowUpRight, Info, Eye } from 'lucide-react'
+import { Heart, Plus as PlusIcon, Pencil, Trash2, Smile, Meh, Frown, X as XIcon, Users, Activity, Calendar, Clock, Check, ChevronDown, ChevronLeft, ChevronRight, ArrowUpRight, Eye } from 'lucide-react'
 import { Link as RouterLink } from 'react-router-dom'
 // Both lived under the Grades page's imports before it moved to Grades.jsx.
 import { BookOpen } from 'lucide-react'
@@ -314,19 +314,33 @@ const SENTIMENT_TONE = {
   Negative: { badge: 'bg-red-50 text-red-700',         dot: 'bg-red-500',     text: 'text-red-700',     icon: Frown },
 }
 
-const EMPTY_OBSERVATION = { observation: '', category: 'Social', observed_at: '' }
+// `sentiment` is the tone the teacher picked; '' means "use VISTA's suggestion".
+const EMPTY_OBSERVATION = { observation: '', category: 'Social', observed_at: '', sentiment: '' }
 
 const shortDate = (value) => {
   const d = new Date(value)
   return format(d, d.getFullYear() === new Date().getFullYear() ? 'MMM d' : 'MMM d, yyyy')
 }
 
-function ToneBadge({ sentiment }) {
-  const tone = SENTIMENT_TONE[sentiment] || SENTIMENT_TONE.Neutral
-  return (
+// Pass `log` for a saved observation: a tone the teacher picked over VISTA's
+// suggestion is marked, so nobody reads it as the analyzer's call.
+function ToneBadge({ sentiment, log }) {
+  const label = log ? log.sentiment : sentiment
+  const tone = SENTIMENT_TONE[label] || SENTIMENT_TONE.Neutral
+  const badge = (
     <span className={clsx('inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium', tone.badge)}>
       <span className={clsx('w-1.5 h-1.5 rounded-full', tone.dot)} />
-      {sentiment || 'Neutral'}
+      {label || 'Neutral'}
+    </span>
+  )
+  if (!log?.sentiment_overridden) return badge
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {badge}
+      <span className="text-[11px] font-medium text-slate-400"
+        title={log.ai_sentiment ? `VISTA suggested ${log.ai_sentiment}` : 'VISTA could not check the tone when this was saved'}>
+        Set by teacher
+      </span>
     </span>
   )
 }
@@ -469,7 +483,7 @@ function TimelineEntry({ log, canEdit, onEdit, onDelete }) {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <CategoryPill category={log.category} />
-            <ToneBadge sentiment={log.sentiment} />
+            <ToneBadge log={log} />
           </div>
           {canEdit ? (
             <div className="flex items-center gap-0.5 -mr-2">
@@ -492,37 +506,63 @@ function TimelineEntry({ log, canEdit, onEdit, onDelete }) {
   )
 }
 
-function TonePreview({ tone }) {
-  let body
-  if (tone.sentiment) {
-    const t = SENTIMENT_TONE[tone.sentiment] || SENTIMENT_TONE.Neutral
-    const Icon = t.icon
-    body = (
-      <div className={clsx('flex items-start gap-3 px-3.5 py-3 rounded-xl', t.badge)}>
-        <Icon size={18} className="flex-shrink-0 mt-0.5" />
-        <div>
-          <p className="text-sm font-semibold">
-            This reads as {tone.sentiment}{tone.status === 'checking' ? '…' : ''}
-          </p>
-          <p className="text-xs mt-0.5">VISTA picks up the tone from your wording as you type. You don't need to set it.</p>
-        </div>
-      </div>
-    )
+// VISTA suggests the tone from the wording; the teacher can pick another when it
+// misreads what happened. `chosen` is '' while following the suggestion. Picking
+// the suggested tone is agreement — the API does not record it as a change.
+function ToneChooser({ tone, chosen, onChoose }) {
+  const suggested = tone.sentiment || null
+  const selected = chosen || suggested
+  const overriding = chosen && chosen !== suggested
+
+  let note
+  if (overriding) {
+    note = suggested
+      ? <>You chose <b>{chosen}</b>. VISTA suggested {suggested}.</>
+      : <>You chose <b>{chosen}</b>.</>
+  } else if (tone.status === 'checking') {
+    note = 'Checking the tone…'
+  } else if (suggested) {
+    note = "Suggested from your wording. Pick another if it doesn't match what happened."
+  } else if (tone.status === 'unavailable') {
+    note = "The tone couldn't be checked right now. Pick one, or VISTA will check it when you save."
   } else {
-    const title = tone.status === 'checking' ? 'Checking the tone…'
-      : tone.status === 'unavailable' ? 'The tone will be checked when you save'
-      : 'The tone is detected for you'
-    body = (
-      <div className="flex items-start gap-3 px-3.5 py-3 rounded-xl bg-slate-50 text-slate-600">
-        <Info size={18} className="flex-shrink-0 mt-0.5" />
-        <div>
-          <p className="text-sm font-semibold">{title}</p>
-          <p className="text-xs mt-0.5">VISTA reads your wording and marks the observation positive, neutral or negative. You don't need to set it.</p>
-        </div>
-      </div>
-    )
+    note = 'VISTA suggests a tone from your wording as you type.'
   }
-  return <div aria-live="polite">{body}</div>
+
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-medium text-slate-700">How does it read?</p>
+      <div className="grid grid-cols-3 gap-2">
+        {SENTIMENTS.map(s => {
+          const t = SENTIMENT_TONE[s]
+          const Icon = t.icon
+          const on = selected === s
+          return (
+            <button key={s} type="button" aria-pressed={on} onClick={() => onChoose(s)}
+              className={clsx(
+                'relative flex flex-col items-center gap-1 px-2 py-2.5 rounded-xl border text-sm font-medium transition-colors',
+                on ? clsx(t.badge, 'border-current ring-1 ring-current') : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              )}>
+              <Icon size={18} />
+              {s}
+              {suggested === s && (
+                <span className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Suggested</span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1" aria-live="polite">
+        <p className="text-xs text-slate-500">{note}</p>
+        {overriding && (
+          <button type="button" onClick={() => onChoose('')}
+            className="text-xs font-medium text-brand-600 hover:text-brand-700">
+            {suggested ? 'Use suggestion' : 'Clear'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function TeacherBehavior() {
@@ -692,8 +732,13 @@ function TeacherBehavior() {
 
   const openEdit = (b) => {
     setEditingId(b.id)
-    setForm({ observation: b.observation, category: b.category || 'Social', observed_at: '' })
-    setTone(b.sentiment ? { status: 'done', sentiment: b.sentiment } : { status: 'idle' })
+    // A tone the teacher picked opens still picked; otherwise it follows VISTA.
+    // The suggestion shown is VISTA's own reading, never the saved override.
+    setForm({
+      observation: b.observation, category: b.category || 'Social', observed_at: '',
+      sentiment: b.sentiment_overridden ? b.sentiment : '',
+    })
+    setTone(b.ai_sentiment ? { status: 'done', sentiment: b.ai_sentiment } : { status: 'idle' })
     setShowLog(true)
   }
 
@@ -715,10 +760,12 @@ function TeacherBehavior() {
       toast.error('Pick the date and time it happened.')
       return
     }
+    // Sent only when the teacher picked one; left out, the API uses VISTA's reading.
+    const chosen = form.sentiment ? { sentiment: form.sentiment } : {}
     setSubmitting(true)
     try {
       if (editingId) {
-        await behaviorApi.update(editingId, { observation, category: form.category })
+        await behaviorApi.update(editingId, { observation, category: form.category, ...chosen })
         toast.success('Observation updated.')
       } else {
         await behaviorApi.log({
@@ -726,6 +773,7 @@ function TeacherBehavior() {
           observation,
           category: form.category,
           observed_at: whenMode === 'earlier' ? form.observed_at : '',
+          ...chosen,
         })
         toast.success('Observation saved.')
       }
@@ -1015,7 +1063,8 @@ function TeacherBehavior() {
             </div>
           )}
 
-          <TonePreview tone={tone} />
+          <ToneChooser tone={tone} chosen={form.sentiment}
+            onChoose={s => setForm(p => ({ ...p, sentiment: s }))} />
 
           <div className="flex gap-3 pt-4 border-t border-slate-100">
             <button type="button" onClick={closeLog} className="btn-secondary flex-1 justify-center">Cancel</button>
@@ -1416,7 +1465,7 @@ function AdminBehavior() {
                           <div className="space-y-1.5">
                             <div className="flex flex-wrap items-center gap-2">
                               <CategoryPill category={b.category} />
-                              <ToneBadge sentiment={b.sentiment} />
+                              <ToneBadge log={b} />
                             </div>
                             <p className="text-sm leading-[22px] text-slate-600 line-clamp-2">{b.observation}</p>
                           </div>
@@ -1488,7 +1537,7 @@ function AdminBehavior() {
             <div className="px-4 py-3.5 rounded-xl bg-slate-50 space-y-2.5">
               <div className="flex flex-wrap items-center gap-2">
                 <CategoryPill category={detailLog.category} />
-                <ToneBadge sentiment={detailLog.sentiment} />
+                <ToneBadge log={detailLog} />
               </div>
               <p className="text-[15px] leading-6 text-slate-800 whitespace-pre-wrap select-text">{detailLog.observation}</p>
             </div>
@@ -1535,7 +1584,7 @@ function AdminBehavior() {
                           <p className="w-14 flex-shrink-0 text-xs font-semibold leading-5 text-slate-700">{shortDate(o.observed_at)}</p>
                           <div className="flex-1 min-w-0 space-y-1">
                             <div className="flex items-center justify-between gap-2">
-                              <ToneBadge sentiment={o.sentiment} />
+                              <ToneBadge log={o} />
                               <span className="text-xs text-slate-400 truncate">{o.teacher_name}</span>
                             </div>
                             <p className="text-[13px] leading-5 text-slate-600 truncate">{o.observation}</p>

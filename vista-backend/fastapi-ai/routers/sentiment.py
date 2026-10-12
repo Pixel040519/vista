@@ -3,8 +3,16 @@ from pydantic import BaseModel
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from typing import Optional
 
+from services import behavior_lexicon
+
 router = APIRouter()
 analyzer = SentimentIntensityAnalyzer()
+behavior_lexicon.install(analyzer)
+
+
+def polarity(text: str) -> dict:
+    """VADER scores for an observation, read with the school-behaviour vocabulary."""
+    return analyzer.polarity_scores(behavior_lexicon.rewrite(text))
 
 # ─── Pydantic Models ───────────────────────────────────────────
 class SentimentRequest(BaseModel):
@@ -63,12 +71,20 @@ def extract_tags(text: str) -> list[str]:
 
 
 def compound_to_sentiment(compound: float) -> tuple[str, str]:
-    """Convert VADER compound score to label and confidence."""
+    """
+    Convert VADER compound score to label and confidence.
+
+    The neutral band is +/-0.1. It was +/-0.2, which is where a single mild word
+    lands ("was late" scores -0.20), so those were labelled by a coin flip. VADER's
+    own suggestion is +/-0.05; 0.1 keeps a margin for one weak word in an
+    otherwise neutral note. Only the label moves: risk and class-health read the
+    raw compound score.
+    """
     if compound >= 0.6:
         return "Positive", "High"
-    elif compound >= 0.2:
+    elif compound >= 0.1:
         return "Positive", "Medium"
-    elif compound > -0.2:
+    elif compound > -0.1:
         return "Neutral", "Medium"
     elif compound > -0.6:
         return "Negative", "Medium"
@@ -86,7 +102,7 @@ async def analyze_sentiment(request: SentimentRequest):
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
 
-    scores = analyzer.polarity_scores(request.text)
+    scores = polarity(request.text)
     compound = scores["compound"]
     sentiment, confidence = compound_to_sentiment(compound)
     tags = extract_tags(request.text)
@@ -115,7 +131,7 @@ async def analyze_sentiment_batch(request: BatchSentimentRequest):
     """Analyze multiple observations at once."""
     results = []
     for text in request.texts:
-        scores = analyzer.polarity_scores(text)
+        scores = polarity(text)
         compound = scores["compound"]
         sentiment, confidence = compound_to_sentiment(compound)
         results.append({

@@ -48,7 +48,7 @@ Teacher-scoped rule-based signals computed entirely in Node. Metrics:
 - **Academic** — latest-quarter grade per subject, averaged. <75 urgent, 75–79.9 watch, ≥80 ok; `insufficient` when no rows. Non-ECE students only.
 - **Competency** — descriptively-assessed students only, replaces Academic. Latest-quarter rating distribution via `bandCompetency(dist, totalSkills, scaleId)`, which delegates to `bandDistribution()` in `utils/grading.js`. The rules are **banded by rank, not by letter**: what was hardcoded as "NA" is the scale's *worst* level and "F" its *second worst* — `insufficient` when completion <30% or no ratings, `urgent` when worst% >30%, `watch` when any worst or second-worst% >40%, else `ok`. For E/G/F/NA this is byte-identical to the previous implementation (verified across 14,406 combinations).
 - **Attendance** — last 30 days in teacher's subjects. <0.70 urgent, 0.70–0.849 watch, ≥0.85 ok; `insufficient` when total <5.
-- **Behavior** — teacher's own `behavior_logs` this month. avg_sentiment <-0.30 urgent, -0.30–-0.001 watch, ≥0 ok; `insufficient` when log_count <2.
+- **Behavior** — teacher's own `behavior_logs` this month, averaging `sentiment_score` (so a teacher's tone override counts). avg_sentiment <-0.30 urgent, -0.30–-0.001 watch, ≥0 ok; `insufficient` when log_count <2.
 
 Overall band = worst of non-insufficient metrics. For ECE students competency is included in the overall-band calc instead of academic (academic stays `insufficient`). `top_concern` skips the non-applicable metric per student (`academic` for ECE, `competency` for non-ECE). Shared band helpers `bandAcademic` / `bandCompetency` / `bandAttendance` / `bandBehavior` / `overallBand` live at file scope in `ai.routes.js` so single-student, bulk, and ECE endpoints stay in sync.
 
@@ -61,6 +61,18 @@ Competency-based equivalent of `/class-health`. Replaces the academic tile with 
 ## Behavior logs (`crud.routes.js`)
 
 Writes are **teacher-only**: `POST/PUT/DELETE /api/behavior[/:id]` use `authorize('teacher')`. PUT/DELETE WHERE clauses include `teacher_id = req.user.id`. POST validates that `student_id` is in one of the teacher's active-SY `teacher_assignments` sections via the file-scope `teacherOwnsStudent` helper — 403s otherwise.
+
+**The tone is VADER's suggestion unless the teacher picks one.** POST and PUT take an optional
+`sentiment` (`Positive` | `Neutral` | `Negative`, 400 otherwise), and both go through
+`resolveSentiment()`, the only writer of the five tone columns. The text is always sent to
+FastAPI, and VADER's answer always lands in `ai_sentiment` / `ai_sentiment_score`. A chosen tone
+that **differs** from it wins: `sentiment_overridden = TRUE` and the score comes from
+`OVERRIDE_SCORE` (+0.5 / 0 / −0.5), because risk and class health average the score, not the
+label. Choosing VADER's own label is agreement, not an override, and keeps VADER's score. With
+FastAPI unreachable the AI columns stay NULL — that is how a never-analysed row is found — and
+the old Neutral/0 fallback applies unless the teacher chose. PUT re-reads the text every time and
+keeps a choice only if it is **sent again**; the edit form resends it when the log was
+overridden, so omitting `sentiment` deliberately hands the tone back to VADER.
 
 `GET /api/behavior` branches by role:
 - Teachers pass `student_id` and see their own logs — plus every teacher's logs for the active year when they advise the learner (see "The three widened reads"). If the student isn't in their classes, returns `{logs:[], total:0}` so `StudentDetail` doesn't break.

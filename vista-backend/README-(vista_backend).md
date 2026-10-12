@@ -168,8 +168,8 @@ before changing any of them.
 | GET | /api/behavior | Get behavior logs (teachers/parents pass `student_id`; admins may filter by grade level, section, category, sentiment, date range, `school_year_id`) | All |
 | GET | /api/behavior/summary | Positive / neutral / negative counts for the same filters | Admin |
 | GET | /api/behavior/class-roster?grade_level=&section= | Class roster with each learner's observation counts | Teacher |
-| POST | /api/behavior | Log observation (auto-sentiment) | Teacher |
-| PUT | /api/behavior/:id | Edit own observation | Teacher |
+| POST | /api/behavior | Log observation. Tone is suggested by VADER; an optional `sentiment` (Positive / Neutral / Negative) overrides it | Teacher |
+| PUT | /api/behavior/:id | Edit own observation (re-scored; send `sentiment` again to keep an override) | Teacher |
 | DELETE | /api/behavior/:id | Delete own observation | Teacher |
 
 ### Curriculum Endpoints (subjects and sections)
@@ -255,7 +255,10 @@ vista-backend/
     ├── main.py                 ← Entry point
     ├── requirements.txt
     ├── services/
-    │   └── db.py               ← SQLAlchemy async session
+    │   ├── db.py               ← SQLAlchemy async session
+    │   └── behavior_lexicon.py ← School-behaviour vocabulary + phrase rules for VADER
+    ├── scripts/
+    │   └── rescore_behavior.py ← Re-score saved behavior logs (dry run; --apply)
     └── routers/
         ├── sentiment.py        ← VADER sentiment analysis
         ├── prediction.py       ← Linear Regression grade forecast

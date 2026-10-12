@@ -128,6 +128,12 @@ function BehaviorEntry({ log, mine }) {
               {log.category || 'Uncategorized'}
             </span>
             <ToneBadge sentiment={log.sentiment} />
+            {log.sentiment_overridden && (
+              <span className="text-[11px] font-medium text-slate-400"
+                title={log.ai_sentiment ? `VISTA suggested ${log.ai_sentiment}` : 'VISTA could not check the tone when this was saved'}>
+                Set by teacher
+              </span>
+            )}
           </div>
           <span className="text-xs text-slate-400">
             {mine ? 'Logged by you' : log.teacher_name ? `By ${log.teacher_name}` : ''}

@@ -674,17 +674,46 @@ const getActiveSYLabel = async () => {
   return r.rows[0]?.label || null;
 };
 
+// VADER's reading of an observation, or null when the analyzer is unreachable.
 const analyzeSentiment = async (text) => {
   try {
     const r = await axios.post(
       `${process.env.AI_SERVICE_URL || 'http://localhost:8000'}/analyze/sentiment`,
       { text }
     );
-    return { sentiment: r.data.sentiment, sentiment_score: r.data.score };
+    return { sentiment: r.data.sentiment, score: r.data.score };
   } catch (aiErr) {
     console.warn('AI sentiment service unavailable, skipping:', aiErr.message);
-    return { sentiment: 'Neutral', sentiment_score: 0 };
+    return null;
   }
+};
+
+const SENTIMENTS = ['Positive', 'Neutral', 'Negative'];
+
+// The score a teacher's own label carries. Risk and class health average
+// `sentiment_score`, not the label, so an override that left VADER's number in
+// place would change what the log says and nothing the log does.
+const OVERRIDE_SCORE = { Positive: 0.5, Neutral: 0, Negative: -0.5 };
+
+// The tone columns for a log, from its text and the tone the teacher picked
+// (`chosen`, optional). Choosing VADER's own label is agreement, not an
+// override, so the log keeps VADER's finer-grained score.
+const resolveSentiment = async (observation, chosen) => {
+  if (chosen != null && chosen !== '' && !SENTIMENTS.includes(chosen)) {
+    throw new AppError('sentiment must be Positive, Neutral or Negative.', 400);
+  }
+  const ai = await analyzeSentiment(observation);
+  const aiCols = { ai_sentiment: ai?.sentiment ?? null, ai_sentiment_score: ai?.score ?? null };
+
+  if (chosen && chosen !== ai?.sentiment) {
+    return { sentiment: chosen, sentiment_score: OVERRIDE_SCORE[chosen], ...aiCols, sentiment_overridden: true };
+  }
+  if (ai) {
+    return { sentiment: ai.sentiment, sentiment_score: ai.score, ...aiCols, sentiment_overridden: false };
+  }
+  // Unreachable and nothing chosen: the old Neutral fallback, with the AI columns
+  // left NULL so the row can still be found and scored later.
+  return { sentiment: 'Neutral', sentiment_score: 0, ...aiCols, sentiment_overridden: false };
 };
 
 // Verify the given student is in one of the teacher's active-SY classes.
@@ -934,43 +963,48 @@ behaviorRouter.post('/', authorize('teacher'), async (req, res, next) => {
     const owns = await teacherOwnsStudent(req.user.id, student_id);
     if (!owns) throw new AppError('Student is not in one of your classes.', 403);
 
-    const { sentiment, sentiment_score } = await analyzeSentiment(observation);
+    const tone = await resolveSentiment(observation, req.body.sentiment);
 
     const result = await query(
       `INSERT INTO behavior_logs
          (student_id, teacher_id, observation, category, sentiment, sentiment_score, observed_at,
-          school_year_id)
+          school_year_id, ai_sentiment, ai_sentiment_score, sentiment_overridden)
        VALUES ($1, $2, $3, $4, $5, $6, $7,
-          (SELECT id FROM school_years WHERE is_active = TRUE LIMIT 1))
+          (SELECT id FROM school_years WHERE is_active = TRUE LIMIT 1), $8, $9, $10)
        RETURNING *`,
-      [student_id, req.user.id, observation, category, sentiment, sentiment_score,
-       observed_at || new Date()]
+      [student_id, req.user.id, observation, category, tone.sentiment, tone.sentiment_score,
+       observed_at || new Date(), tone.ai_sentiment, tone.ai_sentiment_score, tone.sentiment_overridden]
     );
 
     res.status(201).json({
       message: 'Behavior logged.',
       log: result.rows[0],
-      ai: { sentiment, sentiment_score }
+      ai: { sentiment: tone.ai_sentiment, sentiment_score: tone.ai_sentiment_score }
     });
   } catch (err) {
     next(err);
   }
 });
 
-// PUT /api/behavior/:id — Teacher updates their own log.
+// PUT /api/behavior/:id — Teacher updates their own log. The text is re-read by
+// VADER every time; a tone the teacher picked is kept only if it is sent again,
+// so omitting `sentiment` hands the tone back to VADER.
 behaviorRouter.put('/:id', authorize('teacher'), async (req, res, next) => {
   try {
     const { observation, category } = req.body;
     if (!observation) throw new AppError('observation is required.', 400);
 
-    const { sentiment, sentiment_score } = await analyzeSentiment(observation);
+    const tone = await resolveSentiment(observation, req.body.sentiment);
 
     const result = await query(
       `UPDATE behavior_logs
-          SET observation=$1, category=$2, sentiment=$3, sentiment_score=$4
-        WHERE id=$5 AND teacher_id=$6
+          SET observation=$1, category=$2, sentiment=$3, sentiment_score=$4,
+              ai_sentiment=$5, ai_sentiment_score=$6, sentiment_overridden=$7
+        WHERE id=$8 AND teacher_id=$9
         RETURNING *`,
-      [observation, category || 'Social', sentiment, sentiment_score, req.params.id, req.user.id]
+      [observation, category || 'Social', tone.sentiment, tone.sentiment_score,
+       tone.ai_sentiment, tone.ai_sentiment_score, tone.sentiment_overridden,
+       req.params.id, req.user.id]
     );
     if (!result.rows.length) throw new AppError('Behavior log not found.', 404);
 
