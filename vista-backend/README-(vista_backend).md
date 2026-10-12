@@ -267,7 +267,7 @@ vista-backend/
 
 ## Next Steps
 1. ✅ Backend & API — **Done**
-2. ⬜ React.js Web Dashboard
-3. ⬜ Flutter Mobile App
-4. ⬜ Firebase Push Notifications
+2. ✅ React.js Web Dashboard — **Done**
+3. ✅ Flutter Mobile App — **Done** (parent app, Android)
+4. ✅ Firebase Push Notifications — **Done** (Android; iOS not provisioned)
 5. ⬜ Cloud Deployment (AWS/GCP)

@@ -66,7 +66,19 @@ Parent app must render a dedicated screen showing the reason and a "Contact scho
 
 ## Bundle identifiers
 
-- iOS + Android: `ph.nrys.vista.parent`.
+- Android: `com.example.vista_parent` (`applicationId` and `namespace` in `android/app/build.gradle.kts`).
+- iOS: `com.example.vistaParent` (`PRODUCT_BUNDLE_IDENTIFIER`).
+- The intended release identifier is `ph.nrys.vista.parent`, but nothing uses it yet. Changing it is **not** a one-line edit: the Firebase Android app is registered under `com.example.vista_parent`, and `google-services.json` only matches that name, so a renamed build fails at Gradle time until the new name is added as a second Android app in the Firebase console and its `google-services.json` replaces the current one.
+
+## Firebase (FCM push)
+
+Firebase is used for **one thing**: push notifications for school announcements. Project `vista-7ae69`. Nothing else Firebase offers (Auth, Firestore, Hosting, Storage) is used — sign-in is VISTA's own JWT.
+
+- **Android is provisioned.** `vista_parent/android/app/google-services.json` is the console's config for `com.example.vista_parent`, and the Google Services Gradle plugin (`com.google.gms.google-services`, declared `apply false` in `android/settings.gradle.kts`, applied in `android/app/build.gradle.kts`) compiles it into resources. `Firebase.initializeApp()` in `fcm.dart` is called **without options** and reads those resources — there is no `firebase_options.dart` and no FlutterFire CLI step. Remove either the file or the plugin and init throws.
+- **The file is committed on purpose.** It identifies the app to Firebase; it is not a credential. The credential is the server's service-account key, which lives only in `vista-backend/.env` (see the root `CLAUDE.md`).
+- **iOS is not provisioned** — no `GoogleService-Info.plist`, no APNs key. It needs a paid Apple Developer account and a Mac.
+- **A build without Firebase still runs.** `main.dart` wraps `setupFcm()` in a try/catch, so a missing or broken config just means no push; nothing tells you, so an absent notification on a fresh checkout is worth checking here first.
+- **A reinstall is needed after changing the config** — hot reload does not pick up Gradle resources. The device token is registered with `POST /api/devices/register` only after login **and** the notification-permission grant (Android 13+ prompts at runtime), so a denied prompt means that device is never sent anything.
 
 ## Where parents are told about the app
 
