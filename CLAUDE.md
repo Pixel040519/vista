@@ -61,6 +61,18 @@ PYTHONIOENCODING=utf-8 venv/Scripts/uvicorn main:app --reload --port 8000
 ```
 > The venv must be at `vista-backend/fastapi-ai/venv/` — recreate it at that path with `python -m venv venv` if it lives elsewhere. Always set `PYTHONIOENCODING=utf-8` on Windows to avoid emoji encoding errors in startup logs.
 
+The risk tier and the grade forecast come from **trained models** (Naive Bayes and Linear
+Regression) that ship in `fastapi-ai/models/`, so nothing needs training to run. They were
+trained on a **synthetic** school — there is no real data yet — and every accuracy figure is
+about that synthetic data. Retrain after changing the generator or the model inputs; see
+"Trained models" in `vista-backend/fastapi-ai/CLAUDE.md`:
+```bash
+cd vista-backend/fastapi-ai
+PYTHONIOENCODING=utf-8 venv/Scripts/python scripts/generate_synthetic.py   # data/synthetic/ (gitignored)
+PYTHONIOENCODING=utf-8 venv/Scripts/python scripts/train_models.py         # writes models/
+cd ../node-api && node scripts/seedSyntheticStudents.js                     # demo learners: dry run, --apply, --remove --apply
+```
+
 ## Environment Setup
 
 Copy `vista-backend/.env.example` to **`vista-backend/.env`** — not `node-api/.env`.
@@ -127,7 +139,7 @@ Key tables:
   learner's attendance that same day (which knows its year authoritatively) and then, for the
   rest, from the date — leaving NULL where neither could answer. NULL counts for no year and
   Student Detail groups those logs under "No school year recorded".
-- `risk_assessments` — AI risk tier (Stable/Moderate/High). Factor columns `attendance_factor`/`academic_factor`/`behavioral_factor`/`ece_competency_factor` are `DECIMAL(5,4)`. Three are 0–1 (normalize before insert, e.g. avg_grade 92 → 0.92); **`behavioral_factor` is signed (−1 to +1)**: the average `behavior_logs.sentiment_score` — VADER's compound, or the label's +0.5 / 0 / −0.5 where a teacher overrode the tone — and the column is wide enough to hold negatives; FastAPI persists it verbatim from `behavioral_score`. `ece_competency_factor` is populated for **descriptively-assessed** learners from their latest-quarter rating average, weighted per the record's own `rating_scale` (E/G/F/NA still gives E=1.0 / G=0.75 / F=0.5 / NA=0.25). FastAPI follows the data rather than a grade list — a numeric learner has no competency records, so the factor stays NULL.
+- `risk_assessments` — AI risk tier (Stable/Moderate/High). Factor columns `attendance_factor`/`academic_factor`/`behavioral_factor`/`ece_competency_factor` are `DECIMAL(5,4)`. Three are 0–1 (normalize before insert, e.g. avg_grade 92 → 0.92); **`behavioral_factor` is signed (−1 to +1)**: the average `behavior_logs.sentiment_score` — VADER's compound, or the label's +0.5 / 0 / −0.5 where a teacher overrode the tone — and the column is wide enough to hold negatives; FastAPI persists it verbatim from `behavioral_score`. `ece_competency_factor` is populated for **descriptively-assessed** learners from their latest-quarter rating average, weighted per the record's own `rating_scale` (E/G/F/NA still gives E=1.0 / G=0.75 / F=0.5 / NA=0.25). FastAPI follows the data rather than a grade list — a numeric learner has no competency records, so the factor stays NULL. `academic_factor` is the average of each learning area's **latest** grade in the **active** school year, ÷ 100. `model_version` says what decided the tier: `nb-synth-v2` (the trained Naive Bayes model) or `rule-v1.1` (the rule fallback); rows from before the model say `rule-v1.1` too. Rows are written **only** by `POST /classify/risk` — i.e. whenever an admin opens a learner's AI Insights tab — so the table is an audit trail of those views, not a current reading: the Risk Overview and admin dashboard compute live via `/classify/risk/all`, while the parent app shows the newest stored row (see `vista-mobile/CLAUDE.md`).
 - `academic_predictions` — grade forecasts with confidence scores.
 - `school_years` — SY management via `is_active` (one) + `is_upcoming` (many). No `is_current` column. `period_model` (`'4Q'` | `'3T'`) and `grading_policy` (`'DO8_2015'` | `'DO15_2026'` | `'ZERO_BASED'`) declare **how that year is graded** — see "Grading periods & transmutation" below.
 - `sections` — class sections per grade level + school year. Like subjects, a name is unique within its grade level and year **ignoring case and spacing** (`sections_sy_grade_name_ci_unique`, active rows). `adviser_id` (UUID, FK `users.id`, `ON DELETE SET NULL`) is the **class adviser** — the teacher responsible for the section as a whole, as distinct from the per-subject rows in `teacher_assignments`. See "Class advisers" below.

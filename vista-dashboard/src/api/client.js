@@ -189,8 +189,11 @@ export const notificationApi = {
 export const aiApi = {
   dashboard:        ()    => api.get('/ai/dashboard-summary'),
   teacherDashboard: ()    => api.get('/ai/teacher-dashboard'),
-  predict:     (data)    => api.post('/ai/predict-performance', data),
-  risk:        (data)    => api.post('/ai/risk-assessment', data),
+  // Both silent: Student Detail is their only caller and renders each outcome
+  // inline. The forecast answers 404 for a learner with no grades yet — an
+  // ordinary state that page shows as "nothing to forecast", not a failure.
+  predict:     (data)    => api.post('/ai/predict-performance', data, { silent: true }),
+  risk:        (data)    => api.post('/ai/risk-assessment', data, { silent: true }),
   riskAll:     ()        => api.get('/ai/risk-all'),
   // Silent: Behavior's live tone preview fires while a teacher types, and says
   // so inline when the analyzer is unavailable rather than toasting each pause.

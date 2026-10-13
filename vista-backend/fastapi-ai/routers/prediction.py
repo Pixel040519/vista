@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import numpy as np
@@ -8,7 +8,9 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 from typing import Optional
 import logging
+from datetime import datetime, timedelta
 
+from ml import grade_model
 from services.db import get_db
 
 router = APIRouter()
@@ -26,6 +28,7 @@ class QuarterPrediction(BaseModel):
     predicted_grade: float
     confidence: float
     trend: str                           # Improving, Declining, Stable
+    margin: Optional[float] = None       # typical miss in grade points (trained model only)
 
 
 class SubjectPrediction(BaseModel):
@@ -38,16 +41,24 @@ class SubjectPrediction(BaseModel):
 
 
 class PredictionResponse(BaseModel):
+    # `model_version` is a field, not pydantic's reserved model_* namespace.
+    model_config = ConfigDict(protected_namespaces=())
+
     student_id: str
     student_name: str
     subjects: list[SubjectPrediction]
     alert: Optional[str] = None
+    model_version: str = "curve-v1"      # lr-synth-v1 when the trained model answered
 
 
 # ─── Core Prediction Logic ─────────────────────────────────────
 def predict_grades(grade_history: list[float]) -> tuple[list[float], float]:
     """
-    Use Linear Regression to predict the next 1-2 quarters.
+    The old per-learner forecast: a curve fitted to this learner's own grades.
+    Kept as the backup when models/grade_lr.json is unavailable, and as a
+    baseline in scripts/train_models.py, where it loses clearly — with three
+    grades the curve passes through all of them, so its R² "confidence" reads
+    1.0 while predicting badly.
     Returns (predictions, r2_score).
     """
     if len(grade_history) < 2:
@@ -97,7 +108,9 @@ def get_recommendation(trend: str, latest_grade: float) -> Optional[str]:
     elif trend == "Declining":
         return "📉 Grade is declining. Consider additional review sessions."
     elif latest_grade < 75:
-        return "📚 Student is below proficiency. Enrichment activities recommended."
+        # Remedial, not enrichment: enrichment is extra challenge for learners
+        # who are ahead, and this branch is a learner below the passing grade.
+        return "📚 Below the passing grade of 75. Remedial support recommended."
     elif trend == "Improving" and latest_grade >= 90:
         return "⭐ Excellent progress! Consider advanced enrichment programs."
     return None
@@ -111,7 +124,9 @@ async def predict_performance(
 ):
     """
     Predict a student's future academic performance using Linear Regression.
-    Analyzes historical grade data per subject and forecasts next quarters.
+    Analyzes historical grade data per subject and forecasts the next two
+    periods with the trained model (ml/grade_model.py), or the per-learner
+    curve when models/grade_lr.json is unavailable.
     """
 
     # 1. Fetch student info
@@ -159,17 +174,37 @@ async def predict_performance(
             detail="No grade data found for this student."
         )
 
-    # 4. Group by subject and run predictions
+    # 4. Recent attendance and behaviour — the trained model's other two inputs,
+    #    on the same windows the risk check uses (last 30 days, this month).
+    now = datetime.utcnow()
+    att = (await db.execute(text("""
+        SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'Present' THEN 1 ELSE 0 END) AS present
+          FROM attendance WHERE student_id = :sid AND date >= :start
+    """), {"sid": request.student_id, "start": (now - timedelta(days=30)).date()})).fetchone()
+    attendance_rate = (att.present / att.total) if att.total else None
+    beh = (await db.execute(text("""
+        SELECT AVG(sentiment_score) AS avg FROM behavior_logs
+         WHERE student_id = :sid AND observed_at >= :start
+    """), {"sid": request.student_id, "start": datetime(now.year, now.month, 1)})).fetchone()
+    behavioral_score = float(beh.avg) if beh.avg is not None else None
+    model_version = "curve-v1"
+
+    # 5. Group by subject and run predictions
     df = pd.DataFrame(grade_rows, columns=["subject_id", "subject_name", "quarter", "school_year", "grade"])
     subject_predictions = []
     overall_alert = None
 
     for subject_id, group in df.groupby("subject_id"):
         subject_name = group["subject_name"].iloc[0]
-        grade_history = group["grade"].tolist()
+        grade_history = [float(g) for g in group["grade"].tolist()]
         quarter_history = group["quarter"].tolist()
 
-        predictions_raw, confidence = predict_grades(grade_history)
+        trained = grade_model.forecast(grade_history, attendance_rate, behavioral_score)
+        if trained is not None:
+            predictions_raw, confidence, margins, model_version = trained
+        else:
+            predictions_raw, confidence = predict_grades(grade_history)
+            margins = [None, None]
         trend = get_trend(grade_history)
         latest_grade = grade_history[-1]
         recommendation = get_recommendation(trend, latest_grade)
@@ -183,7 +218,8 @@ async def predict_performance(
                 quarter=q,
                 predicted_grade=round(pred_grade, 2),
                 confidence=confidence,
-                trend=trend
+                trend=trend,
+                margin=margins[i],
             ))
 
         # Set system-wide alert for high-risk academic performance
@@ -206,5 +242,6 @@ async def predict_performance(
         student_id=request.student_id,
         student_name=student.full_name,
         subjects=subject_predictions,
-        alert=overall_alert
+        alert=overall_alert,
+        model_version=model_version,
     )

@@ -176,7 +176,7 @@ Contact keeps a **disabled** Registered Email Address field for that guardian ei
 ### Risk Overview (`pages.jsx` `RiskOverview`)
 Open to admin + teacher (route `roles={['admin','teacher']}`).
 
-- **Admin** — calls `/api/ai/risk-all`. The FastAPI `/classify/risk/all` behind it is now **live** (aggregates attendance/grades/behavior/ECE competency on each request instead of reading persisted `risk_assessments`), so every active student surfaces immediately without anyone having to trigger `POST /classify/risk`. Filter tabs (All / High Risk / Moderate Risk / Stable) sorted by `risk_score` desc. Columns: Student (linked to `/students/:id`), Grade & Section, Risk Level pill (color-coded), Risk Score (progress bar), Top Factor (ranked server-side by deficit across four factors: attendance / academic / behavioral / competency — competency populated for descriptively-assessed learners), Last Assessed (stamped per request, since the computation is live).
+- **Admin** — calls `/api/ai/risk-all`. The FastAPI `/classify/risk/all` behind it is now **live** (aggregates attendance/grades/behavior/ECE competency on each request instead of reading persisted `risk_assessments`), so every active student surfaces immediately without anyone having to trigger `POST /classify/risk`. Filter tabs (All / High Risk / Moderate Risk / Stable) sorted by `risk_score` desc. The tier comes from the trained Naive Bayes model, or the rules when its file is unusable (`model_version` on each row; see "Trained models" in `fastapi-ai/CLAUDE.md`). Columns: Student (linked to `/students/:id`), Grade & Section, Risk Level pill (color-coded), Risk Score (progress bar), Top Factor (ranked server-side by deficit across four factors: attendance / academic / behavioral / competency — competency populated for descriptively-assessed learners), Last Assessed (stamped per request, since the computation is live).
 - **Teacher** — branches into `TeacherRiskOverview`, calls `aiApi.classHealthAll()`, renders a class-health-banded table (Urgent / Watch / On track / Not enough data) with per-row overall band pill, top-concern column, and three numeric mini-chips: **Academic / Competency** (non-ECE students show `avg_grade.toFixed(1)`; ECE students show `{completion*100}%` from `metrics.competency`), Attendance `%`, Behavior signed `avg_sentiment.toFixed(2)` — each tinted by its per-metric band. Reason: the legacy school-wide High/Moderate/Stable pills had misled teachers by mixing in other teachers' subjects/sessions/logs. ECE teachers previously saw every student as "Not enough data" because academic was always insufficient and attendance/behavior can be sparse — the competency tile fixes that.
 
 Title/subtitle adapts for teachers ("...students in your assigned classes"). Empty state distinguishes "no data at all" from "no matches for current filter".
@@ -291,6 +291,30 @@ does not export them; keep the two in step.
 - The **AI Insights** tab fetches `aiApi.eceClassHealth(id)` (both roles) and renders a three-tile card — **Competency** (latest-quarter rated/total label + E/G/F/NA distribution bar) with a **By subject** breakdown underneath: urgent/watch subjects render individually (rated/total + inline E/G/F/NA counters + band chip); insufficient and ok subjects each collapse into one expandable aggregate row (start collapsed; header shows count + comma-joined subject names + band chip; expanding reveals per-subject rated/total lines). **Attendance** (last-30-days) and **Behavior** (this-month) tiles each show just the label + band chip — the raw numeric values (rate %, avg sentiment, compPct) were removed from every metric row because the band chip alone communicates the state and the overall card header chip ("Competency & Class Signals" / "Competency Snapshot") already carries the overall band. For the same reason the Competency header has no row-level band chip (would duplicate the card header). DSS `suggestions[]` names the struggling subject per line. Grade-based `aiApi.predict` / `aiApi.risk` / `aiApi.classHealth` are skipped. DSS action type `'ece'` deep-links to `/ece-competency` via `runSuggestionAction`.
 
   The non-ECE teacher **In Your Class** card follows the same "band chip only" pattern — the previous `fmtGrade` / `fmtRate` / `fmtSent` big-number displays on the Academic/Attendance/Behavior rows were removed; each row ends with just its band chip.
+
+**The AI cards say which method answered.** The admin Risk Assessment card carries a muted line
+off `risk.model_version` — "Naive Bayes model · trained on simulated data" for `nb-*`, "Rule-based
+check" on the fallback — and each forecast card lists its predictions with the model's `± margin`
+plus "Linear regression trained on simulated data", shown only when the trained model answered
+(the per-learner fallback has no honest margin). Both are there because a reader deciding what to
+do about a child should know the models learned from simulated learners; see "Trained models" in
+`fastapi-ai/CLAUDE.md`. The forecast chart's period labels go through `activeGrading.abbr()`, like
+every other period label on the page.
+
+**The risk card never shows a verdict nobody made.** With no attendance, grades, notes or ratings
+the API still answers `Stable` (its tiers have no "unknown"), so `riskHasData()` swaps the badge
+for a grey **Not enough data** and hides the score and the method line (no model judged anything) —
+on the card *and* in the page header. The score goes through `chance()` too, so it never reads 100%. The
+model's three chances are listed under the score (`chance()` prints `>99%` / `<1%` rather than a
+certainty Naive Bayes has not earned), severities are High red / Medium amber / Low grey, and the
+factor heading reads **Worth watching** on a Stable learner, whose factors did not make the verdict.
+
+**The admin fetch is `Promise.allSettled`, and both calls are `silent`.** It was `Promise.all`, so
+a learner with no grades yet — whose forecast answers 404 — lost the risk card too: it sat on
+"Analyzing student data..." for good, under two toasts. A forecast 404 now becomes
+`{ subjects: [] }` ("No grades recorded yet, so there is nothing to forecast"), a failed risk call
+an inline `riskError`, and `fetchAI` returns early once `risk` is loaded, since every risk request
+also writes a `risk_assessments` audit row.
 
 ### AdminDashboard (`pages/dashboard/AdminDashboard.jsx`)
 Fetches `aiApi.dashboard()` for the bulk of its widgets (stat cards, attendance trend, risk pie, behavioral sentiment bar, academic decline alerts, enrollment-by-grade bar).

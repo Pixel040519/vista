@@ -1,15 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
-import numpy as np
 import json
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
+from ml import risk_model
+from ml.features import PASSING_GRADE
 from services.db import get_db
 
 router = APIRouter()
@@ -17,6 +16,7 @@ logger = logging.getLogger("vista-ai.risk")
 
 # ─── Risk Level Labels ─────────────────────────────────────────
 RISK_LABELS = ["Stable", "Moderate Risk", "High Risk"]
+RULE_VERSION = "rule-v1.1"
 RISK_COLORS = {
     "Stable": "#22c55e",         # green
     "Moderate Risk": "#f59e0b",  # amber
@@ -70,6 +70,9 @@ class RiskFactor(BaseModel):
 
 
 class RiskResponse(BaseModel):
+    # `model_version` is a field, not pydantic's reserved model_* namespace.
+    model_config = ConfigDict(protected_namespaces=())
+
     student_id: str
     student_name: str
     risk_level: str
@@ -80,6 +83,9 @@ class RiskResponse(BaseModel):
     avg_grade: Optional[float]
     behavioral_score: Optional[float]
     competency_score: Optional[float]  # 0-1 avg rating, ECE students only
+    grade_trend: Optional[float]       # latest period average minus the one before
+    probabilities: Optional[dict]      # per tier, from the trained model; None under the rules
+    model_version: str                 # e.g. nb-synth-v1, or rule-v1.1 on the fallback
     recommendation: str
     assessed_at: str
 
@@ -87,9 +93,10 @@ class RiskResponse(BaseModel):
 # ─── Feature Extraction ────────────────────────────────────────
 async def extract_features(student_id: str, grade_level: Optional[str], db: AsyncSession) -> dict:
     """
-    Extract risk factors for a student:
+    Extract risk factors for a student — the inputs listed in ml/features.py:
     1. Attendance rate (last 30 days)
-    2. Average grade (latest quarter) — non-ECE students
+    2. Average grade and grade trend in the active school year — non-ECE
+       students (see academic_summary())
     3. Behavioral sentiment average (this month)
     4. Competency average (latest quarter in active SY) — descriptive learners only
     """
@@ -110,22 +117,12 @@ async def extract_features(student_id: str, grade_level: Optional[str], db: Asyn
     # No records → no signal (None); otherwise compute rate.
     attendance_rate = (present_days / total_days) if total_days > 0 else None
 
-    # ── Average Grade ──
-    # Learning areas only (subjects.parent_id IS NULL). MAPEH is graded through
-    # four areas whose grades are stored alongside the MAPEH row the roll-up
-    # writes, so an unfiltered AVG would weight that one learning area 5x.
-    grade_result = await db.execute(text("""
-        SELECT AVG(g.grade) as avg_grade
-        FROM grades g
-        JOIN subjects s ON s.id = g.subject_id
-        WHERE g.student_id = :sid AND s.parent_id IS NULL AND g.quarter = (
-            SELECT MAX(g2.quarter) FROM grades g2
-              JOIN subjects s2 ON s2.id = g2.subject_id
-             WHERE g2.student_id = :sid AND s2.parent_id IS NULL
-        )
-    """), {"sid": student_id})
-    grade_row = grade_result.fetchone()
-    avg_grade = float(grade_row.avg_grade) if grade_row.avg_grade else None
+    # ── Average Grade + trend ──
+    grade_rows = (await db.execute(
+        text(ACADEMIC_SQL.format(student_filter="AND g.student_id = :sid")), {"sid": student_id}
+    )).fetchall()
+    academic = academic_summary(grade_rows)
+    avg_grade, grade_trend = academic["avg_grade"], academic["grade_trend"]
 
     # ── Behavioral Sentiment ──
     beh_result = await db.execute(text("""
@@ -168,7 +165,94 @@ async def extract_features(student_id: str, grade_level: Optional[str], db: Asyn
         "avg_grade": round(avg_grade, 2) if avg_grade else None,
         "behavioral_score": round(behavioral_score, 4) if behavioral_score is not None else None,
         "competency_score": round(competency_score, 4) if competency_score is not None else None,
+        "grade_trend": round(grade_trend, 2) if grade_trend is not None else None,
+        # Not a model input: what the factor sentences need to be specific.
+        "academic_detail": academic["detail"],
     }
+
+
+# Each learning area's two latest grades in the active school year. Learning
+# areas only (subjects.parent_id IS NULL): MAPEH's four areas are stored beside
+# the MAPEH row the roll-up writes, so counting them would weigh MAPEH 5x.
+# The active year only, because quarter numbers restart every year — grouping
+# by quarter alone averaged last year's Q2 into this year's.
+ACADEMIC_SQL = """
+    WITH ranked AS (
+        SELECT g.student_id, g.subject_id, s.name AS subject, g.quarter, g.grade,
+               ROW_NUMBER() OVER (PARTITION BY g.student_id, g.subject_id
+                                  ORDER BY g.quarter DESC) AS rn
+          FROM grades g
+          JOIN subjects s ON s.id = g.subject_id
+         WHERE g.grade IS NOT NULL
+           AND s.parent_id IS NULL
+           AND g.school_year = (SELECT label FROM school_years WHERE is_active = TRUE LIMIT 1)
+           {student_filter}
+    )
+    SELECT student_id, subject_id, subject, quarter, grade, rn FROM ranked WHERE rn <= 2
+"""
+
+# A trend needs enough learning areas graded in both periods to mean anything:
+# one subject's change is that subject, not the learner's direction.
+MIN_TREND_AREAS = 2
+
+
+def academic_summary(rows) -> dict:
+    """
+    avg_grade, grade_trend and the detail the factor sentences use, from one
+    learner's ACADEMIC_SQL rows.
+
+    avg_grade is the average of each learning area's LATEST grade, not of the
+    latest quarter: teachers enter grades at different times, so the latest
+    quarter is usually incomplete, and averaging it alone judged a learner on
+    whichever one or two subjects happened to be entered first.
+
+    grade_trend compares like with like — the average change in the learning
+    areas graded in both of the last two consecutive periods — and only when at
+    least MIN_TREND_AREAS of them, covering half the learner's graded areas,
+    have both. Averaging two quarters with different subjects in them invented
+    rises and falls that no subject actually had.
+    """
+    latest, previous = {}, {}
+    for r in rows:
+        (latest if r.rn == 1 else previous)[r.subject_id] = (r.subject, int(r.quarter), float(r.grade))
+    if not latest:
+        return {"avg_grade": None, "grade_trend": None, "detail": None}
+
+    avg_grade = sum(g for _, _, g in latest.values()) / len(latest)
+    changes = [(name, g - previous[sid][2]) for sid, (name, q, g) in latest.items()
+               if sid in previous and previous[sid][1] == q - 1]
+    enough = len(changes) >= MIN_TREND_AREAS and len(changes) * 2 >= len(latest)
+    grade_trend = sum(d for _, d in changes) / len(changes) if enough else None
+    # An average change can hide one subject collapsing while another rises,
+    # so the sentence also names the steepest fall.
+    steepest = min(changes, key=lambda c: c[1]) if enough else None
+    return {
+        "avg_grade": avg_grade,
+        "grade_trend": grade_trend,
+        "detail": {
+            "subjects": len(latest),
+            "failing": sorted(name for name, _, g in latest.values() if g < PASSING_GRADE),
+            "trend_subjects": len(changes) if enough else 0,
+            "steepest_drop": steepest if steepest and steepest[1] < 0 else None,
+        },
+    }
+
+
+def assess(features: dict) -> tuple[str, float, list["RiskFactor"], Optional[dict], str]:
+    """
+    The risk tier for one learner's features: the trained Naive Bayes model when
+    models/risk_nb.json is usable (ml/risk_model.py), the rules below otherwise.
+    Returns (level, score, factors, probabilities, model_version).
+    """
+    result = risk_model.predict(features)
+    if result is not None:
+        level, score, factors, proba, version = result
+        return level, score, [RiskFactor(**f) for f in factors], proba, version
+    level, score, factors = rule_based_risk(
+        features["attendance_rate"], features["avg_grade"],
+        features["behavioral_score"], features["competency_score"],
+    )
+    return level, score, factors, None, RULE_VERSION
 
 
 def rule_based_risk(
@@ -178,9 +262,9 @@ def rule_based_risk(
     competency_score: Optional[float] = None,
 ) -> tuple[str, float, list[RiskFactor]]:
     """
-    Rule-based risk classification.
-    In production this would be replaced by a trained Random Forest model.
-    Using rules here ensures the system works without historical training data.
+    Rule-based risk classification — the backup when no trained model is
+    available (see assess()), and the baseline the model is compared against in
+    scripts/train_models.py.
     Any factor passed as None is treated as "no data" and contributes nothing.
     """
     factors = []
@@ -286,8 +370,14 @@ def get_recommendation(risk_level: str, factors: list[RiskFactor], signals: int 
                 "conference. Develop individualized support plan.")
     elif risk_level == "Moderate Risk":
         factor_names = [f.factor for f in factors]
-        return (f"⚠️ Monitor closely. Address concern areas: {', '.join(factor_names)}. "
-                "Consider additional support resources.")
+        concern = f"Address concern areas: {', '.join(factor_names)}. " if factor_names else ""
+        return f"⚠️ Monitor closely. {concern}Consider additional support resources."
+    if factors:
+        # A Stable learner can still have one input worth watching (say,
+        # attendance slipping while grades stay strong) — "on track" alone
+        # would contradict the factor listed right beneath it.
+        return (f"✅ On track overall. Keep an eye on: {', '.join(f.factor for f in factors)}. "
+                "Continue regular monitoring.")
     return "✅ Student is on track. Continue regular monitoring."
 
 
@@ -299,7 +389,8 @@ async def classify_risk(
 ):
     """
     Classify a student's risk level using attendance, academic, and behavioral data.
-    Algorithm: Rule-based classifier (upgradeable to Random Forest with training data).
+    Algorithm: the trained Naive Bayes model, or the rules when it is unavailable
+    (see assess()). The row persisted to risk_assessments records which.
     """
     # Fetch student
     student_result = await db.execute(
@@ -314,12 +405,7 @@ async def classify_risk(
     features = await extract_features(request.student_id, student.grade_level, db)
 
     # Classify risk
-    risk_level, risk_score, factors = rule_based_risk(
-        features["attendance_rate"],
-        features["avg_grade"],
-        features["behavioral_score"],
-        features["competency_score"],
-    )
+    risk_level, risk_score, factors, probabilities, model_version = assess(features)
 
     signal_count = sum(
         1 for v in (
@@ -347,7 +433,7 @@ async def classify_risk(
         "beh": features["behavioral_score"],
         "comp": features["competency_score"],
         "factors": json.dumps([f.model_dump() for f in factors]),
-        "ver": "rule-v1.1"
+        "ver": model_version
     })
     await db.commit()
 
@@ -362,6 +448,9 @@ async def classify_risk(
         avg_grade=features["avg_grade"],
         behavioral_score=features["behavioral_score"],
         competency_score=features["competency_score"],
+        grade_trend=features["grade_trend"],
+        probabilities=probabilities,
+        model_version=model_version,
         recommendation=recommendation,
         assessed_at=datetime.utcnow().isoformat()
     )
@@ -420,22 +509,14 @@ async def get_all_risk_levels(db: AsyncSession = Depends(get_db)):
     """))).fetchall()
     att_map = {str(r.student_id): (r.total or 0, r.present or 0) for r in att_rows}
 
-    # 3. Academic — average of each student's latest-quarter grades, counting
-    # learning areas only so MAPEH weighs the same as every other one.
-    acad_rows = (await db.execute(text("""
-        SELECT g.student_id, AVG(g.grade) AS avg_grade
-          FROM grades g
-          JOIN subjects s ON s.id = g.subject_id
-         WHERE g.grade IS NOT NULL
-           AND s.parent_id IS NULL
-           AND g.quarter = (
-               SELECT MAX(g2.quarter) FROM grades g2
-                 JOIN subjects s2 ON s2.id = g2.subject_id
-                WHERE g2.student_id = g.student_id AND s2.parent_id IS NULL
-           )
-         GROUP BY g.student_id
-    """))).fetchall()
-    acad_map = {str(r.student_id): float(r.avg_grade) for r in acad_rows if r.avg_grade is not None}
+    # 3. Academic — the same rule as the single-student path (academic_summary):
+    # each learning area's latest grade in the active year, and the trend over
+    # areas graded in both of the last two periods.
+    acad_rows = (await db.execute(text(ACADEMIC_SQL.format(student_filter="")))).fetchall()
+    by_student: dict[str, list] = {}
+    for r in acad_rows:
+        by_student.setdefault(str(r.student_id), []).append(r)
+    acad_map = {sid: academic_summary(rows) for sid, rows in by_student.items()}
 
     # 4. Behavior — this month per student
     beh_rows = (await db.execute(text("""
@@ -476,14 +557,19 @@ async def get_all_risk_levels(db: AsyncSession = Depends(get_db)):
         sid = str(s.id)
         total, present = att_map.get(sid, (0, 0))
         attendance_rate = (present / total) if total > 0 else None
-        avg_grade = acad_map.get(sid)
+        academic = acad_map.get(sid) or academic_summary([])
+        avg_grade, grade_trend = academic["avg_grade"], academic["grade_trend"]
         behavioral_score = beh_map.get(sid)
         # comp_map only contains learners who actually have competency records.
         competency_score = comp_map.get(sid)
 
-        risk_level, risk_score, _factors = rule_based_risk(
-            attendance_rate, avg_grade, behavioral_score, competency_score
-        )
+        risk_level, risk_score, _factors, _proba, model_version = assess({
+            "attendance_rate": attendance_rate,
+            "avg_grade": avg_grade,
+            "grade_trend": grade_trend,
+            "behavioral_score": behavioral_score,
+            "competency_score": competency_score,
+        })
 
         # Factor columns for the table — same conventions as POST /risk.
         att_factor  = round(attendance_rate, 4) if attendance_rate is not None else None
@@ -505,6 +591,7 @@ async def get_all_risk_levels(db: AsyncSession = Depends(get_db)):
             "behavioral_factor":     float(beh_factor  or 0),
             "ece_competency_factor": float(comp_factor or 0),
             "top_factor": _top_factor(att_factor, acad_factor, beh_factor, comp_factor),
+            "model_version": model_version,
         })
 
     summary = {

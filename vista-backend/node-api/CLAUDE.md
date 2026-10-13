@@ -32,8 +32,8 @@ Middleware exports (`auth.middleware.js`): `authenticate`, `authorize(...roles)`
 
 All AI endpoints proxy to FastAPI (`:8000`). The frontend only ever hits these Node routes — access control lives here (FastAPI is role-agnostic).
 
-- `POST /api/ai/predict-performance`
-- `POST /api/ai/risk-assessment`
+- `POST /api/ai/predict-performance` — answers FastAPI's 404 verbatim for a learner with no grades yet; Student Detail treats that as "nothing to forecast".
+- `POST /api/ai/risk-assessment` — each call also **writes a `risk_assessments` row** (FastAPI persists it), which is the only source of the parent app's risk card. **Known gap:** it checks only the role — no grade scope for a scoped admin and no assignment check for a teacher — so any admin or teacher can request any learner's assessment by id. The web UI only calls it from an admin's Student Detail, for a learner they could open.
 - `GET /api/ai/risk-all` — admin + teacher. For teachers the proxy looks up `teacher_assignments` for the active SY, filters FastAPI's result to the teacher's `(grade_level, section)` set, and recomputes `summary` counts. Legacy for teachers — no UI consumes it; the Risk Overview teacher view uses `/class-health/all` instead.
 - `POST /api/ai/sentiment`
 - `GET /api/ai/dashboard-summary`
@@ -57,6 +57,24 @@ Bulk response per student: `overall_band`, `top_concern` (tie-break: academic > 
 ### ECE variant — `GET /api/ai/ece-class-health`
 
 Competency-based equivalent of `/class-health`. Replaces the academic tile with a **competency** tile banded on the rating mix for the student's latest quarter with records. Shared by admin + teacher: teacher scope is resolved from `teacher_assignments` for the student's `(grade_level, section)` under the active SY (404s on no match); admin runs school-wide. **Rejects numerically-assessed students with 400** — membership is resolved from `grade_level_assessment`, not a hardcoded ECE list, so Grade 1 lands here once configured descriptive. The response carries `rating_scale` + `scale`, and all distributions are keyed by that scale's codes. Attendance tile is last-30-days (teacher-filtered by subject name) and behavior is this-month (teacher-filtered by `teacher_id`) — same rules as `/class-health`. Response shape: `{ scope, overall_band, suggestions, metrics: { competency, attendance, behavior } }`. `competency` also includes `per_subject[]` — one `{ subject_id, subject_name, rated, total_skills, distribution, band }` entry per ECE subject for this student's grade level (subjects with zero skills defined are omitted), sorted urgent → watch → insufficient → ok then by `subject_name`. DSS competency suggestions are emitted per-subject (capped at 3 urgent + 2 watch, with an overflow "+N more subjects" line) so each line names the struggling subject; suggestions include an `{ type: 'ece' }` action that the frontend routes to `/ece-competency`.
+
+## Synthetic demo learners (`scripts/seedSyntheticStudents.js`)
+
+Places the fake school from `fastapi-ai/data/synthetic/demo_school.json` (written by
+`fastapi-ai/scripts/generate_synthetic.py`, the generator the AI models are trained on) into
+the **active** school year, so a demo has data shaped like what the models learned from. Dry
+run by default; `--apply` writes, `--remove --apply` deletes; refuses `NODE_ENV=production`.
+
+It never creates curriculum — learners go into existing sections and are graded against
+existing subjects, and it refuses a year without them. Writes go through the app's own
+helpers where one exists: MAPEH is rolled up by `rollUp()` from `utils/subjectAreas.js` and
+remarks come from `resolveGradingPolicy()`. Attendance is one roll per **learning area** per
+school day, counted back from today so the AI's 30-day and this-month windows land on it.
+
+Every fake learner carries **two** marks — an LRN starting `999999` and a fixed marker in
+`home_address` — and removal requires both, so a real learner whose LRN happens to start
+`999999` is never touched; seeding refuses if such an LRN already exists. Their grades,
+attendance, notes, ratings and enrolment cascade from `students`.
 
 ## Behavior logs (`crud.routes.js`)
 

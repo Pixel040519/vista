@@ -1,0 +1,201 @@
+{
+  "training_data": {
+    "source": "synthetic (ml/synthetic.py)",
+    "learners": 4000,
+    "seed": 42,
+    "period_model": "4Q",
+    "label_mix": {
+      "Stable": 2934,
+      "Moderate Risk": 562,
+      "High Risk": 504
+    }
+  },
+  "risk": {
+    "comparison": {
+      "Rule-based check (old)": {
+        "accuracy": 0.7063,
+        "macro_f1": 0.4869,
+        "high_risk_recall": 0.2079,
+        "high_risk_precision": 0.75
+      },
+      "Naive Bayes": {
+        "accuracy": 0.8175,
+        "macro_f1": 0.6658,
+        "high_risk_recall": 0.5842,
+        "high_risk_precision": 0.6705
+      },
+      "Logistic Regression": {
+        "accuracy": 0.8438,
+        "macro_f1": 0.7036,
+        "high_risk_recall": 0.6832,
+        "high_risk_precision": 0.75
+      },
+      "Decision Tree (depth 4)": {
+        "accuracy": 0.8325,
+        "macro_f1": 0.7158,
+        "high_risk_recall": 0.5743,
+        "high_risk_precision": 0.8923
+      }
+    },
+    "naive_bayes_confusion_matrix": [
+      [
+        546,
+        28,
+        13
+      ],
+      [
+        47,
+        49,
+        16
+      ],
+      [
+        19,
+        23,
+        59
+      ]
+    ],
+    "sklearn_check": {
+      "rows": 241,
+      "same_answer": 1.0,
+      "max_probability_difference": 1.6764367671839864e-14
+    },
+    "direction_check": "passed",
+    "train": 3200,
+    "test": 800
+  },
+  "grades": {
+    "comparison_by_steps_ahead": {
+      "1": {
+        "Linear Regression (new)": {
+          "mae": 2.448,
+          "rmse": 3.212,
+          "r2": 0.8395
+        },
+        "Same as last grade": {
+          "mae": 2.492,
+          "rmse": 3.327,
+          "r2": 0.8278
+        },
+        "Per-learner curve (old)": {
+          "mae": 4.365,
+          "rmse": 6.035,
+          "r2": 0.4336
+        },
+        "examples": 15276
+      },
+      "2": {
+        "Linear Regression (new)": {
+          "mae": 3.028,
+          "rmse": 3.982,
+          "r2": 0.7638
+        },
+        "Same as last grade": {
+          "mae": 3.02,
+          "rmse": 4.06,
+          "r2": 0.7544
+        },
+        "Per-learner curve (old)": {
+          "mae": 4.385,
+          "rmse": 5.953,
+          "r2": 0.4721
+        },
+        "examples": 10184
+      }
+    },
+    "train_learners": 2733,
+    "test_learners": 683,
+    "train_examples": 61476
+  },
+  "sensitivity": [
+    {
+      "noise": 0.5,
+      "seeds": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "nb_macro_f1": {
+        "mean": 0.6787,
+        "sd": 0.0368
+      },
+      "rules_macro_f1": {
+        "mean": 0.5239,
+        "sd": 0.0232
+      },
+      "nb_high_recall": {
+        "mean": 0.5523,
+        "sd": 0.073
+      },
+      "lr_rmse": {
+        "mean": 2.2144,
+        "sd": 0.0895
+      },
+      "last_grade_rmse": {
+        "mean": 2.2422,
+        "sd": 0.0952
+      }
+    },
+    {
+      "noise": 1.0,
+      "seeds": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "nb_macro_f1": {
+        "mean": 0.6674,
+        "sd": 0.0378
+      },
+      "rules_macro_f1": {
+        "mean": 0.5061,
+        "sd": 0.0159
+      },
+      "nb_high_recall": {
+        "mean": 0.5788,
+        "sd": 0.1378
+      },
+      "lr_rmse": {
+        "mean": 3.0936,
+        "sd": 0.0781
+      },
+      "last_grade_rmse": {
+        "mean": 3.199,
+        "sd": 0.0775
+      }
+    },
+    {
+      "noise": 1.5,
+      "seeds": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "nb_macro_f1": {
+        "mean": 0.6623,
+        "sd": 0.0268
+      },
+      "rules_macro_f1": {
+        "mean": 0.5111,
+        "sd": 0.0121
+      },
+      "nb_high_recall": {
+        "mean": 0.6046,
+        "sd": 0.0814
+      },
+      "lr_rmse": {
+        "mean": 4.0672,
+        "sd": 0.0685
+      },
+      "last_grade_rmse": {
+        "mean": 4.337,
+        "sd": 0.0708
+      }
+    }
+  ]
+}

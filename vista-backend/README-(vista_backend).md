@@ -80,6 +80,19 @@ uvicorn main:app --reload --port 8000
 # → Docs at http://localhost:8000/docs
 ```
 
+### 5. AI models (optional)
+The risk tier (Naive Bayes) and grade forecast (Linear Regression) ship trained in
+`fastapi-ai/models/`, so step 4 is enough. They were trained on **synthetic** data — the school
+has none to share yet — and fall back to the older rule-based check and per-learner curve if a
+model file is missing. To regenerate the data, retrain, or load demo learners:
+```bash
+cd fastapi-ai
+python scripts/generate_synthetic.py     # fake school → data/synthetic/
+python scripts/train_models.py           # train, compare with baselines, write models/
+cd ../node-api
+node scripts/seedSyntheticStudents.js    # demo learners (dry run; --apply; --remove --apply)
+```
+
 ---
 
 ## API Reference
@@ -257,12 +270,21 @@ vista-backend/
     ├── services/
     │   ├── db.py               ← SQLAlchemy async session
     │   └── behavior_lexicon.py ← School-behaviour vocabulary + phrase rules for VADER
+    ├── ml/
+    │   ├── synthetic.py        ← The synthetic school the models are trained on
+    │   ├── features.py         ← The one list of model inputs
+    │   ├── naive_bayes.py      ← Gaussian Naive Bayes that skips missing inputs
+    │   ├── risk_model.py       ← Risk tier + contributing factors (rules as fallback)
+    │   └── grade_model.py      ← Next-period grade (per-learner curve as fallback)
+    ├── models/                 ← Trained models as JSON + metrics.json
     ├── scripts/
-    │   └── rescore_behavior.py ← Re-score saved behavior logs (dry run; --apply)
+    │   ├── rescore_behavior.py ← Re-score saved behavior logs (dry run; --apply)
+    │   ├── generate_synthetic.py ← Write the synthetic school to data/synthetic/
+    │   └── train_models.py     ← Train, test against baselines, save models/
     └── routers/
         ├── sentiment.py        ← VADER sentiment analysis
-        ├── prediction.py       ← Linear Regression grade forecast
-        ├── risk.py             ← Risk classification
+        ├── prediction.py       ← Grade forecast (trained Linear Regression)
+        ├── risk.py             ← Risk classification (trained Naive Bayes)
         └── dashboard.py        ← Admin dashboard aggregation
 ```
 

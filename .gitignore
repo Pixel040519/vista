@@ -6,6 +6,11 @@ vista-backend/fastapi-ai/venv/
 __pycache__/
 *.pyc
 
+# Synthetic training data — regenerated from a seed by
+# fastapi-ai/scripts/generate_synthetic.py. The trained models in
+# fastapi-ai/models/ are small and stay tracked so the demo needs no training run.
+vista-backend/fastapi-ai/data/
+
 # Environment
 .env
 *.env.local

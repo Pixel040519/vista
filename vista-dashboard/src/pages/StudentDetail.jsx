@@ -25,6 +25,16 @@ const calcAge = (dob) => {
 
 const TABS = ['Overview', 'Grades', 'Attendance', 'Behavior', 'AI Insights']
 
+// Did the risk check have anything to judge? With no attendance, grades,
+// behaviour notes or competency ratings the API still answers "Stable" — its
+// tiers have no "unknown" — so the page must not show that as a verdict.
+const riskHasData = (risk) =>
+  !!risk && [risk.attendance_rate, risk.avg_grade, risk.behavioral_score, risk.competency_score]
+    .some(v => v != null)
+
+// A model probability as a person reads it, never claiming certainty.
+const chance = (p) => (p == null ? '—' : p > 0.99 ? '>99%' : p < 0.01 ? '<1%' : `${Math.round(p * 100)}%`)
+
 const ECE_GRADES = ['Kinder']
 const ECE_RATINGS = [
   { value: 'E',  label: 'Excellent',        color: 'bg-emerald-500 text-white border-emerald-600' },
@@ -184,6 +194,7 @@ export default function StudentDetail() {
   const [behavior, setBehavior] = useState([])
   const [prediction, setPrediction] = useState(null)
   const [risk, setRisk]         = useState(null)
+  const [riskError, setRiskError] = useState(null)
   const [classHealth, setClassHealth] = useState(null)
   const [classHealthError, setClassHealthError] = useState(null)
   const [eceHealth, setEceHealth] = useState(null)
@@ -351,14 +362,23 @@ export default function StudentDetail() {
       }
       return
     }
-    if (prediction) return // Already loaded
+    // Already loaded. `risk` counts too: each risk request also writes an audit
+    // row to risk_assessments, so a learner whose forecast failed must not be
+    // re-assessed on every visit to this tab.
+    if (prediction || risk) return
+    // The forecast answers 404 when the learner has no grades yet. That is an
+    // ordinary state, so it becomes an empty forecast rather than an error.
+    const forecastFrom = (res) =>
+      res.status === 'fulfilled' ? res.value.data
+        : res.reason?.response?.status === 404 ? { subjects: [] } : null
     try {
       if (isTeacher) {
         const [predRes, chRes] = await Promise.allSettled([
           aiApi.predict({ student_id: id }),
           aiApi.classHealth(id),
         ])
-        if (predRes.status === 'fulfilled') setPrediction(predRes.value.data)
+        const forecast = forecastFrom(predRes)
+        if (forecast) setPrediction(forecast)
         if (chRes.status === 'fulfilled') {
           setClassHealth(chRes.value.data)
         } else {
@@ -369,16 +389,28 @@ export default function StudentDetail() {
               : 'Could not load class health.'
           )
         }
-        if (predRes.status === 'rejected' && chRes.status === 'rejected') {
+        if (!forecast && chRes.status === 'rejected') {
           toast.error('AI service unavailable.')
         }
       } else {
-        const [pred, riskRes] = await Promise.all([
+        // Settled, not Promise.all: the forecast and the risk check are
+        // independent, and one failing must not hide the other. With Promise.all
+        // a learner with no grades yet (forecast 404) never got a risk card at
+        // all — it sat on "Analyzing student data..." for good.
+        setRiskError(null)
+        const [predRes, riskRes] = await Promise.allSettled([
           aiApi.predict({ student_id: id }),
           aiApi.risk({ student_id: id }),
         ])
-        setPrediction(pred.data)
-        setRisk(riskRes.data)
+        const forecast = forecastFrom(predRes)
+        if (forecast) setPrediction(forecast)
+        if (riskRes.status === 'fulfilled') {
+          setRisk(riskRes.value.data)
+        } else {
+          setRiskError(riskRes.reason?.response?.status === 503
+            ? 'The AI service is not running, so no risk assessment could be made.'
+            : 'The risk assessment could not be loaded. Open this tab again to retry.')
+        }
       }
     } catch {
       toast.error('AI service unavailable.')
@@ -734,7 +766,7 @@ export default function StudentDetail() {
                     )}
                   </span>
                 )}
-                {risk && <RiskBadge level={risk.risk_level} />}
+                {riskHasData(risk) && <RiskBadge level={risk.risk_level} />}
               </div>
             </div>
           </div>
@@ -1952,25 +1984,68 @@ export default function StudentDetail() {
                 <h3 className="text-sm font-semibold text-slate-800 mb-4 flex items-center gap-2">
                   <Brain size={15} className="text-brand-500" /> Risk Assessment
                 </h3>
-                <div className="flex items-center gap-4 mb-4 flex-wrap">
-                  <RiskBadge level={risk.risk_level} />
-                  <div className="flex items-center gap-2">
-                    <div className="w-32 h-2 bg-slate-100 rounded-full">
-                      <div
-                        className={`h-full rounded-full ${risk.risk_level === 'High Risk' ? 'bg-red-500' : risk.risk_level === 'Moderate Risk' ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                        style={{ width: `${risk.risk_score * 100}%` }}
-                      />
+                {riskHasData(risk) ? (
+                  <>
+                    <div className="flex items-center gap-4 mb-2 flex-wrap">
+                      <RiskBadge level={risk.risk_level} />
+                      <div className="flex items-center gap-2"
+                        title="Risk score: the chance of a High-Risk year, plus half the chance of a Moderate one.">
+                        <span className="text-xs text-slate-400">Risk score</span>
+                        <div className="w-32 h-2 bg-slate-100 rounded-full">
+                          <div
+                            className={`h-full rounded-full ${risk.risk_level === 'High Risk' ? 'bg-red-500' : risk.risk_level === 'Moderate Risk' ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                            style={{ width: `${risk.risk_score * 100}%` }}
+                          />
+                        </div>
+                        <span className="text-sm font-mono font-semibold">{chance(risk.risk_score)}</span>
+                      </div>
                     </div>
-                    <span className="text-sm font-mono font-semibold">{(risk.risk_score * 100).toFixed(0)}%</span>
+                    {/* What the tier was chosen from. Naive Bayes is famously
+                        overconfident, so the extremes read ">99%" / "<1%" rather
+                        than a "100%" no model trained on simulated data has earned. */}
+                    {risk.probabilities && (
+                      <p className="text-xs text-slate-500 mb-4">
+                        How the year is likely to end: Stable {chance(risk.probabilities['Stable'])}
+                        {' · '}Moderate {chance(risk.probabilities['Moderate Risk'])}
+                        {' · '}High {chance(risk.probabilities['High Risk'])}
+                      </p>
+                    )}
+                    {!risk.probabilities && <div className="mb-2" />}
+                  </>
+                ) : (
+                  // With nothing recorded there is no verdict to show. The API
+                  // still answers "Stable" (its tiers have no "unknown"), but a
+                  // green Stable badge would claim a judgement nobody made.
+                  <div className="mb-4">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-400" /> Not enough data
+                    </span>
                   </div>
-                </div>
+                )}
                 <div className="bg-slate-50 rounded-xl p-3 text-sm text-slate-600 mb-4">{risk.recommendation}</div>
+                {/* Which method produced this tier. The model was trained on
+                    simulated learners, and a reader deciding what to do about a
+                    child should know that. */}
+                {riskHasData(risk) && (
+                  <p className="text-xs text-slate-400 -mt-2 mb-4">
+                    {risk.model_version?.startsWith('nb-')
+                      ? 'Naive Bayes model · trained on simulated data'
+                      : 'Rule-based check'}
+                  </p>
+                )}
                 {risk.factors?.length > 0 && (
                   <div className="space-y-2 overflow-y-auto flex-1">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Contributing Factors</p>
+                    {/* On a Stable learner these are not what made the verdict —
+                        they are single inputs worth keeping an eye on. */}
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                      {risk.risk_level === 'Stable' ? 'Worth watching' : 'Contributing Factors'}
+                    </p>
                     {risk.factors.map((f, i) => (
                       <div key={i} className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
-                        <span className={`px-2 py-0.5 rounded text-xs font-semibold mt-0.5 ${f.severity === 'High' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                        <span className={`px-2 py-0.5 rounded text-xs font-semibold mt-0.5 ${
+                          f.severity === 'High' ? 'bg-red-100 text-red-700'
+                            : f.severity === 'Medium' ? 'bg-amber-100 text-amber-700'
+                              : 'bg-slate-200 text-slate-600'}`}>
                           {f.severity}
                         </span>
                         <div>
@@ -1982,6 +2057,8 @@ export default function StudentDetail() {
                   </div>
                 )}
               </div>
+            ) : riskError ? (
+              <div className="card p-5 text-sm text-slate-500">{riskError}</div>
             ) : (
               <div className="card p-8 text-center">
                 <LoadingSpinner size="sm" />
@@ -1990,10 +2067,12 @@ export default function StudentDetail() {
             )
           )}
 
-          {/* Empty state for teachers with no subjects/predictions */}
-          {isTeacher && prediction && (!prediction.subjects || prediction.subjects.length === 0) && (
+          {/* Empty state when there is nothing to forecast yet */}
+          {prediction && (!prediction.subjects || prediction.subjects.length === 0) && (
             <div className="card p-8 text-center text-sm text-slate-400">
-              No predictions available for the subjects you teach this student yet. Record more grades to enable forecasts.
+              {isTeacher
+                ? 'No predictions available for the subjects you teach this student yet. Record more grades to enable forecasts.'
+                : 'No grades recorded yet, so there is nothing to forecast.'}
             </div>
           )}
 
@@ -2016,8 +2095,8 @@ export default function StudentDetail() {
               {/* Grade chart */}
               <ResponsiveContainer width="100%" height={160}>
                 <LineChart data={[
-                  ...subject.historical_grades.map(h => ({ label: `Q${h.quarter}`, grade: h.grade, type: 'actual' })),
-                  ...subject.predictions.map(p => ({ label: `Q${p.quarter} (pred)`, grade: p.predicted_grade, type: 'predicted' }))
+                  ...subject.historical_grades.map(h => ({ label: activeGrading.abbr(h.quarter), grade: h.grade, type: 'actual' })),
+                  ...subject.predictions.map(p => ({ label: `${activeGrading.abbr(p.quarter)} (pred)`, grade: p.predicted_grade, type: 'predicted' }))
                 ]}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
@@ -2027,6 +2106,17 @@ export default function StudentDetail() {
                   <Line type="monotone" dataKey="grade" stroke="#14b8a6" strokeWidth={2.5} dot={{ r: 4, fill: '#14b8a6' }} />
                 </LineChart>
               </ResponsiveContainer>
+
+              {/* The trained model reports how far off it typically is; the
+                  per-learner fallback has no honest margin, so it shows none. */}
+              {subject.predictions.some(p => p.margin != null) && (
+                <p className="mt-2 text-xs text-slate-500">
+                  {subject.predictions.map(p => (
+                    `${activeGrading.abbr(p.quarter)} ≈ ${Math.round(p.predicted_grade)} (± ${p.margin.toFixed(1)})`
+                  )).join(' · ')}
+                  <span className="text-slate-400"> · Linear regression trained on simulated data</span>
+                </p>
+              )}
 
               {subject.recommendation && (
                 <div className="mt-3 text-sm text-slate-600 bg-brand-50 rounded-xl p-3 border border-brand-100">
